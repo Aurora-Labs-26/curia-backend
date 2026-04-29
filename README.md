@@ -184,3 +184,199 @@ Reference WAV path is set per speaker in `studio/shows/profiles.py`. A 10-30 sec
 - Similarity threshold: **0.70**
 - Clique-based — an article can appear in multiple clusters if it's thematically relevant to each
 - Max cluster size: **5**
+
+---
+
+## Deep architecture: how an episode is built
+
+### Stage 1 — Ingest (`core/ingest.py`)
+
+Every URL goes through a five-step pipeline:
+
+1. **Scrape** — `content_core.extract_content()` fetches and parses the page into plain text + title
+2. **Store** — creates a `source` record in SurrealDB with `full_text`, `title`, `user_id`, `pool`
+3. **Transform** — five Claude calls run in parallel, each with a focused extraction prompt (see below)
+4. **Chunk + embed** — full text is split into 300-word chunks with 50-word overlap, each chunk embedded via `nomic-embed-text` through Ollama (768-dim vectors) and stored in `source_embedding`
+5. **Primitive embed** — `core_tensions` + `counterpoints` text is concatenated and embedded as a single vector into `source_primitive_embedding` — used only for clustering
+
+### Stage 2 — Transformations (`core/ingest.py → TRANSFORMATIONS`)
+
+Five extractions per source. All are extracted at ingest time and stored as `source_insight` records.
+
+---
+
+**`key_insights`** (Tier 1 — always present)
+
+> Extract the 3-4 most important insights, ideas, or claims. Specific and concrete — include actual numbers, names, claims, or mechanisms if present.
+
+Used in: outline hook segment, early briefing material
+
+---
+
+**`human_stakes`** (Tier 2 — null if not applicable)
+
+> What is actually at stake for real people — the concrete human consequence of the idea being true or false. Name the actual people or group affected. State what specifically changes or is lost.
+
+Used in: grounding abstract ideas, mid-episode weight
+
+---
+
+**`core_tensions`** (Tier 2 — null if not applicable)
+
+> The central tension or contradiction AND the most important question it leaves unresolved. Format: "[Force A] vs [Force B]" + one sentence explanation + one unresolved question.
+
+Used in: structural turn of the episode, cluster similarity signal
+
+---
+
+**`counterpoints`** (Tier 2 — null if not applicable)
+
+> The strongest counterpoint to the article's main claim — steelmanned as strongly as possible, whether the article raises it or not.
+
+Used in: exploration_engine format's counterpoint beat, cluster similarity signal
+
+---
+
+**`examples`** (Tier 2 — null if not applicable)
+
+> Either the single most concrete specific example OR the most useful mental model the piece introduces — whichever is stronger.
+
+Used in: anchoring abstract ideas in the outline, early hook material
+
+---
+
+### Stage 3 — Clustering (`intelligence/idea_generator.py`)
+
+Runs after all sources are ingested and primitive embeddings exist.
+
+```
+load_archive → cluster_sources → evaluate_ideas → filter_covered → save_ideas
+```
+
+**Clique algorithm:**
+1. Fetch one primitive embedding per source (from `source_primitive_embedding`)
+2. Compute all pairwise cosine similarity scores
+3. Any pair scoring ≥ 0.70 is a candidate edge
+4. Expand each pair into the largest clique possible (all pairwise scores within the group must all be ≥ 0.70)
+5. Deduplicate — remove any clique that is a strict subset of a larger clique
+6. Articles can appear in multiple cliques if they're genuinely similar to multiple groups
+
+Why primitive embeddings over full-text: full-text Ollama embeddings produce a similarity floor of ~0.80+ across all articles (text length and style swamp the thematic signal). Embedding only `core_tensions` + `counterpoints` — the extracted discriminating signal — gives a genuine range of ~0.47-0.77.
+
+### Stage 4 — Idea generation (`intelligence/idea_generator.py → evaluate_ideas`)
+
+For each cluster (and standalone source), a Claude call generates:
+- **`angle`** — the specific editorial lens for this episode: what tension to follow, what the episode argues or explores
+- **`format`** — recommended episode format (`narrative_drift`, `clarity_engine`, `exploration_engine`, `momentum_loop`)
+- **`idea_type`** — `cluster` or `standalone`
+- **`source_ids`** — which articles feed this episode
+
+Previously covered topics are filtered before saving to avoid repetition.
+
+### Stage 5 — Briefing packet (`studio/briefing_builder.py`)
+
+Deterministic — no LLM. Assembles everything the outline LLM needs into a single JSON structure:
+
+```json
+{
+  "format": "exploration_engine",
+  "format_config": {
+    "pacing": "medium",
+    "resolution_style": "partial",
+    "energy_curve": "steady_with_spikes",
+    "structure_pattern": ["claim", "counterpoint", "expansion", "link", "reframe"],
+    "voice_style": "analytical, exploratory",
+    "rules": {
+      "must_do": ["state a strong claim early, then complicate it", "..."],
+      "must_avoid": ["premature closure or tidy conclusions", "..."]
+    }
+  },
+  "episode_constraints": {
+    "target_length_minutes": 12,
+    "segment_count": 8
+  },
+  "editorial_direction": "the angle from the show_idea record",
+  "source_primitives": [
+    {
+      "title": "Article title",
+      "key_insights": "...",
+      "human_stakes": "...",
+      "core_tensions": "...",
+      "counterpoints": "...",
+      "examples": "..."
+    }
+  ]
+}
+```
+
+The format config is fully encoded in the packet — the outline and transcript prompts are format-agnostic and read format behaviour entirely from this JSON.
+
+### Stage 6 — Outline (`studio/generator.py → generate_outline`)
+
+**Model:** `claude-haiku-4-5-20251001`
+
+The outline LLM receives the briefing packet JSON and produces a structured allocation — not prose. It decides which primitives go in which segments, how the arc builds, and what the structural turn is.
+
+Output schema:
+```json
+{
+  "title": "episode title",
+  "thread": "one sentence — the single idea this episode follows",
+  "segments": [
+    {
+      "segment": 1,
+      "purpose": "what this segment does in the arc",
+      "primitives_used": ["key_insights from Article A", "examples from Article B"],
+      "transition": "one phrase — how this leads to the next segment"
+    }
+  ]
+}
+```
+
+Key constraints baked into the outline prompt:
+- Each primitive appears in at most one segment
+- Never transition between sources explicitly — no source boundaries should be audible
+- `resolution_style` governs how the final segment ends
+- `structure_pattern` maps directly to segment purposes in order
+
+### Stage 7 — Transcript (`studio/generator.py → generate_transcript`)
+
+**Model:** `claude-sonnet-4-6`
+
+The transcript LLM receives the briefing packet + outline + speaker definition and converts the structural allocation into spoken lines.
+
+Speaker definition injected into the human message:
+```
+Name: Kenji
+Backstory: Former wire journalist who reported from three continents...
+Speech patterns:
+  Keeps sentences tight.
+  Prefers one idea per line.
+  Occasionally undercuts a statement with a softer follow-up.
+  Uses contrast sparingly but sharply.
+  Avoids over-explaining.
+  Sometimes restates an idea in simpler terms after saying it once.
+```
+
+Priority order for the transcript LLM:
+1. Follow outline structure and format_config rules
+2. Keep meaning clear and easy to follow on first listen
+3. Apply speaker speech patterns last, subtly
+
+Output — one JSON object per spoken unit (usually 1-2 sentences):
+```json
+[
+  {"speaker": "Kenji", "text": "..."},
+  {"speaker": "Kenji", "text": "..."}
+]
+```
+
+### Stage 8 — Synthesis (`scripts/synthesize_episode.py`)
+
+1. Prepend `studio/intro.wav` (fixed, synthesized once via `synthesize_intro.py`)
+2. For each transcript line, call XTTS v2 via subprocess (xtts_env Python 3.11) with the speaker's reference WAV — produces a `.wav` clip per line
+3. Stitch all clips with 500ms silence between lines using pydub
+4. Export final MP3 at 128k bitrate to `data/episodes/<title>.mp3`
+
+The intro text (synthesized once, reused every episode):
+> Hello. Welcome in. Thanks for listening. But before we begin, let's first take a second to settle. Right. We'll keep this quiet at first. And then we'll move into it slowly.
