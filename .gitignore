@@ -1,0 +1,26 @@
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+xtts_env/
+
+# Data — local DB and generated audio
+data/
+studio/episodes/
+studio/*.mp3
+studio/*.wav
+studio/test_episode.mp3
+
+# Logs
+logs/
+
+# Misc
+*.html
