@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Curia local dev stack — postgres + api + worker.
+#
+# Bring it up:    docker compose up --build
+# Run migrations: docker compose exec api alembic upgrade head
+# Provision user: docker compose exec api python scripts/create_user.py --email you@example.com
+# Tail logs:      docker compose logs -f api worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Postgres + pgvector ────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: curia-postgres
+    environment:
+      POSTGRES_USER: curia
+      POSTGRES_PASSWORD: curia
+      POSTGRES_DB: curia
+    ports:
+      - "5432:5432"
+    volumes:
+      - curia-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curia -d curia"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── FastAPI service ────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: curia-api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://curia:curia@postgres:5432/curia
+      CURIA_AUDIO_DIR: /app/data/audio
+      CURIA_ENV: ${CURIA_ENV:-dev}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    ports:
+      - "8000:8000"
+
+  # ── Worker (same image, different command) ─────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: curia-worker
+    command: python -m worker.main
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://curia:curia@postgres:5432/curia
+      CURIA_AUDIO_DIR: /app/data/audio
+      CURIA_ENV: ${CURIA_ENV:-dev}
+      CURIA_WORKER_POLL_SECONDS: ${CURIA_WORKER_POLL_SECONDS:-2}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+
+volumes:
+  curia-pgdata:

@@ -1,0 +1,33 @@
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+xtts_env/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Data — local DB, generated audio, optimization artifacts, logs
+data/
+studio/episodes/
+studio/*.mp3
+studio/*.wav
+studio/test_episode.mp3
+prompts/optimized/
+gepa_logs/
+
+# Logs
+logs/
+
+# Misc
+*.html

@@ -1,0 +1,33 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv
+venv
+env
+.env
+
+# git / IDE
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+
+# build / cache
+build
+dist
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# local data — bind-mounted in compose, doesn't need to be in the image
+data
+gepa_logs
+prompts/optimized
+
+# docs / planning artifacts
+*.md
+!README.md

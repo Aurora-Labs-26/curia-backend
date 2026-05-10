@@ -1,0 +1,205 @@
+"""
+api/schemas.py
+Pydantic request/response models for the FastAPI surface.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field, HttpUrl
+
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+
+
+class CreateSourceRequest(BaseModel):
+    url: HttpUrl
+
+
+class SourceSummary(BaseModel):
+    id: UUID
+    title: Optional[str] = None
+    url: Optional[str] = None
+    status: str
+    created_at: datetime
+    error: Optional[str] = None
+
+
+class SourceDetail(SourceSummary):
+    full_text: Optional[str] = None
+    insights: dict[str, Optional[str]] = Field(default_factory=dict)
+
+
+class CreateJobResponse(BaseModel):
+    id: UUID
+    status: str
+    job_id: Optional[UUID] = None
+
+
+# ---------------------------------------------------------------------------
+# Ideas
+# ---------------------------------------------------------------------------
+
+
+class GenerateIdeasResponse(BaseModel):
+    job_id: UUID
+    status: str = "queued"
+
+
+class ShowIdeaSummary(BaseModel):
+    id: UUID
+    angle: str
+    idea_type: str
+    format: str
+    source_ids: list[UUID]
+    generated: bool
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Episodes
+# ---------------------------------------------------------------------------
+
+
+class CreateEpisodeRequest(BaseModel):
+    show_name: str = Field(
+        ...,
+        description="One of: narrative_drift, clarity_engine, momentum_loop, exploration_engine",
+    )
+    show_idea_id: Optional[UUID] = None
+    editorial_direction: Optional[str] = ""
+
+
+class EpisodeSummary(BaseModel):
+    id: UUID
+    show_name: Optional[str] = None
+    title: Optional[str] = None
+    status: str
+    created_at: datetime
+    error: Optional[str] = None
+    quality_score: Optional[float] = None    # 0..1, populated after judge runs
+
+
+class EpisodeDetail(EpisodeSummary):
+    transcript: Optional[Any] = None
+    outline: Optional[Any] = None
+    audio_path: Optional[str] = None
+    source_ids: list[UUID] = Field(default_factory=list)
+    editorial_direction: Optional[str] = None
+    quality_feedback: Optional[str] = None
+    quality_violations: list[str] = Field(default_factory=list)
+    regenerated: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Me / KB
+# ---------------------------------------------------------------------------
+
+
+class MeResponse(BaseModel):
+    id: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    role: str = "user"
+
+
+class KBPayload(BaseModel):
+    user_kb: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Admin (QA-only) responses
+# ---------------------------------------------------------------------------
+
+
+class AdminUserSummary(BaseModel):
+    id: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    role: str = "user"
+    created_at: datetime
+    has_kb: bool = False
+
+
+class RubricResponse(BaseModel):
+    """The judge prompt rendered for a (task, user) pair — what the LLM judge would see."""
+    task: str
+    user_id: str
+    judge_prompt: str
+
+
+# ---------------------------------------------------------------------------
+# Optimization (QA-only) — examples, guidelines, runs
+# ---------------------------------------------------------------------------
+
+
+class GuidelineResponse(BaseModel):
+    task: str
+    body: str
+    version: int = 1
+
+
+class GuidelineUpdate(BaseModel):
+    body: str = Field(..., min_length=10)
+
+
+class ExampleCreate(BaseModel):
+    task: str
+    inputs: dict[str, Any]
+    scope_type: str = "global"      # global | cohort | user
+    scope_value: Optional[str] = None
+    label: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExampleResponse(BaseModel):
+    id: UUID
+    task: str
+    scope_type: str
+    scope_value: Optional[str] = None
+    label: Optional[str] = None
+    inputs: dict[str, Any]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    source_episode_id: Optional[UUID] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+
+
+class ExampleImportFromEpisodeRequest(BaseModel):
+    episode_id: UUID
+    task: str = "transcript"
+    scope_type: str = "global"
+    scope_value: Optional[str] = None
+
+
+class OptimizationRunCreate(BaseModel):
+    task: str
+    scope_type: str = "global"
+    scope_value: Optional[str] = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class OptimizationRunResponse(BaseModel):
+    id: UUID
+    task: str
+    scope_type: str
+    scope_value: Optional[str] = None
+    status: str
+    metric_name: str = "rubric_judge"
+    trainset_size: Optional[int] = None
+    valset_size: Optional[int] = None
+    metric_score_baseline: Optional[float] = None
+    metric_score_optimized: Optional[float] = None
+    artifact_path: Optional[str] = None
+    promoted: bool = False
+    error: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    created_by: Optional[str] = None
+    created_at: datetime

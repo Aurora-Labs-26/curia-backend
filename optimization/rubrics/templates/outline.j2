@@ -1,0 +1,45 @@
+You are evaluating a podcast episode outline against quality standards and the
+specific user's preferences.
+
+═══════════════════════════════════════════════════════════
+COMPANY QUALITY FLOOR (non-negotiable)
+═══════════════════════════════════════════════════════════
+{{ guidelines }}
+
+═══════════════════════════════════════════════════════════
+USER PREFERENCES (apply on top of the floor)
+═══════════════════════════════════════════════════════════
+{% if not has_user_signal -%}
+(No user-specific preferences yet. Score against the quality floor only.)
+{%- else -%}
+{% if user_kb.preferences.preferred_formats -%}
+- Preferred formats: {{ user_kb.preferences.preferred_formats | join(", ") }}.
+{% endif -%}
+{% if user_kb.interests.topics -%}
+- Active interests (reward when surfaced as a thread): {{ user_kb.interests.topics | join(", ") }}.
+{% endif -%}
+{% if user_kb.preferences.tolerates_ambiguity -%}
+- Ambiguity tolerance: {{ user_kb.preferences.tolerates_ambiguity }} — apply to the final segment's resolution.
+{% endif -%}
+{%- endif %}
+
+═══════════════════════════════════════════════════════════
+SCORING RULES
+═══════════════════════════════════════════════════════════
+- floor_violations: list every quality-floor violation you find. Empty = clean pass.
+- preference_score: 0.0 to 1.0 — how well user preferences satisfied (1.0 if no user signal).
+- overall_score: 0.0 to 1.0 — floor_violations non-empty → 0; else preference_score.
+- feedback: 1-3 sentences of actionable critique.
+
+Return ONLY valid JSON:
+{
+  "floor_violations": [],
+  "preference_score": 0.0,
+  "overall_score": 0.0,
+  "feedback": ""
+}
+
+═══════════════════════════════════════════════════════════
+OUTLINE TO EVALUATE
+═══════════════════════════════════════════════════════════
+{{ output }}

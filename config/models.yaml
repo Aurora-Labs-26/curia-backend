@@ -1,0 +1,199 @@
+# config/models.yaml
+# ============================================================================
+# Single source of truth for every model interaction in Curia:
+#   - LLMs (Anthropic Claude, future OpenAI/Cohere/etc.)
+#   - Embeddings (Voyage)
+#   - TTS (ElevenLabs)
+#
+# Edit this file to:
+#   * Switch a task to a different model
+#   * Override per-environment (dev/staging/prod)
+#   * Override per-show
+#   * Configure per-speaker voices
+#   * Add new providers/models without changing any Python
+#
+# Loaded once at import via core/llm_config/loader.py.
+# See config/README.md for the field reference.
+# ============================================================================
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# providers
+# ─────────────────────────────────────────────────────────────────────────────
+providers:
+  anthropic:
+    type: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+
+  voyage:
+    type: voyage
+    api_key_env: VOYAGE_API_KEY
+    base_url: https://api.voyageai.com/v1
+
+  elevenlabs:
+    type: elevenlabs
+    api_key_env: ELEVENLABS_API_KEY
+    base_url: https://api.elevenlabs.io/v1
+
+  # Additional TTS providers — uncomment + add a model alias below to use one.
+  # smallest:
+  #   type: smallest
+  #   api_key_env: SMALLEST_API_KEY
+  #   base_url: https://waves-api.smallest.ai
+  #
+  # google_tts:
+  #   type: google_tts
+  #   api_key_env: GOOGLE_TTS_API_KEY
+  #   base_url: https://texttospeech.googleapis.com/v1
+  #
+  # xai_tts:
+  #   type: xai
+  #   api_key_env: XAI_API_KEY
+  #   base_url: https://api.x.ai/v1
+  #   # NOTE: xAI doesn't currently document a public TTS endpoint.
+  #   # When they do, set settings.endpoint_path on the model alias below.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# models — named aliases used by bindings
+# ─────────────────────────────────────────────────────────────────────────────
+models:
+  haiku-4-5:
+    provider: anthropic
+    model_id: claude-haiku-4-5-20251001
+    kind: llm
+    defaults:
+      max_tokens: 4096
+      temperature: 0.7
+
+  sonnet-4-6:
+    provider: anthropic
+    model_id: claude-sonnet-4-6
+    kind: llm
+    defaults:
+      max_tokens: 8192
+      temperature: 0.9
+
+  voyage-3:
+    provider: voyage
+    model_id: voyage-3
+    kind: embedding
+    dimension: 1024
+
+  voyage-3-lite:
+    provider: voyage
+    model_id: voyage-3-lite
+    kind: embedding
+    dimension: 512
+
+  eleven-multi-v2:
+    provider: elevenlabs
+    model_id: eleven_multilingual_v2
+    kind: tts
+    defaults:
+      output_format: pcm_22050
+      stability: 0.5
+      similarity_boost: 0.75
+
+  # ── Additional TTS model aliases ───────────────────────────────────────────
+  # Uncomment + reference from bindings.speaker.<name>.model to switch a speaker.
+  #
+  # smallest-lightning:
+  #   provider: smallest
+  #   model_id: lightning                     # name in their dashboard
+  #   kind: tts
+  #   defaults:
+  #     sample_rate: 22050
+  #     speed: 1.0
+  #     language: en
+  #
+  # google-neural2-en:
+  #   provider: google_tts
+  #   model_id: en-US-Neural2-J               # voice name; voice_id below redeclares it
+  #   kind: tts
+  #   defaults:
+  #     sample_rate_hertz: 22050
+  #     speaking_rate: 1.0
+  #     pitch: 0.0
+  #     ssml_gender: NEUTRAL
+  #
+  # xai-grok-voice:
+  #   provider: xai_tts
+  #   model_id: grok-voice-preview            # placeholder until xAI publishes one
+  #   kind: tts
+  #   defaults:
+  #     # Required when xAI ships a TTS API — set this to their documented path:
+  #     # endpoint_path: /audio/speech
+  #     audio_format: wav
+  #     sample_rate: 22050
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bindings — what model each task uses, in which scope
+# Resolution order (most specific wins):
+#   user → cohort → show → environment → task default → error
+# ─────────────────────────────────────────────────────────────────────────────
+bindings:
+
+  # Default per-task — used unless a more specific scope matches
+  task:
+    transformation.summary:        haiku-4-5
+    transformation.metadata:       haiku-4-5
+    transformation.key_insights:   haiku-4-5
+    transformation.human_stakes:   haiku-4-5
+    transformation.core_tensions:  haiku-4-5
+    transformation.counterpoints:  haiku-4-5
+    transformation.examples:       haiku-4-5
+
+    idea_evaluation.batch:   haiku-4-5
+    idea_evaluation.single:  haiku-4-5
+
+    outline:    haiku-4-5
+    transcript: sonnet-4-6
+
+    embedding:  voyage-3
+
+    # Future-reserved — these are noted now so the YAML is forward-compatible
+    judge:              sonnet-4-6
+    rubric_generator:   sonnet-4-6
+    gepa_reflection:    sonnet-4-6
+
+  # Per-environment overrides (CURIA_ENV=dev|staging|prod)
+  environment:
+    dev:
+      transcript: haiku-4-5    # cheaper in dev — overrides task default
+    prod:
+      transcript: sonnet-4-6
+
+  # Per-show overrides — replaces studio/shows/profiles.py outline_llm/transcript_llm
+  show:
+    narrative_drift:
+      outline:    haiku-4-5
+      transcript: sonnet-4-6
+    clarity_engine:
+      outline:    haiku-4-5
+      transcript: sonnet-4-6
+    momentum_loop:
+      outline:    haiku-4-5
+      transcript: sonnet-4-6
+    exploration_engine:
+      outline:    haiku-4-5
+      transcript: sonnet-4-6
+
+  # Per-speaker TTS — model alias + voice_id (replaces *_VOICE_ID env vars)
+  # Voice IDs default to ElevenLabs public sample voices;
+  # replace with cloned voice IDs once the team creates them.
+  speaker:
+    kenji:
+      model: eleven-multi-v2
+      voice_id: pNInz6obpgDQGcFmaJgB        # Adam (sample)
+    arjun:
+      model: eleven-multi-v2
+      voice_id: ErXwobaYiN019PkySvjV        # Antoni (sample)
+    emeka:
+      model: eleven-multi-v2
+      voice_id: VR6AewLTigWG4xSOukaG        # Arnold (sample)
+
+  # Reserved for later (cohort + user scopes — empty for v1)
+  cohort: {}
+  user: {}
