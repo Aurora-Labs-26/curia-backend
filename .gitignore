@@ -17,6 +17,9 @@ xtts_env/
 .mypy_cache/
 .ruff_cache/
 
+# Local agent / session state
+.claude/
+
 # Data — local DB, generated audio, optimization artifacts, logs
 data/
 studio/episodes/
