@@ -37,7 +37,7 @@ from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
 from core.prompts.transcript import generate_transcript as _transcript_module
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
-from optimization.rubrics import judge as _rubric_judge
+from optimization.rubrics.judge import judge as _rubric_judge
 
 # Audio output dir — container-friendly. CURIA_AUDIO_DIR env var overrides.
 EPISODES_DIR = Path(os.getenv("CURIA_AUDIO_DIR", str(CURIA_ROOT / "data" / "audio")))
@@ -115,10 +115,24 @@ def generate_transcript(
     outline: dict,
     show_name: str,
     user_kb: UserKB | None = None,
+    speaker_override: str | None = None,
 ) -> list[dict]:
+    from studio.shows.profiles import SPEAKER_PROFILES
+
     profile = SHOW_PROFILES[show_name]
     logger.info(f"Generating transcript (show={show_name})...")
-    speaker = profile.speaker_config.speakers[0]
+
+    if speaker_override:
+        if speaker_override not in SPEAKER_PROFILES:
+            raise ValueError(
+                f"Unknown speaker override '{speaker_override}'. "
+                f"Known: {list(SPEAKER_PROFILES)}"
+            )
+        speaker = SPEAKER_PROFILES[speaker_override].speakers[0]
+        logger.info(f"  speaker override → {speaker.name}")
+    else:
+        speaker = profile.speaker_config.speakers[0]
+
     speaker_definition = (
         f"Name: {speaker.name}\n"
         f"Backstory: {speaker.backstory}\n"
@@ -164,12 +178,12 @@ def generate_transcript(
 # "speech only, 400 ms gaps" stitcher.
 
 
-def synthesize_line_by_speaker(text: str, speaker: str, output_path: str):
+def synthesize_line_by_speaker(text: str, speaker: str, output_path: str) -> str:
     """
     Synthesize one transcript line. Speaker name → resolver looks up voice_id +
-    TTS provider from config/models.yaml.
+    TTS provider from config/models.yaml. Returns output format ('wav' or 'mp3').
     """
-    _tts_synthesize_for_speaker(text=text, speaker=speaker, output_path=output_path)
+    return _tts_synthesize_for_speaker(text=text, speaker=speaker, output_path=output_path)
 
 
 def _load_optional_segment(path: str | None, label: str) -> "AudioSegment | None":
@@ -221,8 +235,11 @@ def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: s
                 raw_speaker = next(iter(allowed_speakers))
             clip_path = os.path.join(tmpdir, f"line_{i:04d}.wav")
             logger.info(f"  [{i+1}/{len(transcript)}] {raw_speaker}: {line['text'][:60]}...")
-            synthesize_line_by_speaker(line["text"], raw_speaker, clip_path)
-            clips.append(AudioSegment.from_wav(clip_path))
+            fmt = synthesize_line_by_speaker(line["text"], raw_speaker, clip_path)
+            if fmt == "mp3":
+                clips.append(AudioSegment.from_mp3(clip_path))
+            else:
+                clips.append(AudioSegment.from_wav(clip_path))
 
         logger.info("Stitching speech...")
         gap = AudioSegment.silent(duration=gap_ms)
@@ -400,7 +417,8 @@ async def process_episode(episode_id: str) -> None:
     """
     row = await db_fetchrow(
         """
-        SELECT user_id, show_name, show_idea_id, editorial_direction
+        SELECT user_id, show_name, show_idea_id, editorial_direction,
+               length_minutes, speaker_override
         FROM episode WHERE id = $id::uuid
         """,
         {"id": episode_id},
@@ -412,6 +430,8 @@ async def process_episode(episode_id: str) -> None:
     show_name = row["show_name"]
     show_idea_id = row.get("show_idea_id")
     editorial_direction = row.get("editorial_direction") or ""
+    length_override: int | None = row.get("length_minutes")
+    speaker_override: str | None = row.get("speaker_override")
 
     if show_name not in SHOW_PROFILES:
         raise ValueError(
@@ -446,6 +466,7 @@ async def process_episode(episode_id: str) -> None:
             insights=insights,
             editorial_direction=editorial_direction,
             user_kb=user_kb,
+            length_override=length_override,
         )
         briefing = briefing_packet_to_str(packet)
 
@@ -456,9 +477,12 @@ async def process_episode(episode_id: str) -> None:
 
         # 4. Generate transcript (KB → speaker_definition listener hints)
         await _set_episode_status(episode_id, "transcribing")
-        transcript = generate_transcript(briefing, outline, show_name, user_kb=user_kb)
+        transcript = generate_transcript(
+            briefing, outline, show_name,
+            user_kb=user_kb, speaker_override=speaker_override,
+        )
 
-        judgment = await _rubric_judge.judge(
+        judgment = await _rubric_judge(
             task="transcript",
             output=json.dumps(transcript, ensure_ascii=False),
             user_id=user_id,
@@ -473,8 +497,11 @@ async def process_episode(episode_id: str) -> None:
                 f"{QUALITY_THRESHOLD} — re-rolling transcript once "
                 f"(violations: {judgment.floor_violations})"
             )
-            transcript = generate_transcript(briefing, outline, show_name, user_kb=user_kb)
-            judgment = await _rubric_judge.judge(
+            transcript = generate_transcript(
+                briefing, outline, show_name,
+                user_kb=user_kb, speaker_override=speaker_override,
+            )
+            judgment = await _rubric_judge(
                 task="transcript",
                 output=json.dumps(transcript, ensure_ascii=False),
                 user_id=user_id,

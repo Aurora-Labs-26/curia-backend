@@ -29,10 +29,12 @@ from .llm_config.resolver import get_config
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
 
 
-def synthesize_for_speaker(text: str, speaker: str, output_path: str) -> None:
-    """Resolve speaker name → configured voice/model and synthesize."""
+def synthesize_for_speaker(text: str, speaker: str, output_path: str) -> str:
+    """Resolve speaker name → configured voice/model and synthesize.
+    Returns the output format ('wav' or 'mp3') so callers can load correctly."""
     adapter = resolve.tts(speaker=speaker)
     adapter.synthesize(text=text, output_path=output_path)
+    return adapter.output_format
 
 
 def synthesize_line(text: str, voice_id: str, output_path: str) -> None:

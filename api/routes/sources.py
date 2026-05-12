@@ -7,6 +7,7 @@ GET /sources, GET /sources/:id, DELETE /sources/:id.
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from api.auth import current_user_id
 from api.schemas import (
@@ -112,13 +113,13 @@ async def get_source(
     return SourceDetail(**row, insights=insights)
 
 
-@router.delete("/sources/{source_id}", status_code=204)
+@router.delete("/sources/{source_id}", status_code=204, response_class=Response)
 async def delete_source(
     source_id: uuid.UUID, user_id: str = Depends(current_user_id)
-) -> None:
+) -> Response:
     result = await db_execute(
         "DELETE FROM source WHERE id = $id::uuid AND user_id = $user_id",
         {"id": str(source_id), "user_id": user_id},
     )
     # asyncpg's execute returns "DELETE <n>" — we don't bother parsing for v1
-    return None
+    return Response(status_code=204)

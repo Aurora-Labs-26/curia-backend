@@ -8,6 +8,7 @@ Currently supports:
   - google_tts         Google Cloud Text-to-Speech (API-key auth path)
   - xai                xAI / Grok TTS (STUB — public TTS endpoint is not yet
                        documented; raises NotImplementedError until verified)
+  - edge_tts           Microsoft Edge TTS (free, no API key required)
 
 Stub fallback when no API key for the configured provider is set: writes a
 1-second silent WAV per line so the pipeline runs end-to-end.
@@ -15,6 +16,7 @@ Stub fallback when no API key for the configured provider is set: writes a
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import wave
@@ -82,9 +84,20 @@ class TTSAdapter:
         self.voice_id = voice_id
         self._warned_stub = False
 
+    @property
+    def output_format(self) -> str:
+        """Returns 'mp3' for providers that write MP3, 'wav' for everything else."""
+        if self.provider.type == "edge_tts":
+            return "mp3"
+        return "wav"
+
     # -- public ------------------------------------------------------------
 
     def synthesize(self, text: str, output_path: str) -> None:
+        # edge_tts needs no API key — bypass the stub check entirely
+        if self.provider.type == "edge_tts":
+            return self._synthesize_edge_tts(text, output_path)
+
         api_key = os.getenv(self.provider.api_key_env)
         if not api_key:
             if not self._warned_stub:
@@ -109,6 +122,8 @@ class TTSAdapter:
             return self._synthesize_google(text, output_path, api_key)
         if self.provider.type == "xai":
             return self._synthesize_xai(text, output_path, api_key)
+        if self.provider.type == "edge_tts":
+            return self._synthesize_edge_tts(text, output_path)
 
         raise ValueError(f"TTS provider type '{self.provider.type}' not implemented")
 
@@ -161,6 +176,37 @@ class TTSAdapter:
             raise
         except Exception as e:
             raise RuntimeError(f"ElevenLabs request failed: {e}") from e
+
+    def _synthesize_edge_tts(self, text: str, output_path: str) -> None:
+        """Microsoft Edge TTS — free, no API key required. Outputs MP3 directly."""
+        import concurrent.futures
+        import edge_tts
+        import shutil
+
+        voice = self.voice_id or "en-US-GuyNeural"
+        mp3_path = output_path.replace(".wav", ".mp3") if output_path.endswith(".wav") else output_path
+
+        async def _run():
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(mp3_path)
+
+        def _run_in_thread():
+            # Run in a fresh thread with its own event loop to avoid
+            # "cannot be called from a running event loop" in async workers.
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_run())
+            finally:
+                loop.close()
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_run_in_thread)
+                future.result(timeout=60)
+            if output_path != mp3_path:
+                shutil.move(mp3_path, output_path)
+        except Exception as e:
+            raise RuntimeError(f"edge_tts synthesis failed: {e}") from e
 
     def _synthesize_smallest(self, text: str, output_path: str, api_key: str) -> None:
         """

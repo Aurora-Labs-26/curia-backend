@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi.responses import Response
 
 from api.auth import CurrentUser, qa_required
 from api.schemas import (
@@ -330,13 +331,13 @@ async def get_example_admin(
     return ExampleResponse(**row)
 
 
-@router.delete("/examples/{example_id}", status_code=204)
+@router.delete("/examples/{example_id}", status_code=204, response_class=Response)
 async def delete_example_admin(
     example_id: uuid.UUID,
     qa: CurrentUser = Depends(qa_required),
-) -> None:
+) -> Response:
     await examples_store.delete_example(str(example_id))
-    return None
+    return Response(status_code=204)
 
 
 @router.post(

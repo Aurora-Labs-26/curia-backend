@@ -35,6 +35,10 @@ providers:
     api_key_env: ELEVENLABS_API_KEY
     base_url: https://api.elevenlabs.io/v1
 
+  edge_tts:
+    type: edge_tts
+    api_key_env: EDGE_TTS_API_KEY   # unused — edge_tts needs no key; field required by schema
+
   # Additional TTS providers — uncomment + add a model alias below to use one.
   # smallest:
   #   type: smallest
@@ -94,6 +98,11 @@ models:
       output_format: pcm_22050
       stability: 0.5
       similarity_boost: 0.75
+
+  edge-tts:
+    provider: edge_tts
+    model_id: edge_tts
+    kind: tts
 
   # ── Additional TTS model aliases ───────────────────────────────────────────
   # Uncomment + reference from bindings.speaker.<name>.model to switch a speaker.
@@ -185,14 +194,14 @@ bindings:
   # replace with cloned voice IDs once the team creates them.
   speaker:
     kenji:
-      model: eleven-multi-v2
-      voice_id: pNInz6obpgDQGcFmaJgB        # Adam (sample)
+      model: edge-tts
+      voice_id: en-US-GuyNeural
     arjun:
-      model: eleven-multi-v2
-      voice_id: ErXwobaYiN019PkySvjV        # Antoni (sample)
+      model: edge-tts
+      voice_id: en-IN-PrabhatNeural
     emeka:
-      model: eleven-multi-v2
-      voice_id: VR6AewLTigWG4xSOukaG        # Arnold (sample)
+      model: edge-tts
+      voice_id: en-NG-AbeoNeural
 
   # Reserved for later (cohort + user scopes — empty for v1)
   cohort: {}

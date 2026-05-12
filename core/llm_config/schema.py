@@ -23,6 +23,7 @@ ProviderType = Literal[
     "smallest",       # TTS (Smallest.ai)
     "google_tts",     # TTS (Google Cloud Text-to-Speech)
     "xai",            # TTS (xAI / Grok — stub: verify API availability before live use)
+    "edge_tts",       # TTS (Microsoft Edge TTS — free, no API key required)
 ]
 
 

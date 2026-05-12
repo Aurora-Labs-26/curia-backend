@@ -36,9 +36,11 @@ async def create_episode(
     await db_execute(
         """
         INSERT INTO episode
-            (id, user_id, show_name, show_idea_id, editorial_direction, status)
+            (id, user_id, show_name, show_idea_id, editorial_direction,
+             length_minutes, speaker_override, status)
         VALUES
-            ($id::uuid, $user_id, $show, $idea_id::uuid, $direction, 'queued')
+            ($id::uuid, $user_id, $show, $idea_id::uuid, $direction,
+             $length_minutes, $speaker_override, 'queued')
         """,
         {
             "id": episode_id,
@@ -46,6 +48,8 @@ async def create_episode(
             "show": req.show_name,
             "idea_id": str(req.show_idea_id) if req.show_idea_id else None,
             "direction": req.editorial_direction or "",
+            "length_minutes": req.length_minutes,
+            "speaker_override": req.speaker,
         },
     )
     job_id = await enqueue(

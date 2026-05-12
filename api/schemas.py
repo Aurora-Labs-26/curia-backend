@@ -73,6 +73,16 @@ class CreateEpisodeRequest(BaseModel):
     )
     show_idea_id: Optional[UUID] = None
     editorial_direction: Optional[str] = ""
+    length_minutes: Optional[int] = Field(
+        default=None,
+        ge=3,
+        le=30,
+        description="Override episode length in minutes (3–30). Defaults to show format's configured length.",
+    )
+    speaker: Optional[str] = Field(
+        default=None,
+        description="Override speaker name. One of: kenji, arjun, emeka.",
+    )
 
 
 class EpisodeSummary(BaseModel):
