@@ -39,11 +39,12 @@ providers:
     type: edge_tts
     api_key_env: EDGE_TTS_API_KEY   # unused — edge_tts needs no key; field required by schema
 
+  smallest:
+    type: smallest
+    api_key_env: SMALLEST_API_KEY
+    base_url: https://waves-api.smallest.ai
+
   # Additional TTS providers — uncomment + add a model alias below to use one.
-  # smallest:
-  #   type: smallest
-  #   api_key_env: SMALLEST_API_KEY
-  #   base_url: https://waves-api.smallest.ai
   #
   # google_tts:
   #   type: google_tts
@@ -104,17 +105,16 @@ models:
     model_id: edge_tts
     kind: tts
 
+  smallest-lightning:
+    provider: smallest
+    model_id: lightning
+    kind: tts
+    defaults:
+      sample_rate: 24000
+      speed: 1.0
+      language: en
+
   # ── Additional TTS model aliases ───────────────────────────────────────────
-  # Uncomment + reference from bindings.speaker.<name>.model to switch a speaker.
-  #
-  # smallest-lightning:
-  #   provider: smallest
-  #   model_id: lightning                     # name in their dashboard
-  #   kind: tts
-  #   defaults:
-  #     sample_rate: 22050
-  #     speed: 1.0
-  #     language: en
   #
   # google-neural2-en:
   #   provider: google_tts
@@ -194,14 +194,14 @@ bindings:
   # replace with cloned voice IDs once the team creates them.
   speaker:
     kenji:
-      model: edge-tts
-      voice_id: en-US-GuyNeural
+      model: smallest-lightning
+      voice_id: emily
     arjun:
-      model: edge-tts
-      voice_id: en-IN-PrabhatNeural
+      model: smallest-lightning
+      voice_id: george
     emeka:
-      model: edge-tts
-      voice_id: en-NG-AbeoNeural
+      model: smallest-lightning
+      voice_id: james
 
   # Reserved for later (cohort + user scopes — empty for v1)
   cohort: {}

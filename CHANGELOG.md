@@ -4,6 +4,44 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-16 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Docs
+Merged and reorganised documentation files.
+- **`BACKLOG.md`** — merged with `TODO.md`; now contains all bugs, pipeline tasks, UX/audio work, test plan fixes, and open decisions in one place
+- **`FUTURE.md`** — merged with `FUTURE_THESIS_1.md`; Part 1 is technical improvements (clustering options), Part 2 is the full companion thesis with architecture, phases, tools, and cost estimates
+- **`TODO.md`** — deleted (merged into BACKLOG.md)
+- **`FUTURE_THESIS_1.md`** — deleted (merged into FUTURE.md)
+
+### Test
+- **`scripts/test_smallest_tts.py`** — new script to verify all 3 speakers (kenji/arjun/emeka) via Smallest.ai Lightning TTS; all passed
+- **`TEST_RESULTS.md`** — added to repo
+
+---
+
+## 2026-05-15 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+Switched TTS provider from edge-tts to Smallest.ai Lightning (fixes BUG-05).
+- **`config/models.yaml`** — added `smallest` provider, `smallest-lightning` model alias, updated all speaker bindings (kenji → emily, arjun → john, emeka → james)
+- **`.env`** — added `SMALLEST_API_KEY`
+
+### Docs
+- **`BACKLOG.md`** — created with prioritised fix list from test run + architecture discussion
+
+---
+
+## 2026-05-12 · Claude (claude-sonnet-4-6) — test run
+
+### Test
+First full test run against the pipeline. Results in `TEST_RESULTS.md`.
+- TC-1 (auth), TC-2 (source ingest), TC-3 (failure modes), TC-4 (KB), TC-5 (rubric), TC-6 (ideas), TC-9 (admin), TC-10 (isolation), TC-11 (edge cases) all run
+- TC-7, TC-12, TC-13, TC-16 blocked at synthesis stage — edge_tts rate-limited by Microsoft (BUG-05)
+- 5 bugs logged: BUG-01 through BUG-05
+- **`TEST_RESULTS.md`** — created with full pass/fail results and bug log
+
+---
+
 ## 2026-05-12 · Bhabani + Claude (claude-sonnet-4-6)
 
 ### Feature
