@@ -4,7 +4,7 @@ LangGraph workflow — generates show ideas from the archive.
 Runs in background, writes to show_ideas table.
 
 Workflow:
-  load_archive → cluster_sources → evaluate_ideas → filter_covered → save_ideas
+  load_archive → cluster_sources → diff_clusters → evaluate_ideas → filter_covered → save_ideas → auto_generate
 """
 
 import json
@@ -41,6 +41,7 @@ class IdeaGenState(TypedDict, total=False):
     raw_ideas: list[dict]         # ideas from evaluate_ideas
     filtered_ideas: list[dict]    # ideas passed to save
     saved_count: int
+    auto_generated_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -116,17 +117,18 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
     from core.embeddings import get_embedding_column
     emb_col = get_embedding_column()
     source_embeddings: dict[str, list[float]] = {}
-    for source in sources:
-        sid = str(source["id"])
-        bare_sid = sid.replace("source:", "")  # no-op now, harmless for old refs
-        result = await db_query(
-            f"SELECT {emb_col} FROM source_primitive_embedding WHERE source_id = $sid::uuid",
-            {"sid": bare_sid},
-        )
-        if result and result[0].get(emb_col) is not None:
-            emb = result[0][emb_col]
-            # pgvector returns numpy.ndarray when registered; coerce to plain list
-            source_embeddings[sid] = list(emb) if hasattr(emb, "__iter__") else emb
+    bare_ids = [str(source["id"]).replace("source:", "") for source in sources]
+    sid_to_original = {str(source["id"]).replace("source:", ""): str(source["id"]) for source in sources}
+    rows = await db_query(
+        f"SELECT source_id, {emb_col} FROM source_primitive_embedding WHERE source_id = ANY($ids::uuid[])",
+        {"ids": bare_ids},
+    )
+    for row in (rows or []):
+        emb = row.get(emb_col)
+        if emb is not None:
+            bare = str(row["source_id"])
+            orig_sid = sid_to_original.get(bare, bare)
+            source_embeddings[orig_sid] = list(emb) if hasattr(emb, "__iter__") else emb
 
     logger.info(f"[cluster_sources] Got primitive embeddings for {len(source_embeddings)} sources")
 
@@ -141,13 +143,53 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
 
     ids = list(source_embeddings.keys())
 
-    # Precompute all pairwise scores
+    # Load cached scores from DB
+    bare_ids_for_cache = [sid.replace("source:", "") for sid in ids]
+    cached_rows = await db_query(
+        """
+        SELECT source_a::text, source_b::text, score
+        FROM source_similarity
+        WHERE source_a = ANY($ids::uuid[]) AND source_b = ANY($ids::uuid[])
+        """,
+        {"ids": bare_ids_for_cache},
+    )
     scores = {}
+    for row in (cached_rows or []):
+        a = str(row["source_a"])
+        b = str(row["source_b"])
+        # map bare uuid back to original sid key
+        a_key = sid_to_original.get(a, a)
+        b_key = sid_to_original.get(b, b)
+        scores[(a_key, b_key)] = row["score"]
+        scores[(b_key, a_key)] = row["score"]
+
+    # Compute missing pairs and cache them
+    new_scores: list[dict] = []
     for i in range(len(ids)):
         for j in range(i + 1, len(ids)):
-            s = cosine(source_embeddings[ids[i]], source_embeddings[ids[j]])
-            scores[(ids[i], ids[j])] = s
-            scores[(ids[j], ids[i])] = s
+            if (ids[i], ids[j]) not in scores:
+                s = cosine(source_embeddings[ids[i]], source_embeddings[ids[j]])
+                scores[(ids[i], ids[j])] = s
+                scores[(ids[j], ids[i])] = s
+                bare_i = ids[i].replace("source:", "")
+                bare_j = ids[j].replace("source:", "")
+                new_scores.append({"a": bare_i, "b": bare_j, "score": s})
+
+    # Bulk-insert new scores
+    for ns in new_scores:
+        try:
+            await db_execute(
+                """
+                INSERT INTO source_similarity (source_a, source_b, score)
+                VALUES ($a::uuid, $b::uuid, $score)
+                ON CONFLICT DO NOTHING
+                """,
+                {"a": ns["a"], "b": ns["b"], "score": ns["score"]},
+            )
+        except Exception as e:
+            logger.warning(f"[cluster_sources] cache write failed: {e}")
+
+    logger.info(f"[cluster_sources] {len(new_scores)} new pairs computed, {len(scores)//2 - len(new_scores)} from cache")
 
     def is_clique(members):
         for i in range(len(members)):
@@ -187,6 +229,30 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
 
     logger.info(f"[cluster_sources] {len(clusters)} clusters formed")
     return {**state, "clusters": clusters}
+
+
+# ---------------------------------------------------------------------------
+# Node: diff_clusters
+# ---------------------------------------------------------------------------
+
+async def diff_clusters(state: IdeaGenState) -> IdeaGenState:
+    user_id = state["user_id"]
+    clusters = state["clusters"]
+
+    existing = await db_query(
+        "SELECT source_ids FROM show_idea WHERE user_id = $user_id",
+        {"user_id": user_id}
+    )
+    existing_sets = [frozenset(str(s) for s in row["source_ids"]) for row in (existing or [])]
+
+    new_clusters = []
+    for cluster in clusters:
+        cluster_set = frozenset(str(s) for s in cluster)
+        if cluster_set not in existing_sets:
+            new_clusters.append(cluster)
+
+    logger.info(f"[diff_clusters] {len(clusters)} clusters → {len(new_clusters)} new after diff")
+    return {**state, "clusters": new_clusters}
 
 
 # ---------------------------------------------------------------------------
@@ -367,12 +433,6 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
 
     logger.info(f"[save_ideas] Saving {len(ideas)} ideas")
 
-    # Clear old ungenerated ideas for this user first
-    await db_execute(
-        "DELETE FROM show_idea WHERE user_id = $user_id AND generated = false",
-        {"user_id": user_id},
-    )
-
     for idea in ideas:
         # Coerce source_ids to UUIDs (uuid[] column)
         from uuid import UUID
@@ -385,6 +445,10 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
             except (ValueError, TypeError):
                 logger.warning(f"[save_ideas] Skipping invalid source_id: {sid!r}")
 
+        fmt = idea.get("format", "")
+        if fmt not in {"narrative_drift", "clarity_engine", "momentum_loop", "exploration_engine"}:
+            fmt = "clarity_engine"
+
         await db_execute(
             """
             INSERT INTO show_idea
@@ -396,13 +460,78 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
                 "user_id": user_id,
                 "angle": idea.get("angle", ""),
                 "idea_type": idea.get("type", "standalone"),
-                "format": idea.get("format", ""),
+                "format": fmt,
                 "source_ids": source_ids,
             },
         )
 
     logger.info(f"[save_ideas] Done — {len(ideas)} ideas written to show_idea table")
     return {**state, "saved_count": len(ideas)}
+
+
+# ---------------------------------------------------------------------------
+# Node: auto_generate
+# ---------------------------------------------------------------------------
+
+async def auto_generate(state: IdeaGenState) -> IdeaGenState:
+    user_id = state["user_id"]
+    import uuid as _uuid
+
+    new_ideas = await db_query(
+        """
+        SELECT id, format, source_ids, angle
+        FROM show_idea
+        WHERE user_id = $user_id
+          AND generated = false
+          AND created_at > now() - interval '60 seconds'
+        """,
+        {"user_id": user_id},
+    )
+
+    from core.queue import enqueue
+    from studio.formats import FORMATS
+
+    count = 0
+    for idea in (new_ideas or []):
+        fmt = idea["format"]
+        if fmt not in FORMATS:
+            fmt = "clarity_engine"
+
+        episode_id = str(_uuid.uuid4())
+        try:
+            await db_execute(
+                """
+                INSERT INTO episode
+                    (id, user_id, show_name, show_idea_id, editorial_direction,
+                     length_minutes, speaker_override, status)
+                VALUES
+                    ($id::uuid, $user_id, $show, $idea_id::uuid, $direction,
+                     NULL, NULL, 'queued')
+                """,
+                {
+                    "id": episode_id,
+                    "user_id": user_id,
+                    "show": fmt,
+                    "idea_id": str(idea["id"]),
+                    "direction": idea.get("angle", ""),
+                },
+            )
+            await db_execute(
+                "UPDATE show_idea SET generated = true WHERE id = $id::uuid",
+                {"id": str(idea["id"])},
+            )
+            await enqueue(
+                type="generate_episode",
+                payload={"episode_id": episode_id, "user_id": user_id},
+                user_id=user_id,
+            )
+            logger.info(f"[auto_generate] Enqueued episode {episode_id} for idea {idea['id']}")
+            count += 1
+        except Exception as e:
+            logger.warning(f"[auto_generate] Failed to create episode for idea {idea['id']}: {e}")
+
+    logger.info(f"[auto_generate] {count} episodes enqueued")
+    return {**state, "auto_generated_count": count}
 
 
 # ---------------------------------------------------------------------------
@@ -414,16 +543,20 @@ def build_graph():
 
     graph.add_node("load_archive", load_archive)
     graph.add_node("cluster_sources", cluster_sources)
+    graph.add_node("diff_clusters", diff_clusters)
     graph.add_node("evaluate_ideas", evaluate_ideas)
     graph.add_node("filter_covered", filter_covered)
     graph.add_node("save_ideas", save_ideas)
+    graph.add_node("auto_generate", auto_generate)
 
     graph.set_entry_point("load_archive")
     graph.add_edge("load_archive", "cluster_sources")
-    graph.add_edge("cluster_sources", "evaluate_ideas")
+    graph.add_edge("cluster_sources", "diff_clusters")
+    graph.add_edge("diff_clusters", "evaluate_ideas")
     graph.add_edge("evaluate_ideas", "filter_covered")
     graph.add_edge("filter_covered", "save_ideas")
-    graph.add_edge("save_ideas", END)
+    graph.add_edge("save_ideas", "auto_generate")
+    graph.add_edge("auto_generate", END)
 
     return graph.compile()
 
@@ -442,6 +575,7 @@ async def run_idea_generator(user_id: str = "default"):
         "raw_ideas": [],
         "filtered_ideas": [],
         "saved_count": 0,
+        "auto_generated_count": 0,
     })
     logger.info(f"Idea generator complete — {result['saved_count']} ideas saved")
     return result

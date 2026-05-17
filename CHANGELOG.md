@@ -4,6 +4,104 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-18 · Claude (claude-sonnet-4-6) — audio range requests + profile real data
+
+### Bug Fix
+- **`api/routes/episodes.py`** — replaced `FileResponse` in `GET /episodes/{id}/audio` with a range-aware `StreamingResponse`; parses `Range: bytes=start-end` header, returns 206 with `Content-Range` / `Accept-Ranges` headers for correct audio scrubbing; falls back to full 200 response when no Range header present
+
+### Feature
+- **`app/profile/index.tsx`** — replaced hardcoded `"Bhabani Mohapatra"` and `"bhabani@curia.fm"` with `user?.name` and `user?.email` from `useAuth()` — data already populated from `api.me()` on sign-in
+
+---
+
+## 2026-05-18 · Claude (claude-sonnet-4-6) — generate-from-source endpoint + handler
+
+### Feature
+New `POST /generate-from-source` endpoint and worker handler for share sheet's "Queue It" action.
+- **`api/routes/generate_from_source.py`** — new route: validates source ownership, resolves format slug, enqueues job, returns `{ job_id }`
+- **`worker/handlers/generate_from_source.py`** — new handler: `standalone=true` path runs `evaluate_single_idea` on one source, writes `show_idea` (generated=true), creates episode with overrides; `standalone=false` path runs full `run_idea_generator` pipeline then patches any newly-queued episodes containing the source_id with user overrides
+- **`worker/handlers/__init__.py`** — registered `generate_from_source` handler
+- **`api/main.py`** — wired `generate_from_source.router` into the FastAPI app
+
+---
+
+## 2026-05-17 · Claude (claude-sonnet-4-6) — idea pipeline: dedup, caching, auto-generation
+
+### Feature
+Coalescing auto-trigger: after ingest completes, enqueue `generate_ideas` only if no such job is already queued or running for that user.
+- **`worker/handlers/ingest.py`** — after `process_source`, fetch `user_id` from `source` table via `db_fetchrow`; check `jobs` for existing pending `generate_ideas`; enqueue if none found
+
+### Feature
+`diff_clusters` node filters out clusters whose exact source-id sets already exist in `show_idea`, preventing duplicate ideas across runs.
+- **`intelligence/idea_generator.py`** — added `diff_clusters` node between `cluster_sources` and `evaluate_ideas`; added `auto_generated_count: int` to `IdeaGenState`; batched embedding fetch (single `ANY($ids::uuid[])` query replaces per-source loop); similarity score caching in `source_similarity` table (cache-read before compute, cache-write after); removed destructive `DELETE FROM show_idea` in `save_ideas`; added format validation fallback to `clarity_engine` in `save_ideas`; added `auto_generate` node after `save_ideas` — creates `episode` rows and enqueues `generate_episode` jobs for all freshly saved ideas; updated `build_graph()` and `run_idea_generator` initial state
+
+### Migration
+- **`alembic/versions/0013_source_similarity.py`** — new `source_similarity` table (`source_a`, `source_b`, `score`, `created_at`; PK on `(source_a, source_b)`; reverse index `source_similarity_b_idx`)
+
+---
+
+## 2026-05-17 · Bhabani + Claude (claude-sonnet-4-6) — Episode display fields + progress
+
+### Feature
+Added description, chapters, playback progress to episodes for frontend shows tab.
+- **`alembic/versions/0012_episode_display_fields.py`** — migration adding `description TEXT`, `chapters JSONB`, `play_progress FLOAT`, `listened BOOLEAN` to `episode` table
+- **`studio/generator.py`** — added `_derive_display_fields(outline, duration_seconds)`: extracts `thread` as `description`, builds `chapters` array `[{id, title, start_minute}]` from outline segments with evenly distributed start times; wired into completion UPDATE
+- **`api/schemas.py`** — moved `duration_seconds`, `source_ids` up to `EpisodeSummary`; added `description`, `chapters`, `play_progress`, `listened` to `EpisodeSummary`; `EpisodeDetail` inherits all, keeps `transcript`, `outline`, `audio_path`, quality fields
+- **`api/routes/episodes.py`** — updated both list SELECTs and detail SELECT to include all new fields; added `PUT /episodes/{id}/progress` endpoint (body: `{play_progress: 0.0–1.0, listened: bool}`, returns 204)
+
+---
+
+## 2026-05-17 · Bhabani + Claude (claude-sonnet-4-6) — Firebase auth integration
+
+### Feature
+Firebase Auth wired between curia-frontend and curia-v2 backend.
+
+**Backend (`curia-v2`):**
+- **`.env`** — added `GOOGLE_APPLICATION_CREDENTIALS=~/.secrets/curia-firebase-adminsdk.json`
+- `firebase-admin` installed via pip; `core/firebase.py` + `api/auth.py` already built for this — no code changes needed
+- Verified: `init_firebase()` succeeds with service account
+
+**Frontend (`curia-frontend`):**
+- Installed `@react-native-firebase/app`, `@react-native-firebase/auth`, `@react-native-google-signin/google-signin`
+- **`app.config.ts`** — added `@react-native-firebase/app`, `@react-native-firebase/auth`, `@react-native-google-signin/google-signin` plugins; added `googleServicesFile` to iOS + Android config; added `REVERSED_CLIENT_ID` as iOS URL scheme
+- **`services/api.ts`** — replaced mock JWT store with `auth().currentUser.getIdToken()` (Firebase ID token); `request()` sends it as `Authorization: Bearer`; `api.me()` hits real `GET /auth/me`
+- **`context/AuthContext.tsx`** — replaced mock sign-in with real `GoogleSignin.signIn()` → `auth().signInWithCredential()`; `onAuthStateChanged` drives user state; `api.me()` provisions backend user row on first sign-in
+- **`app/auth/index.tsx`** — wired "Continue with Google" button to `signInWithGoogle()`
+- **`.env.development`** — filled in real client IDs from Firebase credential files
+
+**Credentials placed:**
+- `~/.secrets/curia-firebase-adminsdk.json` — service account (backend)
+- `ios/GoogleService-Info.plist` — iOS Firebase config
+- `android/app/google-services.json` — Android Firebase config
+
+---
+
+## 2026-05-17 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+Store actual audio duration on episode for frontend progress bar.
+- **`alembic/versions/0011_episode_duration_seconds.py`** — migration adding `duration_seconds INTEGER` (nullable) to `episode` table
+- **`studio/generator.py`** — `synthesize_and_stitch()` and `synthesize_and_stitch_v2()` now return `int` (actual rendered seconds via `len(body) // 1000`); `process_episode` captures the return value and passes it as `$duration_seconds` in the UPDATE
+- **`api/schemas.py`** — `EpisodeDetail` gains `duration_seconds: Optional[int]`
+- **`api/routes/episodes.py`** — `GET /episodes/{id}` SELECT now includes `duration_seconds`
+
+### Feature
+Format name matching between frontend and backend (on `v2-hardening` branch).
+- **`studio/formats.py`** — added `frontend_name` (e.g. `"slow-burn"`) and `display_name` (e.g. `"Slow Burn"`) fields to `FormatConfig`; added secondary index `_FRONTEND_TO_BACKEND`; added `resolve_format_name()` which accepts either the backend canonical name or the frontend slug
+- **`api/schemas.py`** — added `FormatEntry` response model; added `format_frontend_name` and `format_display_name` fields to `EpisodeSummary`
+- **`api/routes/episodes.py`** — added `GET /formats` endpoint (no auth required); `POST /episodes` now calls `resolve_format_name()` so frontend can send `"slow-burn"` and backend stores `"narrative_drift"`; list + detail responses enriched with frontend name + display label via `_enrich_row()`
+- **`tests/test_mappers_backend.py`** — added 5 new tests: `display_names`, `unique_slugs`, `resolve_backend_names`, `resolve_frontend_slugs`, `get_format_accepts_frontend_slug`; all 11 pass
+
+Mapping:
+| Frontend slug | Backend name | Display label |
+|---|---|---|
+| `slow-burn` | `narrative_drift` | Slow Burn |
+| `sharp-take` | `clarity_engine` | Sharp Take |
+| `live-wire` | `momentum_loop` | Live Wire |
+| `open-verdict` | `exploration_engine` | Open Verdict |
+
+---
+
 ## 2026-05-16 · Bhabani + Claude (claude-sonnet-4-6)
 
 ### Docs

@@ -229,7 +229,7 @@ def _overlay_music(body: "AudioSegment", music: "AudioSegment", gain_db: float) 
     return body.overlay(track)
 
 
-def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: str) -> str:
+def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: str) -> int:
     profile = SHOW_PROFILES[show_name]
     allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
 
@@ -283,11 +283,12 @@ def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: s
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s)")
-    return output_path
+    duration_seconds = len(body) // 1000
+    logger.info(f"Audio exported: {output_path} ({duration_seconds}s)")
+    return duration_seconds
 
 
-def synthesize_and_stitch_v2(transcript: list[dict], show_name: str, output_path: str) -> str:
+def synthesize_and_stitch_v2(transcript: list[dict], show_name: str, output_path: str) -> int:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
     makes far fewer TTS calls, and produces more natural prosody.
@@ -345,13 +346,45 @@ def synthesize_and_stitch_v2(transcript: list[dict], show_name: str, output_path
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s)")
-    return output_path
+    duration_seconds = len(body) // 1000
+    logger.info(f"Audio exported: {output_path} ({duration_seconds}s)")
+    return duration_seconds
 
 
 # ---------------------------------------------------------------------------
 # Episode save + post-generation
 # ---------------------------------------------------------------------------
+
+def _derive_display_fields(outline: dict, duration_seconds: int) -> tuple[str, list[dict]]:
+    """
+    Extract description and chapters from the outline dict.
+
+    description — outline['thread'], the one-sentence idea the episode follows.
+    chapters    — one entry per segment: {id, title, start_minute}.
+                  start_minute is computed by dividing duration evenly across segments.
+    """
+    description = outline.get("thread") or outline.get("central_tension") or ""
+
+    segments = outline.get("segments", [])
+    n = len(segments)
+    duration_minutes = duration_seconds / 60 if duration_seconds else 0
+    segment_duration = duration_minutes / n if n > 0 else 0
+
+    chapters = []
+    for i, seg in enumerate(segments):
+        # Use purpose as the chapter title — it's the most human-readable field
+        title = seg.get("purpose") or f"Part {i + 1}"
+        # Truncate long purposes to a reasonable chapter title length
+        if len(title) > 60:
+            title = title[:57].rstrip() + "…"
+        chapters.append({
+            "id":           str(i + 1),
+            "title":        title,
+            "start_minute": round(i * segment_duration, 1),
+        })
+
+    return description, chapters
+
 
 def _coerce_source_uuids(source_ids: list) -> list:
     """Strip 'source:' prefixes (legacy) and return UUID-coerced list."""
@@ -618,17 +651,21 @@ async def process_episode(episode_id: str) -> None:
         # 5. Synthesize + stitch
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        synthesize_and_stitch(transcript, show_name, audio_path)
+        duration_seconds = synthesize_and_stitch(transcript, show_name, audio_path)
 
         # 6. Persist results onto the existing row
         source_uuids = _coerce_source_uuids(source_ids)
+        description, chapters = _derive_display_fields(outline, duration_seconds)
         await db_execute(
             """
             UPDATE episode
             SET title = $title,
+                description = $description,
+                chapters = $chapters::jsonb,
                 transcript = $transcript::jsonb,
                 outline = $outline::jsonb,
                 audio_path = $audio_path,
+                duration_seconds = $duration_seconds,
                 source_ids = $source_ids,
                 quality_score = $score,
                 quality_feedback = $feedback,
@@ -641,9 +678,12 @@ async def process_episode(episode_id: str) -> None:
             {
                 "id": episode_id,
                 "title": title,
+                "description": description,
+                "chapters": json.dumps(chapters),
                 "transcript": json.dumps(transcript),
                 "outline": json.dumps(outline),
                 "audio_path": audio_path,
+                "duration_seconds": duration_seconds,
                 "source_ids": source_uuids,
                 "score": judgment.overall_score,
                 "feedback": judgment.feedback,

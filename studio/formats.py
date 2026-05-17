@@ -2,6 +2,18 @@
 studio/formats.py
 Format config registry for all episode formats.
 Formats are configs, not prompts — all format-specific behaviour is encoded here.
+
+Frontend ↔ backend name mapping
+--------------------------------
+Frontend slug   Backend name         Display label
+-----------     ----------------     -------------
+slow-burn       narrative_drift      Slow Burn
+sharp-take      clarity_engine       Sharp Take
+live-wire       momentum_loop        Live Wire
+open-verdict    exploration_engine   Open Verdict
+
+Use `resolve_format_name()` to accept either form.
+Use `GET /formats` to expose the mapping to clients.
 """
 
 from dataclasses import dataclass, field
@@ -15,7 +27,9 @@ class FormatRules:
 
 @dataclass
 class FormatConfig:
-    name: str
+    name: str           # backend canonical name, e.g. "narrative_drift"
+    frontend_name: str  # frontend slug, e.g. "slow-burn"
+    display_name: str   # human label, e.g. "Slow Burn"
     pacing: str
     resolution_style: str
     energy_curve: str
@@ -32,6 +46,8 @@ class FormatConfig:
 
 NARRATIVE_DRIFT = FormatConfig(
     name="narrative_drift",
+    frontend_name="slow-burn",
+    display_name="Slow Burn",
     pacing="slow",
     resolution_style="open_ended",
     energy_curve="declining",
@@ -57,6 +73,8 @@ NARRATIVE_DRIFT = FormatConfig(
 
 CLARITY_ENGINE = FormatConfig(
     name="clarity_engine",
+    frontend_name="sharp-take",
+    display_name="Sharp Take",
     pacing="medium_fast",
     resolution_style="explicit",
     energy_curve="rising",
@@ -82,6 +100,8 @@ CLARITY_ENGINE = FormatConfig(
 
 MOMENTUM_LOOP = FormatConfig(
     name="momentum_loop",
+    frontend_name="live-wire",
+    display_name="Live Wire",
     pacing="dynamic_fast",
     resolution_style="micro_payoffs",
     energy_curve="oscillating",
@@ -107,6 +127,8 @@ MOMENTUM_LOOP = FormatConfig(
 
 EXPLORATION_ENGINE = FormatConfig(
     name="exploration_engine",
+    frontend_name="open-verdict",
+    display_name="Open Verdict",
     pacing="medium",
     resolution_style="partial",
     energy_curve="steady_with_spikes",
@@ -142,11 +164,28 @@ FORMATS: dict[str, FormatConfig] = {
     "exploration_engine": EXPLORATION_ENGINE,
 }
 
+# Secondary index: frontend slug → backend name
+_FRONTEND_TO_BACKEND: dict[str, str] = {
+    fmt.frontend_name: fmt.name for fmt in FORMATS.values()
+}
+
+
+def resolve_format_name(name: str) -> str:
+    """
+    Accept either a backend name ("narrative_drift") or a frontend slug ("slow-burn")
+    and return the canonical backend name. Raises ValueError if neither matches.
+    """
+    if name in FORMATS:
+        return name
+    if name in _FRONTEND_TO_BACKEND:
+        return _FRONTEND_TO_BACKEND[name]
+    all_valid = list(FORMATS.keys()) + list(_FRONTEND_TO_BACKEND.keys())
+    raise ValueError(f"Unknown format: '{name}'. Valid values: {all_valid}")
+
 
 def get_format(name: str) -> FormatConfig:
-    if name not in FORMATS:
-        raise ValueError(f"Unknown format: '{name}'. Available: {list(FORMATS.keys())}")
-    return FORMATS[name]
+    canonical = resolve_format_name(name)
+    return FORMATS[canonical]
 
 
 def format_config_to_dict(fmt: FormatConfig) -> dict:

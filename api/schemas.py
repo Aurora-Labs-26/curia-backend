@@ -63,6 +63,19 @@ class ShowIdeaSummary(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Formats
+# ---------------------------------------------------------------------------
+
+
+class FormatEntry(BaseModel):
+    name: str           # backend canonical name, e.g. "narrative_drift"
+    frontend_name: str  # frontend slug, e.g. "slow-burn"
+    display_name: str   # human label, e.g. "Slow Burn"
+    default_length_minutes: int
+    default_segment_count: int
+
+
+# ---------------------------------------------------------------------------
 # Episodes
 # ---------------------------------------------------------------------------
 
@@ -88,21 +101,29 @@ class CreateEpisodeRequest(BaseModel):
 
 class EpisodeSummary(BaseModel):
     id: UUID
-    show_name: Optional[str] = None
+    show_name: Optional[str] = None          # backend canonical name
+    format_frontend_name: Optional[str] = None  # e.g. "slow-burn"
+    format_display_name: Optional[str] = None   # e.g. "Slow Burn"
     title: Optional[str] = None
+    description: Optional[str] = None       # outline thread sentence
     status: str
     created_at: datetime
     error: Optional[str] = None
     quality_score: Optional[float] = None    # 0..1, populated after judge runs
+    duration_seconds: Optional[int] = None
     length_minutes: Optional[int] = None
     speaker_override: Optional[str] = None
+    source_ids: list[UUID] = Field(default_factory=list)
+    source_domains: list[str] = Field(default_factory=list)  # e.g. ["ft.com", "bloomberg.com"]
+    chapters: Optional[Any] = None           # [{id, title, start_minute}]
+    play_progress: Optional[float] = None    # 0.0–1.0
+    listened: bool = False
 
 
 class EpisodeDetail(EpisodeSummary):
     transcript: Optional[Any] = None
     outline: Optional[Any] = None
     audio_path: Optional[str] = None
-    source_ids: list[UUID] = Field(default_factory=list)
     editorial_direction: Optional[str] = None
     quality_feedback: Optional[str] = None
     quality_violations: list[str] = Field(default_factory=list)
