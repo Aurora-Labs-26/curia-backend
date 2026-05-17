@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import dspy
 
+from core.prompts.loader import with_prompt
+
 
 class GenerateTranscript(dspy.Signature):
     """You write single-host podcast scripts. Output ONLY a valid JSON array. No prose, no explanation, no refusals, no markdown.
@@ -63,9 +65,12 @@ Output:
     speaker_definition: str = dspy.InputField(
         desc="SPEAKER block: name, backstory, speech_patterns"
     )
+    quality_guidelines: str = dspy.InputField(
+        desc="Quality floor guidelines the transcript MUST satisfy. Treat every rule as a hard constraint."
+    )
     transcript_json: str = dspy.OutputField(
         desc='JSON array of {"speaker": str, "text": str} per spoken unit'
     )
 
 
-generate_transcript = dspy.Predict(GenerateTranscript)
+generate_transcript = dspy.Predict(with_prompt(GenerateTranscript, "transcript"))

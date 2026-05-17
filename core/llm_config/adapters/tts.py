@@ -9,6 +9,8 @@ Currently supports:
   - xai                xAI / Grok TTS (STUB — public TTS endpoint is not yet
                        documented; raises NotImplementedError until verified)
   - edge_tts           Microsoft Edge TTS (free, no API key required)
+  - openai_tts         OpenAI Text-to-Speech API
+  - cartesia           Cartesia TTS API
 
 Stub fallback when no API key for the configured provider is set: writes a
 1-second silent WAV per line so the pipeline runs end-to-end.
@@ -89,20 +91,118 @@ class TTSAdapter:
         """Returns 'mp3' for providers that write MP3, 'wav' for everything else."""
         if self.provider.type == "edge_tts":
             return "mp3"
+        if self.provider.type == "openai_tts":
+            fmt = self.settings.get("response_format", "wav")
+            return "mp3" if fmt == "mp3" else "wav"
+        # cartesia always returns WAV (pcm_s16le in wav container)
         return "wav"
 
     # -- public ------------------------------------------------------------
 
     def synthesize(self, text: str, output_path: str) -> None:
-        # edge_tts needs no API key — bypass the stub check entirely
+        import time as _time
+
+        llm_log = logger.bind(log_type="llm")
+
+        llm_log.info(
+            f"TTS_START | provider={self.provider.type} "
+            f"model={self.model.model_id} voice={self.voice_id} "
+            f"text_len={len(text) if text else 0}"
+        )
+        start = _time.time()
+
+        # edge_tts needs no API key -- bypass the stub check entirely
         if self.provider.type == "edge_tts":
-            return self._synthesize_edge_tts(text, output_path)
+            self._synthesize_edge_tts(text, output_path)
+            elapsed = _time.time() - start
+            llm_log.info(
+                f"TTS_END | provider={self.provider.type} "
+                f"model={self.model.model_id} output={output_path} "
+                f"duration={elapsed:.2f}s"
+            )
+            return
 
         api_key = os.getenv(self.provider.api_key_env)
         if not api_key:
             if not self._warned_stub:
                 logger.warning(
-                    f"{self.provider.api_key_env} not set — TTS STUB active "
+                    f"{self.provider.api_key_env} not set -- TTS STUB active "
+                    f"(silent WAV) for provider={self.provider.type}."
+                )
+                self._warned_stub = True
+            _write_silent_wav(output_path, duration_seconds=1.0)
+            llm_log.info(
+                f"TTS_END | provider=stub output={output_path} (silent WAV)"
+            )
+            return
+
+        if not text or not text.strip():
+            _write_silent_wav(output_path, duration_seconds=0.3)
+            llm_log.info(
+                f"TTS_END | provider={self.provider.type} output={output_path} "
+                f"(empty text, silent WAV)"
+            )
+            return
+
+        try:
+            # Dispatch by provider type -- each method writes a WAV at output_path.
+            if self.provider.type == "elevenlabs":
+                self._synthesize_elevenlabs(text, output_path, api_key)
+            elif self.provider.type == "smallest":
+                self._synthesize_smallest(text, output_path, api_key)
+            elif self.provider.type == "google_tts":
+                self._synthesize_google(text, output_path, api_key)
+            elif self.provider.type == "xai":
+                self._synthesize_xai(text, output_path, api_key)
+            elif self.provider.type == "openai_tts":
+                self._synthesize_openai_tts(text, output_path, api_key)
+            elif self.provider.type == "cartesia":
+                self._synthesize_cartesia(text, output_path, api_key)
+            elif self.provider.type == "edge_tts":
+                self._synthesize_edge_tts(text, output_path)
+            else:
+                raise ValueError(f"TTS provider type '{self.provider.type}' not implemented")
+
+            elapsed = _time.time() - start
+            llm_log.info(
+                f"TTS_END | provider={self.provider.type} "
+                f"model={self.model.model_id} output={output_path} "
+                f"duration={elapsed:.2f}s"
+            )
+        except Exception as e:
+            elapsed = _time.time() - start
+            llm_log.error(
+                f"TTS_FAIL | provider={self.provider.type} "
+                f"model={self.model.model_id} duration={elapsed:.2f}s error={e}"
+            )
+            raise
+
+    # -- async public API --------------------------------------------------
+
+    async def synthesize_async(self, text: str, output_path: str) -> None:
+        """Async version of synthesize. Uses native async for each provider."""
+        import time as _time
+
+        llm_log = logger.bind(log_type="llm")
+        llm_log.info(
+            f"TTS_ASYNC_START | provider={self.provider.type} "
+            f"model={self.model.model_id} voice={self.voice_id} "
+            f"text_len={len(text) if text else 0}"
+        )
+        start = _time.time()
+
+        # edge_tts is natively async — no API key needed
+        if self.provider.type == "edge_tts":
+            await self._async_edge_tts(text, output_path)
+            elapsed = _time.time() - start
+            llm_log.info(f"TTS_ASYNC_END | provider=edge_tts duration={elapsed:.2f}s")
+            return
+
+        api_key = os.getenv(self.provider.api_key_env)
+        if not api_key:
+            if not self._warned_stub:
+                logger.warning(
+                    f"{self.provider.api_key_env} not set -- TTS STUB active "
                     f"(silent WAV) for provider={self.provider.type}."
                 )
                 self._warned_stub = True
@@ -113,21 +213,227 @@ class TTSAdapter:
             _write_silent_wav(output_path, duration_seconds=0.3)
             return
 
-        # Dispatch by provider type — each method writes a WAV at output_path.
-        if self.provider.type == "elevenlabs":
-            return self._synthesize_elevenlabs(text, output_path, api_key)
-        if self.provider.type == "smallest":
-            return self._synthesize_smallest(text, output_path, api_key)
-        if self.provider.type == "google_tts":
-            return self._synthesize_google(text, output_path, api_key)
-        if self.provider.type == "xai":
-            return self._synthesize_xai(text, output_path, api_key)
-        if self.provider.type == "edge_tts":
-            return self._synthesize_edge_tts(text, output_path)
+        try:
+            if self.provider.type == "elevenlabs":
+                await self._async_elevenlabs(text, output_path, api_key)
+            elif self.provider.type == "smallest":
+                await self._async_smallest(text, output_path, api_key)
+            elif self.provider.type == "google_tts":
+                await self._async_google(text, output_path, api_key)
+            elif self.provider.type == "openai_tts":
+                await self._async_openai_tts(text, output_path, api_key)
+            elif self.provider.type == "cartesia":
+                await self._async_cartesia(text, output_path, api_key)
+            elif self.provider.type == "xai":
+                await self._async_xai(text, output_path, api_key)
+            else:
+                raise ValueError(f"Async TTS not implemented for '{self.provider.type}'")
 
-        raise ValueError(f"TTS provider type '{self.provider.type}' not implemented")
+            elapsed = _time.time() - start
+            llm_log.info(
+                f"TTS_ASYNC_END | provider={self.provider.type} "
+                f"duration={elapsed:.2f}s output={output_path}"
+            )
+        except Exception as e:
+            elapsed = _time.time() - start
+            llm_log.error(f"TTS_ASYNC_FAIL | provider={self.provider.type} duration={elapsed:.2f}s error={e}")
+            raise
 
-    # -- providers ---------------------------------------------------------
+    async def synthesize_bytes(self, text: str) -> bytes:
+        """Async — returns WAV bytes directly. No temp file at call site."""
+        import tempfile
+
+        tmp_path = tempfile.mktemp(suffix=".wav")
+        try:
+            await self.synthesize_async(text=text, output_path=tmp_path)
+            with open(tmp_path, "rb") as f:
+                return f.read()
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    # -- async provider implementations ------------------------------------
+
+    async def _async_elevenlabs(self, text: str, output_path: str, api_key: str) -> None:
+        base_url = (self.provider.base_url or "https://api.elevenlabs.io/v1").rstrip("/")
+        url = f"{base_url}/text-to-speech/{self.voice_id}"
+        output_format = self.settings.get("output_format", "pcm_22050")
+        voice_settings = {
+            "stability": self.settings.get("stability", 0.5),
+            "similarity_boost": self.settings.get("similarity_boost", 0.75),
+            "style": self.settings.get("style", 0.0),
+            "use_speaker_boost": self.settings.get("use_speaker_boost", True),
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                params={"output_format": output_format},
+                headers={
+                    "xi-api-key": api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "audio/pcm" if output_format.startswith("pcm_") else "audio/wav",
+                },
+                json={"text": text, "model_id": self.model.model_id, "voice_settings": voice_settings},
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"ElevenLabs error {resp.status_code}: {resp.text[:300]}")
+        if output_format.startswith("pcm_"):
+            _write_wav_from_pcm(resp.content, _sample_rate_from_format(output_format), output_path)
+        else:
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+
+    async def _async_openai_tts(self, text: str, output_path: str, api_key: str) -> None:
+        base_url = (self.provider.base_url or "https://api.openai.com/v1").rstrip("/")
+        url = f"{base_url}/audio/speech"
+        body = {
+            "model": self.model.model_id,
+            "input": text,
+            "voice": self.voice_id,
+            "response_format": self.settings.get("response_format", "wav"),
+            "speed": self.settings.get("speed", 1.0),
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"OpenAI TTS error {resp.status_code}: {resp.text[:300]}")
+        with open(output_path, "wb") as f:
+            f.write(resp.content)
+
+    async def _async_cartesia(self, text: str, output_path: str, api_key: str) -> None:
+        base_url = (self.provider.base_url or "https://api.cartesia.ai").rstrip("/")
+        url = f"{base_url}/tts/bytes"
+        body = {
+            "model_id": self.model.model_id,
+            "transcript": text,
+            "voice": {"mode": "id", "id": self.voice_id},
+            "output_format": {
+                "container": "wav",
+                "encoding": "pcm_s16le",
+                "sample_rate": self.settings.get("sample_rate", 22050),
+            },
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "X-API-Key": api_key,
+                    "Cartesia-Version": "2024-06-10",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Cartesia error {resp.status_code}: {resp.text[:300]}")
+        with open(output_path, "wb") as f:
+            f.write(resp.content)
+
+    async def _async_smallest(self, text: str, output_path: str, api_key: str) -> None:
+        base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
+        endpoint = self.settings.get("endpoint_path", "/api/v1/lightning/get_speech")
+        url = f"{base_url}{endpoint}"
+        body = {
+            "voice_id": self.voice_id,
+            "text": text,
+            "language": self.settings.get("language", "en"),
+            "sample_rate": int(self.settings.get("sample_rate", 22050)),
+            "speed": self.settings.get("speed", 1.0),
+            "add_wav_header": True,
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+        with open(output_path, "wb") as f:
+            f.write(resp.content)
+
+    async def _async_google(self, text: str, output_path: str, api_key: str) -> None:
+        base_url = (self.provider.base_url or "https://texttospeech.googleapis.com/v1").rstrip("/")
+        url = f"{base_url}/text:synthesize"
+        language_code = self.settings.get("language_code")
+        if not language_code:
+            parts = self.voice_id.split("-")
+            language_code = "-".join(parts[:2]) if len(parts) >= 2 else "en-US"
+        sample_rate = int(self.settings.get("sample_rate_hertz", 22050))
+        body = {
+            "input": {"text": text},
+            "voice": {
+                "languageCode": language_code,
+                "name": self.voice_id,
+                "ssmlGender": self.settings.get("ssml_gender", "NEUTRAL"),
+            },
+            "audioConfig": {
+                "audioEncoding": "LINEAR16",
+                "sampleRateHertz": sample_rate,
+                "speakingRate": self.settings.get("speaking_rate", 1.0),
+                "pitch": self.settings.get("pitch", 0.0),
+            },
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, params={"key": api_key}, headers={"Content-Type": "application/json"}, json=body)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Google TTS error {resp.status_code}: {resp.text[:300]}")
+        payload = resp.json()
+        audio_b64 = payload.get("audioContent")
+        if not audio_b64:
+            raise RuntimeError("Google TTS response missing audioContent")
+        pcm = base64.b64decode(audio_b64)
+        if pcm[:4] == b"RIFF":
+            with open(output_path, "wb") as f:
+                f.write(pcm)
+        else:
+            _write_wav_from_pcm(pcm, sample_rate, output_path)
+
+    async def _async_edge_tts(self, text: str, output_path: str) -> None:
+        """Native async — edge_tts is built on asyncio, no thread pool needed."""
+        import shutil
+        import edge_tts
+
+        voice = self.voice_id or "en-US-GuyNeural"
+        mp3_path = output_path.replace(".wav", ".mp3") if output_path.endswith(".wav") else output_path
+
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(mp3_path)
+
+        if output_path != mp3_path:
+            shutil.move(mp3_path, output_path)
+
+    async def _async_xai(self, text: str, output_path: str, api_key: str) -> None:
+        endpoint_path = self.settings.get("endpoint_path")
+        if not endpoint_path:
+            raise NotImplementedError("xAI TTS: no public endpoint documented yet.")
+        base_url = (self.provider.base_url or "https://api.x.ai/v1").rstrip("/")
+        url = f"{base_url}{endpoint_path}"
+        body = {
+            "model": self.model.model_id,
+            "voice": self.voice_id,
+            "text": text,
+            **{k: v for k, v in self.settings.items() if k not in ("endpoint_path", "audio_format")},
+        }
+        audio_format = self.settings.get("audio_format", "wav")
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"xAI TTS error {resp.status_code}: {resp.text[:300]}")
+        if audio_format == "pcm":
+            _write_wav_from_pcm(resp.content, int(self.settings.get("sample_rate", 22050)), output_path)
+        else:
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+
+    # -- sync providers (existing) -----------------------------------------
 
     def _synthesize_elevenlabs(self, text: str, output_path: str, api_key: str) -> None:
         base_url = (self.provider.base_url or "https://api.elevenlabs.io/v1").rstrip("/")
@@ -177,11 +483,86 @@ class TTSAdapter:
         except Exception as e:
             raise RuntimeError(f"ElevenLabs request failed: {e}") from e
 
+    def _synthesize_openai_tts(self, text: str, output_path: str, api_key: str) -> None:
+        """OpenAI Text-to-Speech API."""
+        base_url = (self.provider.base_url or "https://api.openai.com/v1").rstrip("/")
+        url = f"{base_url}/audio/speech"
+
+        response_format = self.settings.get("response_format", "wav")
+        speed = self.settings.get("speed", 1.0)
+
+        body = {
+            "model": self.model.model_id,
+            "input": text,
+            "voice": self.voice_id,
+            "response_format": response_format,
+            "speed": speed,
+        }
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            if resp.status_code != 200:
+                raise RuntimeError(f"OpenAI TTS error {resp.status_code}: {resp.text[:300]}")
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"OpenAI TTS request failed: {e}") from e
+
+    def _synthesize_cartesia(self, text: str, output_path: str, api_key: str) -> None:
+        """Cartesia TTS API — returns raw WAV bytes."""
+        base_url = (self.provider.base_url or "https://api.cartesia.ai").rstrip("/")
+        url = f"{base_url}/tts/bytes"
+
+        sample_rate = self.settings.get("sample_rate", 22050)
+
+        body = {
+            "model_id": self.model.model_id,
+            "transcript": text,
+            "voice": {
+                "mode": "id",
+                "id": self.voice_id,
+            },
+            "output_format": {
+                "container": "wav",
+                "encoding": "pcm_s16le",
+                "sample_rate": sample_rate,
+            },
+        }
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    url,
+                    headers={
+                        "X-API-Key": api_key,
+                        "Cartesia-Version": "2024-06-10",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Cartesia TTS error {resp.status_code}: {resp.text[:300]}")
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Cartesia TTS request failed: {e}") from e
+
     def _synthesize_edge_tts(self, text: str, output_path: str) -> None:
         """Microsoft Edge TTS — free, no API key required. Outputs MP3 directly."""
-        import concurrent.futures
-        import edge_tts
         import shutil
+        import edge_tts
 
         voice = self.voice_id or "en-US-GuyNeural"
         mp3_path = output_path.replace(".wav", ".mp3") if output_path.endswith(".wav") else output_path
@@ -190,19 +571,12 @@ class TTSAdapter:
             communicate = edge_tts.Communicate(text, voice)
             await communicate.save(mp3_path)
 
-        def _run_in_thread():
-            # Run in a fresh thread with its own event loop to avoid
-            # "cannot be called from a running event loop" in async workers.
+        try:
             loop = asyncio.new_event_loop()
             try:
                 loop.run_until_complete(_run())
             finally:
                 loop.close()
-
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_run_in_thread)
-                future.result(timeout=60)
             if output_path != mp3_path:
                 shutil.move(mp3_path, output_path)
         except Exception as e:

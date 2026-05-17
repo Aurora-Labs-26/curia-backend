@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import dspy
 
+from core.prompts.loader import with_prompt
+
 # ---------------------------------------------------------------------------
 # Batch — one call across many groups
 # ---------------------------------------------------------------------------
@@ -95,5 +97,5 @@ Output ONLY valid JSON: {"type": "standalone", "angle": "one sentence", "format"
 # Singletons
 # ---------------------------------------------------------------------------
 
-evaluate_ideas_batch = dspy.Predict(EvaluateIdeasBatch)
-evaluate_single_idea = dspy.Predict(EvaluateSingleIdea)
+evaluate_ideas_batch = dspy.Predict(with_prompt(EvaluateIdeasBatch, "evaluate_ideas_batch"))
+evaluate_single_idea = dspy.Predict(with_prompt(EvaluateSingleIdea, "evaluate_ideas_single"))

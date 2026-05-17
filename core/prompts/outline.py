@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import dspy
 
+from core.prompts.loader import with_prompt
+
 
 class GenerateOutline(dspy.Signature):
     """You are a podcast episode architect. Output ONLY valid JSON. No prose, no explanation, no markdown.
@@ -62,4 +64,4 @@ Output schema — use exactly these keys, no others:
     )
 
 
-generate_outline = dspy.Predict(GenerateOutline)
+generate_outline = dspy.Predict(with_prompt(GenerateOutline, "outline"))

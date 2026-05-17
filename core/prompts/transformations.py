@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import dspy
 
+from core.prompts.loader import with_prompt
+
 # ---------------------------------------------------------------------------
 # Signatures
 # ---------------------------------------------------------------------------
@@ -207,14 +209,14 @@ class Transformations(dspy.Module):
     def __init__(self):
         super().__init__()
         # Tier 1 (always present)
-        self.summary = dspy.Predict(ExtractSummary)
-        self.metadata = dspy.Predict(ExtractMetadata)
-        self.key_insights = dspy.Predict(ExtractKeyInsights)
+        self.summary = dspy.Predict(with_prompt(ExtractSummary, "extract_summary"))
+        self.metadata = dspy.Predict(with_prompt(ExtractMetadata, "extract_metadata"))
+        self.key_insights = dspy.Predict(with_prompt(ExtractKeyInsights, "extract_key_insights"))
         # Tier 2 (may be "null")
-        self.human_stakes = dspy.Predict(ExtractHumanStakes)
-        self.core_tensions = dspy.Predict(ExtractCoreTensions)
-        self.counterpoints = dspy.Predict(ExtractCounterpoints)
-        self.examples = dspy.Predict(ExtractExamples)
+        self.human_stakes = dspy.Predict(with_prompt(ExtractHumanStakes, "extract_human_stakes"))
+        self.core_tensions = dspy.Predict(with_prompt(ExtractCoreTensions, "extract_core_tensions"))
+        self.counterpoints = dspy.Predict(with_prompt(ExtractCounterpoints, "extract_counterpoints"))
+        self.examples = dspy.Predict(with_prompt(ExtractExamples, "extract_examples"))
 
     def forward(self, article: str) -> dict[str, str]:
         return {

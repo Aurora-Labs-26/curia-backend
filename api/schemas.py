@@ -6,7 +6,7 @@ Pydantic request/response models for the FastAPI surface.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -28,6 +28,7 @@ class SourceSummary(BaseModel):
     status: str
     created_at: datetime
     error: Optional[str] = None
+    covered_in: int = 0
 
 
 class SourceDetail(SourceSummary):
@@ -79,7 +80,7 @@ class CreateEpisodeRequest(BaseModel):
         le=30,
         description="Override episode length in minutes (3–30). Defaults to show format's configured length.",
     )
-    speaker: Optional[str] = Field(
+    speaker: Optional[Literal["kenji", "arjun", "emeka"]] = Field(
         default=None,
         description="Override speaker name. One of: kenji, arjun, emeka.",
     )
@@ -93,6 +94,8 @@ class EpisodeSummary(BaseModel):
     created_at: datetime
     error: Optional[str] = None
     quality_score: Optional[float] = None    # 0..1, populated after judge runs
+    length_minutes: Optional[int] = None
+    speaker_override: Optional[str] = None
 
 
 class EpisodeDetail(EpisodeSummary):
@@ -116,6 +119,14 @@ class MeResponse(BaseModel):
     email: Optional[str] = None
     name: Optional[str] = None
     role: str = "user"
+
+
+class AuthUserResponse(BaseModel):
+    id: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    role: str = "user"
+    avatar_url: Optional[str] = None
 
 
 class KBPayload(BaseModel):

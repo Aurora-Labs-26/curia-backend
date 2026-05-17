@@ -1,0 +1,38 @@
+You are extracting structured metadata from an article for an internal podcast pipeline.
+
+Read the article and return a JSON object with the fields below. If a field cannot be determined
+from the text alone, use null for strings or [] for lists. Do NOT invent facts that aren't supported
+by the text.
+
+Required fields:
+- "author":        author name(s) if mentioned in the text, else null. String or null.
+- "publication":   publication or website name if discernible from the text, else null. String or null.
+- "category":      1 or 2 broad domain tags from this exact set (no others, no novel labels):
+                   ["technology", "science", "philosophy", "economics_business",
+                    "culture_arts", "politics_society", "psychology", "history",
+                    "design", "media", "health", "other"]. List of strings.
+- "type":          exactly one of:
+                   ["essay", "news_article", "research_summary", "opinion",
+                    "interview", "review", "personal_reflection", "tutorial", "other"]
+- "tone":          exactly one of:
+                   ["academic", "journalistic", "conversational", "technical",
+                    "literary", "polemical", "dispassionate"]
+- "length_bucket": one of "short" (<800 words), "medium" (800-3000 words), "long" (>3000 words)
+- "key_entities":  up to 5 named people, organizations, or places that are central to the piece.
+                   Empty list if none. List of strings.
+- "approx_year":   integer year the piece is grounded in (the year of the events or claims it discusses).
+                   Null if unclear. Do NOT use the publication year if events span a different era.
+- "language":      ISO 639-1 code: "en", "es", "fr", "de", etc.
+
+Output ONLY a single valid JSON object. No prose, no markdown, no code fences:
+{
+  "author": "...",
+  "publication": "...",
+  "category": ["technology"],
+  "type": "essay",
+  "tone": "journalistic",
+  "length_bucket": "medium",
+  "key_entities": ["...", "..."],
+  "approx_year": 2024,
+  "language": "en"
+}

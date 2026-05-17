@@ -56,16 +56,19 @@ async def vector_search_sources(
     `1 - (a <=> b)` converts pgvector's cosine *distance* into similarity score in [-1, 1].
     Returns chunks ranked by relevance.
     """
+    from core.embeddings import get_embedding_column
+    col = get_embedding_column()
     result = await db_query(
-        """
+        f"""
         SELECT
             se.source_id,
             se.chunk_text,
-            1 - (se.embedding <=> $query_embedding::vector) AS score
+            1 - (se.{col} <=> $query_embedding::vector) AS score
         FROM source_embedding se
         JOIN source s ON s.id = se.source_id
         WHERE s.user_id = $user_id
-          AND 1 - (se.embedding <=> $query_embedding::vector) > $min_score
+          AND se.{col} IS NOT NULL
+          AND 1 - (se.{col} <=> $query_embedding::vector) > $min_score
         ORDER BY score DESC
         LIMIT $limit
         """,

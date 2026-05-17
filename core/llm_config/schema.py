@@ -18,12 +18,20 @@ ProviderType = Literal[
     "anthropic",      # LLM
     "voyage",         # embedding
     "elevenlabs",     # TTS
-    "openai",         # LLM
-    "cohere",         # LLM
+    "openai",         # LLM + embedding
+    "cohere",         # LLM + embedding
     "smallest",       # TTS (Smallest.ai)
     "google_tts",     # TTS (Google Cloud Text-to-Speech)
     "xai",            # TTS (xAI / Grok — stub: verify API availability before live use)
     "edge_tts",       # TTS (Microsoft Edge TTS — free, no API key required)
+    "vllm",           # LLM (self-hosted, OpenAI-compatible)
+    "xai_llm",        # LLM (xAI / Grok)
+    "gemini",         # LLM + embedding (Google Gemini)
+    "openrouter",     # LLM (OpenRouter gateway)
+    "openai_tts",     # TTS (OpenAI TTS)
+    "cartesia",       # TTS (Cartesia)
+    "jina",           # embedding (Jina)
+    "mistral",        # embedding (Mistral)
 ]
 
 

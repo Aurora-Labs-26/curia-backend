@@ -37,6 +37,7 @@ from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
 from core.prompts.transcript import generate_transcript as _transcript_module
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
+from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
 from optimization.rubrics.judge import judge as _rubric_judge
 
 # Audio output dir — container-friendly. CURIA_AUDIO_DIR env var overrides.
@@ -53,11 +54,18 @@ QUALITY_REROLL_ENABLED = os.getenv("CURIA_QUALITY_REROLL", "true").lower() == "t
 # ---------------------------------------------------------------------------
 
 def generate_outline(briefing: str, show_name: str) -> dict:
+    import time as _time
+    llm_log = logger.bind(log_type="llm")
     logger.info(f"Generating outline (show={show_name})...")
+    llm_log.info(f"LLM_CALL_START | task=outline show={show_name} briefing_len={len(briefing)}")
+    _start = _time.time()
     # Resolver picks the right model: show-scoped binding overrides task default.
     with dspy.context(lm=resolve.llm("outline", show=show_name)):
         prediction = _outline_module(briefing=briefing)
+    _elapsed = _time.time() - _start
     raw = prediction.outline_json.strip()
+    llm_log.info(f"LLM_CALL_END | task=outline show={show_name} duration={_elapsed:.2f}s output_len={len(raw)}")
+    llm_log.debug(f"LLM_OUTPUT | task=outline | {raw[:3000]}{'...' if len(raw) > 3000 else ''}")
     # Strip markdown code fences if present
     if "```" in raw:
         raw = raw.split("```")[1]
@@ -120,6 +128,8 @@ def generate_transcript(
     from studio.shows.profiles import SPEAKER_PROFILES
 
     profile = SHOW_PROFILES[show_name]
+    import time as _time
+    llm_log = logger.bind(log_type="llm")
     logger.info(f"Generating transcript (show={show_name})...")
 
     if speaker_override:
@@ -140,13 +150,19 @@ def generate_transcript(
         + _format_listener_hints(user_kb)
     )
     # Resolver picks the right model: show-scoped binding overrides task default.
+    llm_log.info(f"LLM_CALL_START | task=transcript show={show_name} briefing_len={len(briefing)}")
+    _start = _time.time()
     with dspy.context(lm=resolve.llm("transcript", show=show_name)):
         prediction = _transcript_module(
             briefing=briefing,
             outline=json.dumps(outline, indent=2),
             speaker_definition=speaker_definition,
+            quality_guidelines=TRANSCRIPT_GUIDELINES_V1,
         )
+    _elapsed = _time.time() - _start
     raw = prediction.transcript_json.strip()
+    llm_log.info(f"LLM_CALL_END | task=transcript show={show_name} duration={_elapsed:.2f}s output_len={len(raw)}")
+    llm_log.debug(f"LLM_OUTPUT | task=transcript | {raw[:3000]}{'...' if len(raw) > 3000 else ''}")
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -248,6 +264,68 @@ def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: s
             body += clip + gap
 
         # Optional intro / outro / music — driven by show profile
+        intro = _load_optional_segment(profile.intro_audio_path, "intro")
+        outro = _load_optional_segment(profile.outro_audio_path, "outro")
+        music = _load_optional_segment(profile.music_audio_path, "music")
+
+        if intro is not None:
+            logger.info(f"  prepending intro ({len(intro)/1000:.1f}s)")
+            body = intro + body
+        if outro is not None:
+            logger.info(f"  appending outro ({len(outro)/1000:.1f}s)")
+            body = body + outro
+        if music is not None:
+            logger.info(
+                f"  overlaying music ({len(music)/1000:.1f}s loop) "
+                f"at {profile.music_gain_db:+.1f} dB"
+            )
+            body = _overlay_music(body, music, profile.music_gain_db)
+
+        body.export(output_path, format="mp3", bitrate=bitrate)
+
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s)")
+    return output_path
+
+
+def synthesize_and_stitch_v2(transcript: list[dict], show_name: str, output_path: str) -> str:
+    """
+    Segment-based synthesis — merges same-speaker lines into paragraphs,
+    makes far fewer TTS calls, and produces more natural prosody.
+    """
+    from core.audio.stitcher import prepare_segments
+
+    profile = SHOW_PROFILES[show_name]
+    allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
+
+    bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
+    gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
+
+    segments = prepare_segments(transcript)
+    logger.info(
+        f"Synthesizing {len(transcript)} lines as {len(segments)} segments "
+        f"(bitrate={bitrate}, gap={gap_ms}ms)..."
+    )
+    clips = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i, seg in enumerate(segments):
+            raw_speaker = seg["speaker"]
+            if raw_speaker not in allowed_speakers:
+                raw_speaker = next(iter(allowed_speakers))
+            clip_path = os.path.join(tmpdir, f"segment_{i:04d}.wav")
+            logger.info(f"  [{i+1}/{len(segments)}] {raw_speaker}: {seg['text'][:60]}...")
+            fmt = synthesize_line_by_speaker(seg["text"], raw_speaker, clip_path)
+            if fmt == "mp3":
+                clips.append(AudioSegment.from_mp3(clip_path))
+            else:
+                clips.append(AudioSegment.from_wav(clip_path))
+
+        logger.info("Stitching segments...")
+        gap = AudioSegment.silent(duration=gap_ms)
+        body = AudioSegment.empty()
+        for clip in clips:
+            body += clip + gap
+
         intro = _load_optional_segment(profile.intro_audio_path, "intro")
         outro = _load_optional_segment(profile.outro_audio_path, "outro")
         music = _load_optional_segment(profile.music_audio_path, "music")
@@ -438,8 +516,15 @@ async def process_episode(episode_id: str) -> None:
             f"Unknown show_name '{show_name}'. Known: {list(SHOW_PROFILES)}"
         )
 
+    import time as _ep_time
+    _ep_start = _ep_time.time()
+    worker_log = logger.bind(log_type="worker")
+
     profile = SHOW_PROFILES[show_name]
     logger.info(f"--- Processing episode {episode_id} (show={show_name}, user={user_id}) ---")
+    worker_log.info(
+        f"EPISODE_START | id={episode_id} show={show_name} user={user_id}"
+    )
 
     # Load the user's KB once; propagate to selector, briefing, transcript.
     try:
@@ -497,15 +582,32 @@ async def process_episode(episode_id: str) -> None:
                 f"{QUALITY_THRESHOLD} — re-rolling transcript once "
                 f"(violations: {judgment.floor_violations})"
             )
-            transcript = generate_transcript(
+
+            # Save v1
+            transcript_v1 = transcript
+            judgment_v1 = judgment
+
+            # Generate v2
+            transcript_v2 = generate_transcript(
                 briefing, outline, show_name,
                 user_kb=user_kb, speaker_override=speaker_override,
             )
-            judgment = await _rubric_judge(
+            judgment_v2 = await _rubric_judge(
                 task="transcript",
-                output=json.dumps(transcript, ensure_ascii=False),
+                output=json.dumps(transcript_v2, ensure_ascii=False),
                 user_id=user_id,
             )
+
+            # Keep whichever scores better
+            if judgment_v2.overall_score >= judgment_v1.overall_score:
+                transcript = transcript_v2
+                judgment = judgment_v2
+                logger.info(f"  re-roll improved: {judgment_v1.overall_score:.2f} → {judgment_v2.overall_score:.2f}")
+            else:
+                transcript = transcript_v1
+                judgment = judgment_v1
+                logger.info(f"  re-roll was worse: {judgment_v1.overall_score:.2f} → {judgment_v2.overall_score:.2f}, keeping original")
+
             regenerated = True
         logger.info(
             f"  final judge score: {judgment.overall_score:.2f} "
@@ -558,9 +660,20 @@ async def process_episode(episode_id: str) -> None:
             )
         await log_covered_topics(user_id, show_name, episode_id, outline, source_ids)
 
+        _ep_elapsed = _ep_time.time() - _ep_start
         logger.info(f"--- Done: episode {episode_id} title='{title}' ---")
+        worker_log.info(
+            f"EPISODE_SUCCESS | id={episode_id} show={show_name} "
+            f"title={title} duration={_ep_elapsed:.2f}s "
+            f"quality_score={judgment.overall_score:.2f}"
+        )
 
     except Exception as e:
+        _ep_elapsed = _ep_time.time() - _ep_start
+        worker_log.error(
+            f"EPISODE_FAIL | id={episode_id} show={show_name} "
+            f"duration={_ep_elapsed:.2f}s error={e}"
+        )
         await _set_episode_status(episode_id, "failed", error=str(e)[:1000])
         raise
 

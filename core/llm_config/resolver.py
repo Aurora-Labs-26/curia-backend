@@ -137,7 +137,12 @@ class _Resolver:
         settings = _merge_settings(model, binding)
         logger.debug(
             f"resolve.llm(task={task}, show={show}, user_id={user_id}, "
-            f"cohort={cohort}) → {model.model_id}"
+            f"cohort={cohort}) -> {model.model_id}"
+        )
+        from core.logging import llm_logger
+        llm_logger.info(
+            f"LLM_RESOLVE | task={task} model={model.model_id} "
+            f"provider={provider.type} show={show}"
         )
         return build_llm(provider=provider, model=model, settings=settings)
 
@@ -152,6 +157,11 @@ class _Resolver:
         binding = _resolve_binding(task, show=show, user_id=user_id, cohort=cohort)
         provider, model = _provider_and_model(binding)
         settings = _merge_settings(model, binding)
+        from core.logging import llm_logger
+        llm_logger.info(
+            f"EMBEDDER_RESOLVE | task={task} model={model.model_id} "
+            f"provider={provider.type}"
+        )
         return build_embedder(provider=provider, model=model, settings=settings)
 
     def tts(self, *, speaker: str) -> TTSAdapter:
@@ -163,6 +173,11 @@ class _Resolver:
                 f"Speaker binding '{speaker}' has no voice_id "
                 f"(this should have been caught by schema validation)."
             )
+        from core.logging import llm_logger
+        llm_logger.info(
+            f"TTS_RESOLVE | speaker={speaker} model={model.model_id} "
+            f"provider={provider.type} voice_id={binding.voice_id}"
+        )
         return build_tts(
             provider=provider,
             model=model,

@@ -20,7 +20,7 @@ You save articles. Curia reads them, finds thematic connections, generates an ep
 3. **Ideate** — for each cluster (and standalones), Claude generates a show idea: angle + format. KB-aware: skips ideas matching your dislikes; biases toward your active interests.
 4. **Generate** — selector picks sources for the episode (KB-derived editorial direction when none given), builds a briefing packet (with KB-derived listener context), Haiku writes an outline, Sonnet writes a transcript shaped by your tone/length/ambiguity preferences.
 5. **Judge** — an LLM-as-judge scores the transcript against a rubric rendered from `(company guidelines + your KB)`. If it scores below threshold, the transcript is regenerated once.
-6. **Synthesize** — each transcript line is rendered through one of four TTS providers (config-selectable), stitched with pydub, optionally prepended with an intro / appended with an outro / overlaid with music, exported as MP3 at a configurable bitrate.
+6. **Synthesize** — transcript lines are merged into paragraphs (same-speaker runs), split into TTS-sized segments, rendered through one of seven TTS providers (config-selectable, native async), stitched with gaps, optionally prepended with an intro / appended with an outro / overlaid with music, exported as MP3. Also supports real-time streaming via WebSocket.
 7. **Optimize** — QA can curate trainsets, edit guidelines, run GEPA against the rubric metric, and promote optimized prompt artifacts.
 
 ---
@@ -50,9 +50,10 @@ You save articles. Curia reads them, finds thematic connections, generates an ep
                                  ./data/audio/<id>.mp3
 
 External APIs (real, not local):
-  · Anthropic (LLMs) — required
-  · Voyage (embeddings) — optional (zero-vector stub if missing)
-  · ElevenLabs / Smallest.ai / Google Cloud TTS / xAI (TTS) — optional, swap via config
+  · LLMs: Anthropic, OpenAI, Gemini, Grok, vLLM, OpenRouter — required (at least one)
+  · Embeddings: Voyage, OpenAI, Cohere, Jina, Mistral, Gemini — optional (zero-vector stub if missing)
+  · TTS: ElevenLabs, OpenAI, Cartesia, Smallest.ai, edge_tts, Google Cloud — optional, swap via config
+  · Auth: Firebase (optional — falls back to legacy bearer tokens)
 ```
 
 Two run modes from one Docker image (`Dockerfile`): `uvicorn api.main:app` (api) and `python -m worker.main` (worker). Postgres runs as the third compose service.
@@ -65,7 +66,7 @@ For deeper architecture see [BACKEND_PLAN.md](BACKEND_PLAN.md). For where this i
 
 ### Pre-reqs
 - Docker Desktop (or any Docker daemon)
-- Python ≥3.13 (only if running tests on the host; not required for the service)
+- Python ≥3.10 (only if running tests on the host; not required for the service)
 
 ### Bring it up
 
@@ -135,11 +136,14 @@ Full curl walkthrough (with multi-user comparison, QA flow, admin/inspection com
 ## API surface
 
 ```
+# Auth
+GET    /auth/me                      current user (id, email, name, role, avatar_url)
+
 # User-facing
 GET    /health
 GET    /me                           current user (id, email, name, role)
 GET    /me/kb        PUT /me/kb      knowledge bank (Pydantic-validated)
-GET    /me/rubric/{task}             ★ render the judge prompt scoring my outputs
+GET    /me/rubric/{task}             render the judge prompt scoring my outputs
 
 POST   /sources                      idempotent on (user_id, url) — returns existing id if dup
 GET    /sources      GET /sources/:id      DELETE /sources/:id
@@ -147,8 +151,13 @@ GET    /sources      GET /sources/:id      DELETE /sources/:id
 POST   /ideas/generate
 GET    /ideas        GET /ideas/:id
 
-POST   /episodes                     {show_name, show_idea_id?, editorial_direction?}
+POST   /episodes                     {show_name, show_idea_id?, editorial_direction?, speaker?, length_minutes?}
 GET    /episodes     GET /episodes/:id      GET /episodes/:id/audio
+
+GET    /jobs/:id                     poll job status after async operations
+
+# Streaming
+WS     /ws/episodes/:id/stream?token=ck_...    real-time audio streaming via WebSocket
 
 # QA-only (gated by users.role='qa'; regular users get 403)
 GET    /admin/users
@@ -224,14 +233,17 @@ Set the file paths on the profile, restart `api worker`, the next episode picks 
 
 ## TTS providers
 
-Four are wired into the adapter layer. Pick one per speaker via `config/models.yaml` → `bindings.speaker.<name>.model`:
+Seven providers wired into the adapter layer, all with native async support. Pick one per speaker via `config/models.yaml` → `bindings.speaker.<name>.model`:
 
-| Provider | Status | Voice ID format | Auth |
-|---|---|---|---|
-| **elevenlabs** | ✓ working (default) | opaque IDs (e.g. `pNInz6obpgDQGcFmaJgB`) | `xi-api-key` header |
-| **smallest** | ✓ implemented | dashboard IDs from Smallest.ai | `Bearer` token |
-| **google_tts** | ✓ implemented (API-key auth) | descriptive (e.g. `en-US-Neural2-J`) | `?key=` query param |
-| **xai** | ⚠ stub (no public TTS endpoint yet) | TBD | `Bearer` token |
+| Provider | Status | Async | Streaming | Auth |
+|---|---|---|---|---|
+| **elevenlabs** | ✓ working | ✓ httpx.AsyncClient | ✓ WebSocket | `xi-api-key` header |
+| **openai_tts** | ✓ working | ✓ httpx.AsyncClient | ✓ HTTP chunked | `Bearer` token |
+| **cartesia** | ✓ working | ✓ httpx.AsyncClient | ✓ WebSocket | `X-API-Key` header |
+| **smallest** | ✓ working | ✓ httpx.AsyncClient | ✓ WebSocket/SSE | `Bearer` token |
+| **edge_tts** | ✓ working (free) | ✓ native asyncio | ✓ native stream | no key needed |
+| **google_tts** | ✓ working | ✓ httpx.AsyncClient | ✓ gRPC streaming | `?key=` query param |
+| **xai** | ⚠ stub | ✓ ready | — | `Bearer` token |
 
 When the API key for the selected provider is missing, the adapter falls through to a 1-second silent WAV per line — pipeline still completes end-to-end. To switch a speaker to a different provider:
 
@@ -266,10 +278,13 @@ curia/
 │   ├── schemas.py             pydantic request/response models
 │   └── routes/
 │       ├── health.py          /health
+│       ├── auth.py            /auth/me (Firebase + legacy token)
 │       ├── me.py              /me, /me/kb, /me/rubric/:task
-│       ├── sources.py         /sources
+│       ├── sources.py         /sources (+ covered_in count)
 │       ├── ideas.py           /ideas
-│       ├── episodes.py        /episodes (+ /audio)
+│       ├── episodes.py        /episodes (+ /audio, enriched with length/speaker)
+│       ├── jobs.py            /jobs/:id (polling)
+│       ├── stream.py          /ws/episodes/:id/stream (WebSocket)
 │       └── admin.py           /admin/* (QA only)
 │
 ├── worker/                    long-running consumer
@@ -285,17 +300,29 @@ curia/
 │   ├── kb/                    UserKB schema + load_kb / save_kb
 │   ├── llm_config/            config/models.yaml resolver + provider adapters
 │   │   └── adapters/
-│   │       ├── llm.py             dspy.LM construction (Anthropic / OpenAI / Cohere)
-│   │       ├── embedding.py       Voyage HTTP client + stub
-│   │       └── tts.py             ElevenLabs / Smallest / Google / xAI dispatch + stub
+│   │       ├── llm.py             dspy.LM construction (Anthropic/OpenAI/Gemini/Grok/vLLM/OpenRouter/Cohere)
+│   │       ├── embedding.py       Voyage/OpenAI/Cohere/Jina/Mistral/Gemini + stub
+│   │       └── tts.py             ElevenLabs/OpenAI/Cartesia/Smallest/edge_tts/Google/xAI + async
+│   ├── audio/                 audio pipeline (shared by batch + streaming)
+│   │   ├── merger.py              merge same-speaker transcript lines into paragraphs
+│   │   ├── splitter.py            split paragraphs into TTS-sized segments
+│   │   ├── ssml.py                SSML markup builder for batch TTS
+│   │   ├── stitcher.py            prepare + synthesize + stitch segments
+│   │   ├── stream.py              async generator for streaming audio
+│   │   └── stream_manager.py      WebSocket streaming orchestrator
 │   ├── prompts/               every LLM call as a DSPy Signature
 │   │   ├── transformations.py    7 ingest extractions
 │   │   ├── idea_evaluation.py    batch + single-group fallback
 │   │   ├── outline.py            episode outline
-│   │   └── transcript.py         episode transcript
+│   │   ├── transcript.py         episode transcript
+│   │   └── loader.py             file-based prompt override (prompts/*.txt)
 │   ├── ingest.py              process_source(source_id) — worker entry
 │   ├── embeddings.py          delegates to llm_config.resolve.embedder()
-│   ├── tts.py                 delegates to llm_config.resolve.tts()
+│   ├── tts.py                 sync + async + bytes facades
+│   ├── firebase.py            Firebase Admin SDK init + token verification
+│   ├── logging.py             centralized logging (terminal + JSON files)
+│   ├── prompt_watcher.py      detect prompt .txt file changes
+│   ├── llm_logger.py          LLM call logging decorator
 │   └── queue.py               Postgres job queue (SQS-shaped)
 │
 ├── intelligence/
@@ -319,9 +346,11 @@ curia/
 │   ├── runs/                  optimization_run lifecycle store
 │   └── runner/                GEPA execution against the rubric metric
 │
-├── alembic/versions/          schema migrations 0001 → 0007
+├── prompts/                   editable prompt .txt files (human + DSPy can write)
+├── logs/                      structured JSON logs (curia.log, llm.log, worker.log)
+├── alembic/versions/          schema migrations 0001 → 0010
 ├── config/models.yaml         model registry (providers, models, bindings)
-├── tests/                     pytest smoke tests (39 tests, no DB or API keys needed)
+├── tests/                     pytest tests (153 tests, no DB or API keys needed)
 ├── scripts/
 │   ├── create_user.py         provision a user (--role user|qa)
 │   ├── onboard.py             interactive KB Q&A
@@ -349,6 +378,7 @@ Plus runtime / generated:
 data/audio/<episode_id>.mp3    final MP3 outputs (bind-mounted into containers)
 .env                           your local secrets (gitignored)
 prompts/optimized/             GEPA-compiled prompt artifacts (gitignored)
+logs/                          structured logs: curia.log, llm.log, worker.log (gitignored)
 ```
 
 ---
@@ -380,7 +410,7 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-39 smoke tests — schema validation, rubric template rendering, config loading, briefing packet shape, TTS adapter dispatch, all imports clean. **They run without a DB or any API keys.** Integration tests against a live stack come later.
+153 tests — schema validation, rubric rendering, config loading, briefing shape, TTS sync+async dispatch, audio merger/splitter/stitcher, WebSocket streaming, prompt file loading, Firebase auth, API schemas. **All run without a DB or any API keys.**
 
 ---
 
@@ -435,9 +465,10 @@ docker compose exec api alembic upgrade head
 ### Things still being figured out
 
 - **`scripts/run_show.py`, `scripts/ingest_urls.py`, `scripts/run_idea_generator.py`** are kept for CLI use but the API path is canonical now. The scripts work but won't see the same code-path improvements.
-- **Promoted GEPA artifacts aren't loaded at runtime yet** — `optimize → promote` is a no-op for end users until the artifact loader lands. ~30 LOC fix.
+- **GEPA promoted artifacts** — optimizer writes results back to `prompts/{task}.txt` automatically. Manual promotion of compiled artifacts still needs ~30 LOC loader.
 - **xAI TTS** is a stub — raises with a clear error pointing at the YAML config field that needs setting once xAI publishes a TTS endpoint.
-- **Multi-speaker episodes** — the schema supports multiple speakers per show but the transcript LLM and stitcher currently use only the first one.
+- **Multi-speaker episodes** — the schema + stitcher support multiple speakers, but the transcript LLM currently generates single-speaker output.
+- **WebSocket streaming** — endpoint exists but frontend client not yet wired (expo-av plays files, not WebSocket streams).
 
 ---
 

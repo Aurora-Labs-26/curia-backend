@@ -15,6 +15,7 @@ import asyncio
 import os
 import signal
 import socket
+import time
 import traceback
 
 from dotenv import load_dotenv
@@ -41,6 +42,8 @@ def _install_signal_handlers() -> None:
 
 async def _process_one(worker_id: str) -> bool:
     """Pull one job and run its handler. Returns True if a job was processed, False if idle."""
+    from core.logging import worker_logger
+
     job = await dequeue(worker_id=worker_id)
     if job is None:
         return False
@@ -48,22 +51,44 @@ async def _process_one(worker_id: str) -> bool:
     handler = HANDLERS.get(job.type)
     if handler is None:
         logger.error(f"[worker] no handler for job.type={job.type} id={job.id}; failing.")
+        worker_logger.error(f"JOB_NO_HANDLER | type={job.type} id={job.id}")
         await fail(job.id, f"unknown job type {job.type}")
         return True
+
+    start = time.time()
+    worker_logger.info(
+        f"JOB_START | type={job.type} id={job.id} "
+        f"attempt={job.attempts}/{job.max_attempts} "
+        f"payload_keys={list(job.payload.keys()) if job.payload else []}"
+    )
 
     try:
         logger.info(f"[worker] running type={job.type} id={job.id} attempt={job.attempts}/{job.max_attempts}")
         await handler(job.payload)
         await ack(job.id)
-        logger.info(f"[worker] ✓ acked id={job.id}")
+        elapsed = time.time() - start
+        logger.info(f"[worker] acked id={job.id}")
+        worker_logger.info(f"JOB_SUCCESS | type={job.type} id={job.id} duration={elapsed:.2f}s")
     except Exception as exc:
+        elapsed = time.time() - start
         tb = traceback.format_exc()
-        logger.error(f"[worker] ✗ id={job.id} type={job.type} failed:\n{tb}")
+        logger.error(f"[worker] id={job.id} type={job.type} failed:\n{tb}")
+        worker_logger.error(
+            f"JOB_FAIL | type={job.type} id={job.id} "
+            f"duration={elapsed:.2f}s error={exc}"
+        )
         await fail(job.id, f"{exc}\n{tb}")
     return True
 
 
 async def main() -> None:
+    from core.logging import setup_logging
+    from core.prompt_watcher import check_prompt_changes, init_prompt_hashes
+    from core.prompts.loader import PROMPTS_DIR
+
+    setup_logging(service="worker")
+    init_prompt_hashes(PROMPTS_DIR)
+
     worker_id = default_worker_id()
     hostname = socket.gethostname()
     logger.info(f"[worker] starting id={worker_id} host={hostname} pid={os.getpid()}")
@@ -76,6 +101,9 @@ async def main() -> None:
             # Defensive: if dequeue itself errors (DB hiccup), back off and retry.
             logger.exception(f"[worker] dispatch loop error: {e}")
             processed = False
+
+        # Check for prompt file changes each poll cycle
+        check_prompt_changes(PROMPTS_DIR)
 
         if not processed:
             try:

@@ -37,6 +37,19 @@ def synthesize_for_speaker(text: str, speaker: str, output_path: str) -> str:
     return adapter.output_format
 
 
+async def synthesize_for_speaker_async(text: str, speaker: str, output_path: str) -> str:
+    """Native async version — uses httpx.AsyncClient, no thread pool."""
+    adapter = resolve.tts(speaker=speaker)
+    await adapter.synthesize_async(text=text, output_path=output_path)
+    return adapter.output_format
+
+
+async def synthesize_for_speaker_bytes(text: str, speaker: str) -> bytes:
+    """Native async — returns WAV bytes directly. No temp files at call site."""
+    adapter = resolve.tts(speaker=speaker)
+    return await adapter.synthesize_bytes(text=text)
+
+
 def synthesize_line(text: str, voice_id: str, output_path: str) -> None:
     """
     Legacy entrypoint. `voice_id` is an ElevenLabs voice ID string.

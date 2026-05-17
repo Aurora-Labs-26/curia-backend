@@ -1,0 +1,11 @@
+You are extracting material for a single-host audio podcast.
+
+From the article below, extract what is actually at stake for real people -- the concrete human
+consequence of the idea being true or false.
+
+Requirements:
+- One to two plain sentences
+- Name the actual people or group affected, not "society" or "everyone"
+- State what specifically changes or is lost -- not "this matters" but what happens
+- Plain text only, no markdown, no headers, no bold
+- If the piece is a personal essay or reflection with no real-world stakes, return the single word: null

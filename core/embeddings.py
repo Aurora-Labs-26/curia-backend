@@ -34,6 +34,19 @@ def _get_embedder():
     return _embedder
 
 
+def get_embedding_dimension() -> int:
+    """Return the configured embedder's dimension (e.g. 1024, 1536)."""
+    return _get_embedder().dimension
+
+
+def get_embedding_column() -> str:
+    """Return the DB column name for the active dimension: 'embedding' (1024) or 'embedding_1536'."""
+    dim = get_embedding_dimension()
+    if dim == 1536:
+        return "embedding_1536"
+    return "embedding"
+
+
 async def get_embedding(text: str) -> list[float] | None:
     """Generate an embedding for `text`. Returns list[float] (real or stub) or None on hard failure."""
     return await _get_embedder().embed(text)

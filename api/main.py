@@ -11,23 +11,49 @@ In docker-compose this is the `api` service's command.
 from __future__ import annotations
 
 import os
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from api.routes import admin, episodes, health, ideas, me, sources
+from api.routes import admin, auth, episodes, health, ideas, jobs, me, sources, stream
 from core.db.connection import close_pool, get_pool
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 
+class RequestLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        start = time.time()
+        response = await call_next(request)
+        elapsed = time.time() - start
+        logger.info(
+            f"HTTP {request.method} {request.url.path} -> {response.status_code} ({elapsed:.3f}s)"
+        )
+        return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Logging setup — must happen before anything else
+    from core.logging import setup_logging
+    from core.prompt_watcher import init_prompt_hashes
+    from core.prompts.loader import PROMPTS_DIR
+
+    setup_logging(service="api")
+    init_prompt_hashes(PROMPTS_DIR)
+
     # Startup — warm the asyncpg pool early so first request is fast and any
     # connection problem surfaces at boot, not on first request.
     await get_pool()
+
+    from core.firebase import init_firebase
+    init_firebase()
+
     logger.info("[api] startup complete")
     try:
         yield
@@ -43,10 +69,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CURIA_CORS_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.add_middleware(RequestLogMiddleware)
+
 # Routers — order is cosmetic; FastAPI resolves by path
 app.include_router(health.router, tags=["health"])
+app.include_router(auth.router, tags=["auth"])
 app.include_router(me.router, tags=["me"])
 app.include_router(sources.router, tags=["sources"])
 app.include_router(ideas.router, tags=["ideas"])
 app.include_router(episodes.router, tags=["episodes"])
+app.include_router(jobs.router, tags=["jobs"])
+app.include_router(stream.router, tags=["streaming"])
 app.include_router(admin.router)   # QA-only; gated inside via Depends(qa_required)

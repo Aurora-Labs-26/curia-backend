@@ -69,7 +69,8 @@ async def list_episodes(
     if status:
         rows = await db_query(
             """
-            SELECT id, show_name, title, status, created_at, error, quality_score
+            SELECT id, show_name, title, status, created_at, error, quality_score,
+                   length_minutes, speaker_override
             FROM episode
             WHERE user_id = $user_id AND status = $status
             ORDER BY created_at DESC LIMIT $limit
@@ -79,7 +80,8 @@ async def list_episodes(
     else:
         rows = await db_query(
             """
-            SELECT id, show_name, title, status, created_at, error, quality_score
+            SELECT id, show_name, title, status, created_at, error, quality_score,
+                   length_minutes, speaker_override
             FROM episode
             WHERE user_id = $user_id
             ORDER BY created_at DESC LIMIT $limit
@@ -97,7 +99,8 @@ async def get_episode(
         """
         SELECT id, show_name, title, status, created_at, error,
                transcript, outline, audio_path, source_ids, editorial_direction,
-               quality_score, quality_feedback, quality_violations, regenerated
+               quality_score, quality_feedback, quality_violations, regenerated,
+               length_minutes, speaker_override
         FROM episode
         WHERE id = $id::uuid AND user_id = $user_id
         """,

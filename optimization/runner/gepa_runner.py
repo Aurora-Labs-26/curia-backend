@@ -35,6 +35,7 @@ from loguru import logger
 
 from core.kb import UserKB, load_kb
 from core.llm_config import resolve
+from core.prompts.loader import save_prompt
 from core.prompts.outline import GenerateOutline
 from core.prompts.transcript import GenerateTranscript
 from optimization.examples import list_examples
@@ -247,6 +248,12 @@ async def execute_run(run_id: str) -> dict:
                 )
                 optimized_score = await _score_module(optimized, valset, metric)
                 optimized.save(str(artifact_path))
+
+            # Write the optimized prompt back to the .txt file so it takes
+            # effect on the next cold start without loading the GEPA artifact.
+            optimized_doc = getattr(optimized, "__doc__", None)
+            if optimized_doc:
+                save_prompt(task, optimized_doc)
 
         completed = datetime.now(timezone.utc)
         duration = int(time.perf_counter() - started_perf)

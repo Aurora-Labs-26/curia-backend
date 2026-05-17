@@ -47,6 +47,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+      - ./prompts:/app/prompts
+      - ./logs:/app/logs
     ports:
       - "8000:8000"
 
@@ -71,6 +73,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+      - ./prompts:/app/prompts
+      - ./logs:/app/logs
 
 volumes:
   curia-pgdata:

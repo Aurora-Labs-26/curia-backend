@@ -21,7 +21,6 @@ import os
 import uuid
 from typing import Optional
 
-from content_core import extract_content
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -43,12 +42,19 @@ ARTICLE_CHAR_CAP = 50_000
 
 async def scrape_url(url: str) -> tuple[str, str]:
     logger.info(f"Scraping: {url}")
-    result = await extract_content(url=url)
-    if not result.content or not result.content.strip():
+    import trafilatura
+    downloaded = trafilatura.fetch_url(url)
+    if not downloaded:
+        raise ValueError(f"Could not download {url}")
+    content = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+    if not content or not content.strip():
         raise ValueError(f"Could not extract content from {url}")
-    title = result.title or url
-    logger.info(f"Scraped: {title} ({len(result.content)} chars)")
-    return result.content, title
+    # Extract title from HTML
+    from trafilatura.metadata import extract_metadata
+    metadata = extract_metadata(downloaded)
+    title = (metadata.title if metadata and metadata.title else None) or url
+    logger.info(f"Scraped: {title} ({len(content)} chars)")
+    return content, title
 
 
 def run_transformation(full_text: str, transformation_name: str) -> str:
@@ -76,8 +82,9 @@ async def _set_status(source_id: str, status: str, error: Optional[str] = None) 
 
 async def embed_chunks(source_id: str, full_text: str) -> None:
     """Chunk text and embed each chunk into source_embedding (HNSW-indexed)."""
-    from .embeddings import get_embedding
+    from .embeddings import get_embedding, get_embedding_column
 
+    col = get_embedding_column()
     words = full_text.split()
     chunk_size = 200
     overlap = 20
@@ -87,13 +94,13 @@ async def embed_chunks(source_id: str, full_text: str) -> None:
         chunks.append(" ".join(words[i:i + chunk_size]))
         i += chunk_size - overlap
 
-    logger.info(f"Embedding {len(chunks)} chunks for source {source_id}")
+    logger.info(f"Embedding {len(chunks)} chunks for source {source_id} (column={col})")
     for idx, chunk in enumerate(chunks):
         vector = await get_embedding(chunk)
         if vector:
             await db_execute(
-                """
-                INSERT INTO source_embedding (source_id, chunk_text, embedding, chunk_index)
+                f"""
+                INSERT INTO source_embedding (source_id, chunk_text, {col}, chunk_index)
                 VALUES ($sid::uuid, $chunk, $vec, $idx)
                 """,
                 {"sid": source_id, "chunk": chunk, "vec": vector, "idx": idx},
@@ -109,8 +116,9 @@ async def embed_primitive(source_id: str) -> None:
     This is what idea_generator clusters on; doing it during ingest fixes the
     long-standing race where you had to run scripts/embed_primitives.py manually.
     """
-    from .embeddings import get_embedding
+    from .embeddings import get_embedding, get_embedding_column
 
+    col = get_embedding_column()
     rows = await db_query(
         """
         SELECT insight_type, content
@@ -134,14 +142,14 @@ async def embed_primitive(source_id: str) -> None:
         logger.warning(f"  primitive_embed: embedding returned None for {source_id}")
         return
     await db_execute(
-        """
-        INSERT INTO source_primitive_embedding (source_id, embedding)
+        f"""
+        INSERT INTO source_primitive_embedding (source_id, {col})
         VALUES ($sid::uuid, $vec)
-        ON CONFLICT (source_id) DO UPDATE SET embedding = EXCLUDED.embedding
+        ON CONFLICT (source_id) DO UPDATE SET {col} = EXCLUDED.{col}
         """,
         {"sid": source_id, "vec": vector},
     )
-    logger.info(f"  primitive_embed: stored for {source_id}")
+    logger.info(f"  primitive_embed: stored for {source_id} (column={col})")
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,55 @@ providers:
     api_key_env: SMALLEST_API_KEY
     base_url: https://waves-api.smallest.ai
 
-  # Additional TTS providers — uncomment + add a model alias below to use one.
+  # ── LLM providers ───────────────────────────────────────────────────────────
+  #
+  # vllm:
+  #   type: vllm
+  #   api_key_env: VLLM_API_KEY          # can be "dummy" for local
+  #   base_url: http://localhost:8001/v1
+  #
+  # xai_llm:
+  #   type: xai_llm
+  #   api_key_env: XAI_API_KEY
+  #   base_url: https://api.x.ai/v1
+  #
+  # gemini:
+  #   type: gemini
+  #   api_key_env: GEMINI_API_KEY
+  #
+  # openrouter:
+  #   type: openrouter
+  #   api_key_env: OPENROUTER_API_KEY
+  #   base_url: https://openrouter.ai/api/v1
+
+  # ── Embedding providers ────────────────────────────────────────────────────
+  #
+  # openai_embed:
+  #   type: openai
+  #   api_key_env: OPENAI_API_KEY
+  #   base_url: https://api.openai.com/v1
+  #
+  # cohere_embed:
+  #   type: cohere
+  #   api_key_env: COHERE_API_KEY
+  #   base_url: https://api.cohere.com/v2
+  #
+  # jina:
+  #   type: jina
+  #   api_key_env: JINA_API_KEY
+  #   base_url: https://api.jina.ai/v1
+  #
+  # mistral:
+  #   type: mistral
+  #   api_key_env: MISTRAL_API_KEY
+  #   base_url: https://api.mistral.ai/v1
+  #
+  # gemini_embed:
+  #   type: gemini
+  #   api_key_env: GEMINI_API_KEY
+  #   base_url: https://generativelanguage.googleapis.com/v1beta
+
+  # ── TTS providers ──────────────────────────────────────────────────────────
   #
   # google_tts:
   #   type: google_tts
@@ -57,6 +105,16 @@ providers:
   #   base_url: https://api.x.ai/v1
   #   # NOTE: xAI doesn't currently document a public TTS endpoint.
   #   # When they do, set settings.endpoint_path on the model alias below.
+  #
+  # openai_tts:
+  #   type: openai_tts
+  #   api_key_env: OPENAI_API_KEY
+  #   base_url: https://api.openai.com/v1
+  #
+  # cartesia:
+  #   type: cartesia
+  #   api_key_env: CARTESIA_API_KEY
+  #   base_url: https://api.cartesia.ai
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,6 +172,86 @@ models:
       speed: 1.0
       language: en
 
+  # ── Additional LLM model aliases ───────────────────────────────────────────
+  #
+  # vllm-llama-70b:
+  #   provider: vllm
+  #   model_id: meta-llama/Llama-3.3-70B-Instruct
+  #   kind: llm
+  #   defaults:
+  #     max_tokens: 4096
+  #     temperature: 0.7
+  #
+  # grok-3:
+  #   provider: xai_llm
+  #   model_id: grok-3
+  #   kind: llm
+  #   defaults:
+  #     max_tokens: 8192
+  #     temperature: 0.7
+  #
+  # gemini-2.5-pro:
+  #   provider: gemini
+  #   model_id: gemini-2.5-pro
+  #   kind: llm
+  #   defaults:
+  #     max_tokens: 8192
+  #     temperature: 0.7
+  #
+  # gemini-2.5-flash:
+  #   provider: gemini
+  #   model_id: gemini-2.5-flash
+  #   kind: llm
+  #   defaults:
+  #     max_tokens: 4096
+  #     temperature: 0.7
+  #
+  # openrouter-llama-70b:
+  #   provider: openrouter
+  #   model_id: meta-llama/llama-3.3-70b-instruct
+  #   kind: llm
+  #   defaults:
+  #     max_tokens: 4096
+  #     temperature: 0.7
+
+  # ── Additional embedding model aliases ─────────────────────────────────────
+  #
+  # text-embedding-3-small:
+  #   provider: openai_embed
+  #   model_id: text-embedding-3-small
+  #   kind: embedding
+  #   dimension: 1536
+  #
+  # text-embedding-3-large:
+  #   provider: openai_embed
+  #   model_id: text-embedding-3-large
+  #   kind: embedding
+  #   dimension: 3072
+  #
+  # cohere-embed-v4:
+  #   provider: cohere_embed
+  #   model_id: embed-v4.0
+  #   kind: embedding
+  #   dimension: 1024
+  #
+  # jina-embeddings-v3:
+  #   provider: jina
+  #   model_id: jina-embeddings-v3
+  #   kind: embedding
+  #   dimension: 1024
+  #
+  # mistral-embed:
+  #   provider: mistral
+  #   model_id: mistral-embed
+  #   kind: embedding
+  #   dimension: 1024
+  #
+  # gemini-text-embedding:
+  #   provider: gemini_embed
+  #   model_id: text-embedding-004
+  #   kind: embedding
+  #   dimension: 768
+
   # ── Additional TTS model aliases ───────────────────────────────────────────
   #
   # google-neural2-en:
@@ -134,6 +272,29 @@ models:
   #     # Required when xAI ships a TTS API — set this to their documented path:
   #     # endpoint_path: /audio/speech
   #     audio_format: wav
+  #     sample_rate: 22050
+  #
+  # openai-tts-1:
+  #   provider: openai_tts
+  #   model_id: tts-1
+  #   kind: tts
+  #   defaults:
+  #     response_format: wav
+  #     speed: 1.0
+  #
+  # openai-tts-1-hd:
+  #   provider: openai_tts
+  #   model_id: tts-1-hd
+  #   kind: tts
+  #   defaults:
+  #     response_format: wav
+  #     speed: 1.0
+  #
+  # cartesia-sonic:
+  #   provider: cartesia
+  #   model_id: sonic-2
+  #   kind: tts
+  #   defaults:
   #     sample_rate: 22050
 
 
@@ -202,6 +363,23 @@ bindings:
     emeka:
       model: smallest-lightning
       voice_id: james
+
+  # ── Example: switching providers ──────────────────────────────────────────
+  # Uncomment provider + model alias above, then override bindings here.
+  #
+  # task:
+  #   transcript: grok-3                  # xAI Grok for transcripts
+  #   outline: gemini-2.5-flash           # Gemini Flash for outlines
+  #   embedding: text-embedding-3-small   # OpenAI embeddings
+  #   embedding: jina-embeddings-v3       # or Jina embeddings
+  #
+  # speaker:
+  #   kenji:
+  #     model: openai-tts-1-hd
+  #     voice_id: onyx
+  #   arjun:
+  #     model: cartesia-sonic
+  #     voice_id: <cartesia-voice-uuid>
 
   # Reserved for later (cohort + user scopes — empty for v1)
   cohort: {}

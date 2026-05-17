@@ -113,16 +113,18 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
         return {**state, "clusters": clusters}
 
     # Fetch primitive embeddings (core_tensions + counterpoints) per source
+    from core.embeddings import get_embedding_column
+    emb_col = get_embedding_column()
     source_embeddings: dict[str, list[float]] = {}
     for source in sources:
         sid = str(source["id"])
         bare_sid = sid.replace("source:", "")  # no-op now, harmless for old refs
         result = await db_query(
-            "SELECT embedding FROM source_primitive_embedding WHERE source_id = $sid::uuid",
+            f"SELECT {emb_col} FROM source_primitive_embedding WHERE source_id = $sid::uuid",
             {"sid": bare_sid},
         )
-        if result and result[0].get("embedding") is not None:
-            emb = result[0]["embedding"]
+        if result and result[0].get(emb_col) is not None:
+            emb = result[0][emb_col]
             # pgvector returns numpy.ndarray when registered; coerce to plain list
             source_embeddings[sid] = list(emb) if hasattr(emb, "__iter__") else emb
 

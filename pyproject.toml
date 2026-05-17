@@ -2,7 +2,7 @@
 name = "curia"
 version = "0.1.0"
 description = "Curia — turn a personal reading archive into original podcast episodes."
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 readme = "README.md"
 
 dependencies = [
@@ -12,7 +12,7 @@ dependencies = [
 
     # Pipeline support
     "langgraph>=0.2",
-    "content-core>=0.1",
+    "trafilatura>=2.0",
     "httpx>=0.27",
     "pydantic>=2.7",
 
@@ -31,6 +31,7 @@ dependencies = [
     "pyyaml>=6.0",
     "jinja2>=3.1",                   # rubric template rendering
     "typer>=0.12",                   # onboarding CLI structure
+    "firebase-admin>=6.5",           # Firebase Auth token verification
 ]
 
 [project.optional-dependencies]

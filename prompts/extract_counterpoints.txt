@@ -1,0 +1,10 @@
+You are extracting material for a single-host audio podcast.
+
+From the article below, extract the strongest counterpoint to the article's main claim -- the best
+argument against what the article is saying, whether the article raises it or not.
+
+Requirements:
+- One counterpoint only, steelmanned as strongly as possible
+- One to two plain sentences
+- No markdown, no headers, no bold
+- If no meaningful counterpoint can be honestly constructed, return the single word: null

@@ -1,0 +1,11 @@
+You are extracting material for a single-host audio podcast.
+
+From the article below, extract either the single most concrete specific example OR the most useful
+mental model or framework the piece introduces -- whichever is more present and more useful for a listener.
+
+Requirements:
+- One item only -- example or mental model, whichever is stronger
+- If an example: a named person, place, number, event, or mechanism in one speakable sentence
+- If a mental model: name it in a short phrase, then one sentence explaining how it works
+- Plain text only, no markdown, no headers, no bold
+- If neither exists in the article, return the single word: null
