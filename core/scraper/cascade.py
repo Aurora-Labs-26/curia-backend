@@ -1,31 +1,83 @@
 """
 core/scraper/cascade.py
-Cascading scraper: validate → trafilatura (free) → firecrawl (credits) → fail.
+Cascading scraper: validate → HEAD check → trafilatura (free) → firecrawl (credits) → fail.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
 
-from .validator import validate_url
+from .validator import validate_url, is_likely_paywalled, is_twitter_url
 
 MIN_CONTENT_LENGTH = 200
+
+
+# ── HEAD check ────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class HeadCheckResult:
+    ok: bool
+    status_code: int = 0
+    reason: str = ""
+
+
+async def head_check(url: str) -> HeadCheckResult:
+    """Quick HEAD request to catch 404/403/5xx before wasting scrape credits."""
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.head(url)
+
+        if resp.status_code == 404:
+            return HeadCheckResult(ok=False, status_code=404, reason="Page not found (404) — this URL doesn't exist")
+        if resp.status_code == 403:
+            return HeadCheckResult(ok=False, status_code=403, reason="Access forbidden (403) — this page blocks automated access")
+        if resp.status_code >= 500:
+            return HeadCheckResult(ok=False, status_code=resp.status_code, reason=f"Server error ({resp.status_code}) — the site is down or broken")
+
+        return HeadCheckResult(ok=True, status_code=resp.status_code)
+
+    except httpx.TimeoutException:
+        # Don't block on slow sites — let the scraper try
+        return HeadCheckResult(ok=True, status_code=0, reason="HEAD timeout — proceeding to scrape")
+    except Exception as e:
+        # Network errors, DNS failures, etc. — let scraper try
+        return HeadCheckResult(ok=True, status_code=0, reason=f"HEAD check failed: {e}")
+
+
+# ── Main cascade ──────────────────────────────────────────────────────────────
 
 
 async def scrape(url: str) -> tuple[str, str]:
     """
     Scrape a URL using cascading fallbacks. Returns (content, title).
-    Raises ValueError with a clear reason on failure.
+    Raises ValueError with a clear, user-facing reason on failure.
     """
-    # Step 0: Validate
+    # Step 0: Regex validation
     result = validate_url(url)
     if not result.valid:
         raise ValueError(result.reason)
 
-    # Step 1: Trafilatura (free, fast, no JS)
+    # Step 1: HEAD check (catch 404/403/5xx early)
+    head = await head_check(url)
+    if not head.ok:
+        raise ValueError(head.reason)
+
+    hostname = (urlparse(url).hostname or "").lower()
+    is_paywall_domain = is_likely_paywalled(hostname)
+    is_twitter = is_twitter_url(url)
+
+    if is_twitter:
+        logger.info(f"[scraper] Twitter/X URL detected — going straight to firecrawl")
+        # Twitter needs JS rendering, skip trafilatura
+        return await _try_firecrawl_or_fail(url, is_paywall_domain)
+
+    # Step 2: Trafilatura (free, fast, no JS)
     try:
         content, title = await _scrape_trafilatura(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
@@ -35,7 +87,12 @@ async def scrape(url: str) -> tuple[str, str]:
     except Exception as e:
         logger.info(f"[scraper] trafilatura failed ({e}), trying firecrawl...")
 
-    # Step 2: Firecrawl (uses credits)
+    # Step 3: Firecrawl (uses credits)
+    return await _try_firecrawl_or_fail(url, is_paywall_domain)
+
+
+async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str]:
+    """Try firecrawl, then fail with a specific error message."""
     try:
         content, title = await _scrape_firecrawl(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
@@ -45,8 +102,23 @@ async def scrape(url: str) -> tuple[str, str]:
     except Exception as e:
         logger.warning(f"[scraper] firecrawl failed: {e}")
 
-    # Step 3: Give up
+    # Build a specific error message
+    if is_paywall_domain:
+        raise ValueError(
+            f"Could not extract content — this article is likely behind a paywall. "
+            f"Try a non-paywalled source or check if the article has a free version."
+        )
+
+    if is_twitter_url(url):
+        raise ValueError(
+            f"Could not extract this Twitter/X thread. "
+            f"The thread may be deleted, private, or too short to extract."
+        )
+
     raise ValueError(f"Could not extract content from {url} — tried trafilatura and firecrawl")
+
+
+# ── Scrapers ──────────────────────────────────────────────────────────────────
 
 
 async def _scrape_trafilatura(url: str) -> tuple[str, str]:

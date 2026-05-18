@@ -126,3 +126,37 @@ def validate_url(url: str) -> ValidationResult:
         return ValidationResult(False, "Messaging app link — not an article")
 
     return ValidationResult(True)
+
+
+# ── Paywall detection ─────────────────────────────────────────────────────────
+
+_PAYWALL_DOMAINS = {
+    "wsj.com", "ft.com", "economist.com", "nytimes.com",
+    "washingtonpost.com", "bloomberg.com", "theathletic.com",
+    "thetimes.co.uk", "telegraph.co.uk", "hbr.org",
+    "barrons.com", "businessinsider.com", "seekingalpha.com",
+    "foreignaffairs.com", "newyorker.com", "wired.com",
+    "theatlantic.com", "thedailybeast.com",
+}
+
+
+def is_likely_paywalled(hostname: str) -> bool:
+    """Check if a domain is known to have a paywall."""
+    hostname = hostname.lower()
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return hostname in _PAYWALL_DOMAINS
+
+
+# ── Twitter detection ─────────────────────────────────────────────────────────
+
+_TWITTER = re.compile(r"(twitter\.com|x\.com)", re.IGNORECASE)
+
+
+def is_twitter_url(url: str) -> bool:
+    """Check if URL is a Twitter/X link."""
+    try:
+        hostname = urlparse(url).hostname or ""
+        return bool(_TWITTER.search(hostname))
+    except Exception:
+        return False

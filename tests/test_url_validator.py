@@ -163,6 +163,104 @@ class TestURLValidator:
         assert not result.valid
 
 
+class TestHeadCheck:
+
+    @pytest.mark.asyncio
+    async def test_detects_404(self):
+        from core.scraper.cascade import head_check
+        from unittest.mock import AsyncMock, patch
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 404
+
+        with patch("httpx.AsyncClient.head", return_value=mock_resp):
+            result = await head_check("https://example.com/missing")
+            assert not result.ok
+            assert "404" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_detects_403(self):
+        from core.scraper.cascade import head_check
+        from unittest.mock import AsyncMock, patch
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 403
+
+        with patch("httpx.AsyncClient.head", return_value=mock_resp):
+            result = await head_check("https://example.com/blocked")
+            assert not result.ok
+            assert "403" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_detects_5xx(self):
+        from core.scraper.cascade import head_check
+        from unittest.mock import AsyncMock, patch
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 500
+
+        with patch("httpx.AsyncClient.head", return_value=mock_resp):
+            result = await head_check("https://example.com/broken")
+            assert not result.ok
+            assert "500" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_passes_200(self):
+        from core.scraper.cascade import head_check
+        from unittest.mock import AsyncMock, patch
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/html"}
+
+        with patch("httpx.AsyncClient.head", return_value=mock_resp):
+            result = await head_check("https://example.com/article")
+            assert result.ok
+
+    @pytest.mark.asyncio
+    async def test_passes_on_timeout(self):
+        """HEAD timeout should not block — pass through to scraper."""
+        from core.scraper.cascade import head_check
+        from unittest.mock import patch
+        import httpx
+
+        with patch("httpx.AsyncClient.head", side_effect=httpx.TimeoutException("timeout")):
+            result = await head_check("https://example.com/slow")
+            assert result.ok  # don't block on timeout, let scraper try
+
+
+class TestPaywallDetection:
+
+    def test_known_paywall_domains(self):
+        from core.scraper.validator import is_likely_paywalled
+        for domain in [
+            "www.wsj.com", "www.ft.com", "www.economist.com",
+            "www.nytimes.com", "www.washingtonpost.com",
+            "www.bloomberg.com", "theathletic.com",
+        ]:
+            assert is_likely_paywalled(domain), f"Should flag as paywalled: {domain}"
+
+    def test_non_paywalled_domains(self):
+        from core.scraper.validator import is_likely_paywalled
+        for domain in [
+            "paulgraham.com", "blog.samaltman.com", "aeon.co",
+            "en.wikipedia.org", "arxiv.org",
+        ]:
+            assert not is_likely_paywalled(domain), f"Should not flag: {domain}"
+
+
+class TestTwitterDetection:
+
+    def test_twitter_url_detected(self):
+        from core.scraper.validator import is_twitter_url
+        assert is_twitter_url("https://twitter.com/sama/status/123")
+        assert is_twitter_url("https://x.com/elonmusk/status/456")
+
+    def test_non_twitter_not_detected(self):
+        from core.scraper.validator import is_twitter_url
+        assert not is_twitter_url("https://paulgraham.com/greatwork.html")
+
+
 class TestCascadingScraper:
 
     def test_scraper_exists(self):
@@ -194,12 +292,13 @@ class TestCascadingScraper:
             fire_called = True
             return ("Fallback", "Title")
 
-        with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
-            with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                content, title = await scrape("https://example.com/article")
+        with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
+            with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
+                with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
+                    content, title = await scrape("https://example.com/article")
 
         assert traf_called
-        assert not fire_called  # shouldn't need firecrawl
+        assert not fire_called
 
     @pytest.mark.asyncio
     async def test_falls_back_to_firecrawl(self):
@@ -208,14 +307,15 @@ class TestCascadingScraper:
         from unittest.mock import AsyncMock, patch
 
         async def mock_traf(url):
-            return ("", "")  # empty — trafilatura failed
+            return ("", "")
 
         async def mock_fire(url):
             return ("Firecrawl got the content " * 50, "FC Title")
 
-        with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
-            with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                content, title = await scrape("https://example.com/js-heavy-page")
+        with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
+            with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
+                with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
+                    content, title = await scrape("https://example.com/js-heavy-page")
 
         assert "Firecrawl" in content
         assert title == "FC Title"
@@ -232,10 +332,11 @@ class TestCascadingScraper:
         async def mock_fire(url):
             return ("", "")
 
-        with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
-            with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                with pytest.raises(ValueError, match="Could not extract"):
-                    await scrape("https://example.com/empty-page")
+        with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
+            with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
+                with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
+                    with pytest.raises(ValueError, match="Could not extract"):
+                        await scrape("https://example.com/empty-page")
 
     @pytest.mark.asyncio
     async def test_firecrawl_exception_handled(self):
@@ -249,7 +350,45 @@ class TestCascadingScraper:
         async def mock_fire(url):
             raise RuntimeError("Firecrawl API error")
 
+        with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
+            with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
+                with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
+                    with pytest.raises(ValueError, match="Could not extract"):
+                        await scrape("https://example.com/broken")
+
+    @pytest.mark.asyncio
+    async def test_404_caught_early(self):
+        """HEAD check should catch 404 before wasting scrape calls."""
+        from core.scraper.cascade import scrape
+        from unittest.mock import AsyncMock, patch
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 404
+
+        with patch("httpx.AsyncClient.head", return_value=mock_resp):
+            with pytest.raises(ValueError, match="404"):
+                await scrape("https://example.com/gone")
+
+    @pytest.mark.asyncio
+    async def test_paywall_warning_in_error(self):
+        """If a known paywall domain returns thin content, mention paywall."""
+        from core.scraper.cascade import scrape
+        from unittest.mock import AsyncMock, patch
+
+        async def mock_traf(url):
+            return ("Subscribe to read", "")
+
+        async def mock_fire(url):
+            return ("Subscribe to continue reading", "")
+
         with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
             with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                with pytest.raises(ValueError, match="Could not extract"):
-                    await scrape("https://example.com/broken")
+                with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
+                    with pytest.raises(ValueError, match="(?i)paywall"):
+                        await scrape("https://www.wsj.com/articles/some-article")
+
+
+def _ok_head():
+    """Helper: mock HeadCheckResult that passes."""
+    from core.scraper.cascade import HeadCheckResult
+    return HeadCheckResult(ok=True)
