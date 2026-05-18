@@ -37,6 +37,17 @@ def synthesize_for_speaker(text: str, speaker: str, output_path: str) -> str:
     return adapter.output_format
 
 
+def synthesize_for_speaker_with_timings(
+    text: str, speaker: str, output_path: str
+) -> tuple[str, list[dict]]:
+    """Like synthesize_for_speaker but also returns word-level timing data.
+    Returns (output_format, word_timings) where word_timings may be [] for
+    providers that don't support it."""
+    adapter = resolve.tts(speaker=speaker)
+    timings = adapter.synthesize_with_timings(text=text, output_path=output_path)
+    return adapter.output_format, timings
+
+
 async def synthesize_for_speaker_async(text: str, speaker: str, output_path: str) -> str:
     """Native async version — uses httpx.AsyncClient, no thread pool."""
     adapter = resolve.tts(speaker=speaker)

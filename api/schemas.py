@@ -98,6 +98,9 @@ class EpisodeSummary(BaseModel):
     speaker_override: Optional[str] = None
     source_ids: list[UUID] = Field(default_factory=list)
     source_objects: list["EpisodeSourceObject"] = Field(default_factory=list)
+    outline: Optional[Any] = None
+    play_progress: Optional[float] = None
+    listened: bool = False
 
 
 class EpisodeSourceObject(BaseModel):
@@ -116,6 +119,7 @@ class EpisodeDetail(EpisodeSummary):
     quality_feedback: Optional[str] = None
     quality_violations: list[str] = Field(default_factory=list)
     regenerated: bool = False
+    tts_timings: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------

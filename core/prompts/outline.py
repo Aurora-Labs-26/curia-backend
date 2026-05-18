@@ -49,6 +49,7 @@ Output schema — use exactly these keys, no others:
   "segments": [
     {
       "segment": 1,
+      "title": "short listener-facing chapter title",
       "purpose": "what this segment does in the arc",
       "primitives_used": ["key_insights from Article A", "examples from Article B"],
       "transition": "one phrase — how this leads to the next segment"

@@ -355,6 +355,66 @@ class TTSAdapter:
         with open(output_path, "wb") as f:
             f.write(resp.content)
 
+    async def _async_smallest_with_timings(
+        self, text: str, output_path: str, api_key: str
+    ) -> list[dict]:
+        """
+        Calls Smallest.ai Lightning with timestamps=True. Returns a list of word-level
+        timing dicts: [{"word": str, "start": float, "end": float}, ...] where
+        start/end are in seconds from the beginning of this clip.
+
+        Falls back to empty list if the API doesn't return timestamps (e.g. older endpoint).
+        """
+        import json as _json
+
+        base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
+        endpoint = self.settings.get("endpoint_path", "/api/v1/lightning/get_speech")
+        url = f"{base_url}{endpoint}"
+        body = {
+            "voice_id": self.voice_id,
+            "text": text,
+            "language": self.settings.get("language", "en"),
+            "sample_rate": int(self.settings.get("sample_rate", 22050)),
+            "speed": self.settings.get("speed", 1.0),
+            "add_wav_header": True,
+            "timestamps": True,
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+
+        content_type = resp.headers.get("content-type", "")
+        if "application/json" in content_type:
+            # API returned JSON with audio + timestamps
+            payload = resp.json()
+            # Audio may be base64-encoded in the JSON
+            audio_b64 = payload.get("audio") or payload.get("audio_data")
+            if audio_b64:
+                audio_bytes = base64.b64decode(audio_b64)
+            else:
+                # Some versions embed raw WAV bytes at a key
+                audio_bytes = None
+
+            if audio_bytes:
+                with open(output_path, "wb") as f:
+                    f.write(audio_bytes)
+            else:
+                # Fallback: no audio in JSON — re-request without timestamps
+                await self._async_smallest(text, output_path, api_key)
+
+            word_timings = payload.get("timestamps") or payload.get("words") or []
+            return word_timings
+        else:
+            # API returned raw WAV bytes (timestamps not supported or flag ignored)
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+            return []
+
     async def _async_google(self, text: str, output_path: str, api_key: str) -> None:
         base_url = (self.provider.base_url or "https://texttospeech.googleapis.com/v1").rstrip("/")
         url = f"{base_url}/text:synthesize"
@@ -622,6 +682,113 @@ class TTSAdapter:
             raise
         except Exception as e:
             raise RuntimeError(f"Smallest.ai request failed: {e}") from e
+
+    def _synthesize_smallest_with_timings(
+        self, text: str, output_path: str, api_key: str
+    ) -> list[dict]:
+        """
+        Sync variant: synthesize via Smallest.ai Lightning with timestamps=True.
+        Returns word-level timings list (may be empty if API doesn't support timestamps).
+        """
+        import json as _json
+
+        base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
+        endpoint = self.settings.get("endpoint_path", "/api/v1/lightning/get_speech")
+        url = f"{base_url}{endpoint}"
+
+        body = {
+            "voice_id": self.voice_id,
+            "text": text,
+            "language": self.settings.get("language", "en"),
+            "sample_rate": int(self.settings.get("sample_rate", 22050)),
+            "speed": self.settings.get("speed", 1.0),
+            "add_wav_header": True,
+            "timestamps": True,
+        }
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type:
+                payload = resp.json()
+                audio_b64 = payload.get("audio") or payload.get("audio_data")
+                if audio_b64:
+                    audio_bytes = base64.b64decode(audio_b64)
+                    with open(output_path, "wb") as f:
+                        f.write(audio_bytes)
+                else:
+                    # No audio in JSON — fallback to plain synthesis
+                    self._synthesize_smallest(text, output_path, api_key)
+                return payload.get("timestamps") or payload.get("words") or []
+            else:
+                # Raw WAV — timestamps not returned by this endpoint version
+                with open(output_path, "wb") as f:
+                    f.write(resp.content)
+                return []
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Smallest.ai request failed: {e}") from e
+
+    def synthesize_with_timings(self, text: str, output_path: str) -> list[dict]:
+        """
+        Public method: synthesize and return word-level timing data.
+        Only Smallest.ai supports this natively; other providers return [].
+        """
+        if self.provider.type == "edge_tts":
+            self._synthesize_edge_tts(text, output_path)
+            return []
+
+        api_key = os.getenv(self.provider.api_key_env, "")
+        if not api_key:
+            _write_silent_wav(output_path, duration_seconds=1.0)
+            return []
+
+        if not text or not text.strip():
+            _write_silent_wav(output_path, duration_seconds=0.3)
+            return []
+
+        if self.provider.type == "smallest":
+            return self._synthesize_smallest_with_timings(text, output_path, api_key)
+
+        # All other providers: synthesize normally, return no timing data
+        self.synthesize(text, output_path)
+        return []
+
+    async def synthesize_async_with_timings(self, text: str, output_path: str) -> list[dict]:
+        """
+        Async public method: synthesize and return word-level timing data.
+        Only Smallest.ai supports this natively; other providers return [].
+        """
+        if self.provider.type == "edge_tts":
+            await self._async_edge_tts(text, output_path)
+            return []
+
+        api_key = os.getenv(self.provider.api_key_env, "")
+        if not api_key:
+            _write_silent_wav(output_path, duration_seconds=1.0)
+            return []
+
+        if not text or not text.strip():
+            _write_silent_wav(output_path, duration_seconds=0.3)
+            return []
+
+        if self.provider.type == "smallest":
+            return await self._async_smallest_with_timings(text, output_path, api_key)
+
+        await self.synthesize_async(text, output_path)
+        return []
 
     def _synthesize_google(self, text: str, output_path: str, api_key: str) -> None:
         """

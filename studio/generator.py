@@ -28,7 +28,7 @@ sys.path.insert(0, str(CURIA_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv(dotenv_path=CURIA_ROOT / ".env")
 
-from shows.profiles import SHOW_PROFILES
+from shows.profiles import SHOW_PROFILES, SPEAKER_PROFILES
 from briefing_builder import build_briefing_packet, briefing_packet_to_str
 from intelligence.selector import select_episode_sources, get_source_insights
 from core.db.connection import db_execute, db_fetchrow, db_query
@@ -37,6 +37,7 @@ from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
 from core.prompts.transcript import generate_transcript as _transcript_module
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
+from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
 from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
 from optimization.rubrics.judge import judge as _rubric_judge
 
@@ -79,14 +80,14 @@ def generate_outline(briefing: str, show_name: str) -> dict:
     try:
         outline = json.loads(raw)
         # Strip unknown keys from segments to avoid downstream issues
-        allowed_segment_keys = {"segment", "purpose", "primitives_used", "transition"}
+        allowed_segment_keys = {"segment", "title", "purpose", "primitives_used", "transition"}
         for seg in outline.get("segments", []):
             for k in list(seg.keys()):
                 if k not in allowed_segment_keys:
                     del seg[k]
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Outline JSON parse failed ({e}), raw response:\n{raw[:300]}")
-        outline = {"title": show_name, "thread": "Follow the material.", "segments": [{"segment": i+1, "purpose": f"Segment {i+1}", "primitives_used": [], "transition": ""} for i in range(8)]}
+        outline = {"title": show_name, "thread": "Follow the material.", "segments": [{"segment": i+1, "title": f"Segment {i+1}", "purpose": f"Segment {i+1}", "primitives_used": [], "transition": ""} for i in range(8)]}
     logger.info(f"Outline: '{outline.get('title', 'untitled')}' — {len(outline.get('segments', []))} segments")
     return outline
 
@@ -125,8 +126,6 @@ def generate_transcript(
     user_kb: UserKB | None = None,
     speaker_override: str | None = None,
 ) -> list[dict]:
-    from studio.shows.profiles import SPEAKER_PROFILES
-
     profile = SHOW_PROFILES[show_name]
     import time as _time
     llm_log = logger.bind(log_type="llm")
@@ -202,6 +201,16 @@ def synthesize_line_by_speaker(text: str, speaker: str, output_path: str) -> str
     return _tts_synthesize_for_speaker(text=text, speaker=speaker, output_path=output_path)
 
 
+def synthesize_line_by_speaker_with_timings(
+    text: str, speaker: str, output_path: str
+) -> tuple[str, list[dict]]:
+    """
+    Synthesize one line and return (output_format, word_timings).
+    word_timings may be [] for providers that don't support timestamps.
+    """
+    return _tts_synthesize_with_timings(text=text, speaker=speaker, output_path=output_path)
+
+
 def _load_optional_segment(path: str | None, label: str) -> "AudioSegment | None":
     """Load a sound file from disk if the path is set + the file exists. Logs and skips otherwise."""
     if not path:
@@ -234,7 +243,14 @@ def synthesize_and_stitch(
     show_name: str,
     output_path: str,
     speaker_override: str | None = None,
-) -> str:
+) -> tuple[str, list[dict]]:
+    """
+    Synthesize + stitch all transcript lines into an MP3.
+    Returns (output_path, tts_timings) where tts_timings is a list of:
+      { line_index, start_ms, end_ms, speaker, text }
+    representing the absolute playback position of each transcript line.
+    The start_ms accounts for any prepended intro audio.
+    """
     profile = SHOW_PROFILES[show_name]
     if speaker_override and speaker_override in SPEAKER_PROFILES:
         allowed_speakers = {speaker_override.lower()}
@@ -249,6 +265,7 @@ def synthesize_and_stitch(
         f"(bitrate={bitrate}, gap={gap_ms}ms)..."
     )
     clips = []
+    word_timings_per_line: list[list[dict]] = []
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for i, line in enumerate(transcript):
@@ -259,7 +276,10 @@ def synthesize_and_stitch(
                 raw_speaker = next(iter(allowed_speakers))
             clip_path = os.path.join(tmpdir, f"line_{i:04d}.wav")
             logger.info(f"  [{i+1}/{len(transcript)}] {raw_speaker}: {line['text'][:60]}...")
-            fmt = synthesize_line_by_speaker(line["text"], raw_speaker, clip_path)
+            fmt, word_timings = synthesize_line_by_speaker_with_timings(
+                line["text"], raw_speaker, clip_path
+            )
+            word_timings_per_line.append(word_timings)
             if fmt == "mp3":
                 clips.append(AudioSegment.from_mp3(clip_path))
             else:
@@ -276,8 +296,10 @@ def synthesize_and_stitch(
         outro = _load_optional_segment(profile.outro_audio_path, "outro")
         music = _load_optional_segment(profile.music_audio_path, "music")
 
+        intro_offset_ms = 0
         if intro is not None:
             logger.info(f"  prepending intro ({len(intro)/1000:.1f}s)")
+            intro_offset_ms = len(intro)
             body = intro + body
         if outro is not None:
             logger.info(f"  appending outro ({len(outro)/1000:.1f}s)")
@@ -291,8 +313,25 @@ def synthesize_and_stitch(
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s)")
-    return output_path
+    # Build absolute tts_timings from clip durations + gap
+    tts_timings: list[dict] = []
+    cursor_ms = intro_offset_ms
+    for i, (clip, line) in enumerate(zip(clips, transcript)):
+        clip_ms = len(clip)
+        raw_speaker = (line.get("speaker") or "").strip().lower()
+        if raw_speaker not in allowed_speakers:
+            raw_speaker = next(iter(allowed_speakers))
+        tts_timings.append({
+            "line_index": i,
+            "start_ms": cursor_ms,
+            "end_ms": cursor_ms + clip_ms,
+            "speaker": raw_speaker,
+            "text": line.get("text", ""),
+        })
+        cursor_ms += clip_ms + gap_ms
+
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), {len(tts_timings)} timing entries")
+    return output_path, tts_timings
 
 
 def synthesize_and_stitch_v2(
@@ -370,13 +409,17 @@ def synthesize_and_stitch_v2(
 # ---------------------------------------------------------------------------
 
 def _coerce_source_uuids(source_ids: list) -> list:
-    """Strip 'source:' prefixes (legacy) and return UUID-coerced list."""
+    """Strip 'source:' prefixes (legacy), deduplicate (preserve order), return UUID list."""
     from uuid import UUID
+    seen: set[str] = set()
     out = []
     for sid in source_ids or []:
         s = str(sid).replace("source:", "")
         try:
-            out.append(UUID(s))
+            u = UUID(s)
+            if s not in seen:
+                seen.add(s)
+                out.append(u)
         except (ValueError, TypeError):
             logger.warning(f"Skipping non-UUID source_id: {sid!r}")
     return out
@@ -634,9 +677,20 @@ async def process_episode(episode_id: str) -> None:
         # 5. Synthesize + stitch
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        synthesize_and_stitch(transcript, show_name, audio_path, speaker_override=speaker_override)
+        _, tts_timings = synthesize_and_stitch(
+            transcript, show_name, audio_path, speaker_override=speaker_override
+        )
 
         # 6. Persist results onto the existing row
+        # Derive actual duration from the stitched MP3
+        actual_length_minutes: int | None = None
+        try:
+            from pydub import AudioSegment as _AS
+            _audio = _AS.from_mp3(audio_path)
+            actual_length_minutes = max(1, round(_audio.duration_seconds / 60))
+        except Exception:
+            pass
+
         source_uuids = _coerce_source_uuids(source_ids)
         await db_execute(
             """
@@ -650,6 +704,8 @@ async def process_episode(episode_id: str) -> None:
                 quality_feedback = $feedback,
                 quality_violations = $violations,
                 regenerated = $regenerated,
+                tts_timings = $tts_timings::jsonb,
+                length_minutes = $length_minutes,
                 status = 'ready',
                 error = NULL
             WHERE id = $id::uuid
@@ -665,6 +721,8 @@ async def process_episode(episode_id: str) -> None:
                 "feedback": judgment.feedback,
                 "violations": judgment.floor_violations,
                 "regenerated": regenerated,
+                "tts_timings": json.dumps(tts_timings),
+                "length_minutes": actual_length_minutes,
             },
         )
 

@@ -71,7 +71,8 @@ async def list_episodes(
         rows = await db_query(
             """
             SELECT id, show_name, title, status, created_at, error, quality_score,
-                   length_minutes, speaker_override, source_ids
+                   length_minutes, speaker_override, source_ids, outline,
+                   play_progress, listened
             FROM episode
             WHERE user_id = $user_id AND status = $status
             ORDER BY created_at DESC LIMIT $limit
@@ -82,7 +83,8 @@ async def list_episodes(
         rows = await db_query(
             """
             SELECT id, show_name, title, status, created_at, error, quality_score,
-                   length_minutes, speaker_override, source_ids
+                   length_minutes, speaker_override, source_ids, outline,
+                   play_progress, listened
             FROM episode
             WHERE user_id = $user_id
             ORDER BY created_at DESC LIMIT $limit
@@ -126,11 +128,14 @@ async def list_episodes(
     result = []
     for r in rows:
         data = dict(r)
-        data["source_objects"] = [
-            source_map[str(sid)]
-            for sid in (data.get("source_ids") or [])
-            if str(sid) in source_map
-        ]
+        seen_ids: set[str] = set()
+        deduped: list[EpisodeSourceObject] = []
+        for sid in (data.get("source_ids") or []):
+            key = str(sid)
+            if key in source_map and key not in seen_ids:
+                seen_ids.add(key)
+                deduped.append(source_map[key])
+        data["source_objects"] = deduped
         result.append(EpisodeSummary(**data))
     return result
 
@@ -144,7 +149,7 @@ async def get_episode(
         SELECT id, show_name, title, status, created_at, error,
                transcript, outline, audio_path, source_ids, editorial_direction,
                quality_score, quality_feedback, quality_violations, regenerated,
-               length_minutes, speaker_override
+               length_minutes, speaker_override, tts_timings
         FROM episode
         WHERE id = $id::uuid AND user_id = $user_id
         """,
@@ -183,6 +188,30 @@ async def get_episode(
                 ))
     data["source_objects"] = source_objects
     return EpisodeDetail(**data)
+
+
+@router.put("/episodes/{episode_id}/progress", status_code=204)
+async def update_episode_progress(
+    episode_id: uuid.UUID,
+    body: dict,
+    user_id: str = Depends(current_user_id),
+) -> None:
+    play_progress = float(body.get("play_progress") or 0)
+    listened = bool(body.get("listened", False))
+    await db_execute(
+        """
+        UPDATE episode
+        SET play_progress = $play_progress,
+            listened = $listened
+        WHERE id = $id::uuid AND user_id = $user_id
+        """,
+        {
+            "id": str(episode_id),
+            "user_id": user_id,
+            "play_progress": max(0.0, min(1.0, play_progress)),
+            "listened": listened,
+        },
+    )
 
 
 @router.get("/episodes/{episode_id}/audio")
