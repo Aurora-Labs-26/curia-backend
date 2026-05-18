@@ -431,7 +431,27 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
     ideas = state["filtered_ideas"]
     user_id = state["user_id"]
 
-    logger.info(f"[save_ideas] Saving {len(ideas)} ideas")
+    # Validate angles before saving
+    from core.angle.validator import validate_angle
+    sources = state.get("sources", [])
+    source_summaries = []
+    for src in sources:
+        insights = src.get("insights", {})
+        summary = insights.get("summary", "")
+        if summary:
+            source_summaries.append(summary)
+
+    validated_ideas = []
+    for idea in ideas:
+        angle = idea.get("angle", "")
+        result = await validate_angle(angle, source_summaries=source_summaries or None)
+        if result.valid:
+            validated_ideas.append(idea)
+        else:
+            logger.info(f"[save_ideas] DROP (angle invalid): {angle[:80]} — {result.reason}")
+
+    ideas = validated_ideas
+    logger.info(f"[save_ideas] Saving {len(ideas)} ideas (after angle validation)")
 
     for idea in ideas:
         # Coerce source_ids to UUIDs (uuid[] column)

@@ -67,6 +67,13 @@ async def create_episode(
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
+    # Validate editorial_direction (angle) if provided
+    if req.editorial_direction and req.editorial_direction.strip():
+        from core.angle.validator import validate_angle_rules
+        angle_check = validate_angle_rules(req.editorial_direction)
+        if not angle_check.valid:
+            raise HTTPException(422, f"Invalid editorial direction: {angle_check.reason}")
+
     episode_id = str(uuid.uuid4())
     await db_execute(
         """
