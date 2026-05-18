@@ -4,6 +4,41 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-18 · Claude (claude-sonnet-4-6)
+
+### Config
+- **`config/models.yaml`** — remapped Smallest AI voices: kenji→james, arjun→george, emeka→emily
+
+### Bug Fix
+`speaker_override` was correctly reaching transcript generation but was ignored by audio synthesis — all episodes were always synthesized with the default show speaker (kenji/emily) regardless of what the user selected.
+- **`studio/generator.py`** — added `speaker_override` param to `synthesize_and_stitch` and `synthesize_and_stitch_v2`; when set and valid, overrides `allowed_speakers` so the correct Smallest AI voice is used. Passed through from `process_episode` call site.
+
+---
+
+## 2026-05-18 · Claude (claude-sonnet-4-6)
+
+### Bug Fix
+- **`api/routes/sources.py`** — `GET /sources/{id}/episodes` was passing `str(source_id)` with `::uuid` cast to `ANY(source_ids)`, silently returning zero rows. Now passes `uuid.UUID` object directly.
+
+### Bug Fix
+Source JOIN was silently returning zero rows because asyncpg requires `uuid.UUID` objects for `uuid[]` array binding — passing strings with `::uuid[]` cast doesn't work. Fixed in both list and detail endpoints.
+- **`api/routes/episodes.py`** — pass `list[uuid.UUID]` (not strings) to `ANY($ids)`, drop the `::uuid[]` cast; dedup source IDs before querying
+
+### Feature
+Source objects on episode list — `GET /episodes` now batch-fetches source domain + title for all episodes in one query.
+- **`api/schemas.py`** — added `source_ids` and `source_objects` fields to `EpisodeSummary`
+- **`api/routes/episodes.py`** — list endpoint now selects `source_ids`, batch-JOINs `source` table, stitches `source_objects` onto each episode row
+
+### Feature
+Source objects on episode detail — domain + title now returned alongside source IDs.
+- **`api/schemas.py`** — added `EpisodeSourceObject` model (id, domain, title); added `source_objects` field to `EpisodeDetail`
+- **`api/routes/episodes.py`** — `GET /episodes/{id}` now JOINs the `source` table on `source_ids`, builds `source_objects` list with domain parsed from URL and title; falls back gracefully when no sources
+
+### Feature
+- **`api/routes/sources.py`** — added `GET /sources/{source_id}/episodes` endpoint; returns all episodes whose `source_ids` array contains the given source, scoped to the authenticated user
+
+---
+
 ## 2026-05-16 · Bhabani + Claude (claude-sonnet-4-6)
 
 ### Docs

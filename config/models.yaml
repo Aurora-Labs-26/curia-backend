@@ -356,13 +356,13 @@ bindings:
   speaker:
     kenji:
       model: smallest-lightning
-      voice_id: emily
+      voice_id: james
     arjun:
       model: smallest-lightning
       voice_id: george
     emeka:
       model: smallest-lightning
-      voice_id: james
+      voice_id: emily
 
   # ── Example: switching providers ──────────────────────────────────────────
   # Uncomment provider + model alias above, then override bindings here.

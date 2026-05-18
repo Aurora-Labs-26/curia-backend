@@ -5,6 +5,7 @@ GET /sources, GET /sources/:id, DELETE /sources/:id.
 """
 
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -13,6 +14,8 @@ from api.auth import current_user_id
 from api.schemas import (
     CreateJobResponse,
     CreateSourceRequest,
+    EpisodeSourceObject,
+    EpisodeSummary,
     SourceDetail,
     SourceSummary,
 )
@@ -113,6 +116,65 @@ async def get_source(
     )
     insights = {r["insight_type"]: r.get("content") for r in insight_rows}
     return SourceDetail(**row, insights=insights)
+
+
+@router.get("/sources/{source_id}/episodes", response_model=list[EpisodeSummary])
+async def list_episodes_for_source(
+    source_id: uuid.UUID, user_id: str = Depends(current_user_id)
+) -> list[EpisodeSummary]:
+    rows = await db_query(
+        """
+        SELECT id, show_name, title, status, created_at, error, quality_score,
+               length_minutes, speaker_override, source_ids
+        FROM episode
+        WHERE user_id = $user_id AND source_ids @> ARRAY[$source_id]::uuid[]
+        ORDER BY created_at DESC
+        """,
+        {"user_id": user_id, "source_id": source_id},
+    )
+
+    seen: set[str] = set()
+    all_source_uuids: list[uuid.UUID] = []
+    for r in rows:
+        for sid in (r.get("source_ids") or []):
+            key = str(sid)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                all_source_uuids.append(uuid.UUID(key))
+            except (ValueError, TypeError):
+                pass
+
+    source_map: dict[str, EpisodeSourceObject] = {}
+    if all_source_uuids:
+        src_rows = await db_query(
+            """
+            SELECT id, url, title FROM source
+            WHERE id = ANY($ids) AND user_id = $user_id
+            """,
+            {"ids": all_source_uuids, "user_id": user_id},
+        )
+        for s in src_rows:
+            try:
+                domain = urlparse(s["url"]).hostname or s["url"]
+                domain = domain.removeprefix("www.")
+            except Exception:
+                domain = s["url"]
+            source_map[str(s["id"])] = EpisodeSourceObject(
+                id=s["id"], domain=domain, title=s["title"]
+            )
+
+    result = []
+    for r in rows:
+        data = dict(r)
+        data["source_objects"] = [
+            source_map[str(sid)]
+            for sid in (data.get("source_ids") or [])
+            if str(sid) in source_map
+        ]
+        result.append(EpisodeSummary(**data))
+    return result
 
 
 @router.delete("/sources/{source_id}", status_code=204, response_class=Response)

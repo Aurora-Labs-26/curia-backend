@@ -96,6 +96,14 @@ class EpisodeSummary(BaseModel):
     quality_score: Optional[float] = None    # 0..1, populated after judge runs
     length_minutes: Optional[int] = None
     speaker_override: Optional[str] = None
+    source_ids: list[UUID] = Field(default_factory=list)
+    source_objects: list["EpisodeSourceObject"] = Field(default_factory=list)
+
+
+class EpisodeSourceObject(BaseModel):
+    id: UUID
+    domain: str
+    title: Optional[str] = None
 
 
 class EpisodeDetail(EpisodeSummary):
@@ -103,6 +111,7 @@ class EpisodeDetail(EpisodeSummary):
     outline: Optional[Any] = None
     audio_path: Optional[str] = None
     source_ids: list[UUID] = Field(default_factory=list)
+    source_objects: list[EpisodeSourceObject] = Field(default_factory=list)
     editorial_direction: Optional[str] = None
     quality_feedback: Optional[str] = None
     quality_violations: list[str] = Field(default_factory=list)

@@ -16,6 +16,7 @@ from api.schemas import (
     CreateEpisodeRequest,
     CreateJobResponse,
     EpisodeDetail,
+    EpisodeSourceObject,
     EpisodeSummary,
 )
 from core.db.connection import db_execute, db_fetchrow, db_query
@@ -70,7 +71,7 @@ async def list_episodes(
         rows = await db_query(
             """
             SELECT id, show_name, title, status, created_at, error, quality_score,
-                   length_minutes, speaker_override
+                   length_minutes, speaker_override, source_ids
             FROM episode
             WHERE user_id = $user_id AND status = $status
             ORDER BY created_at DESC LIMIT $limit
@@ -81,14 +82,57 @@ async def list_episodes(
         rows = await db_query(
             """
             SELECT id, show_name, title, status, created_at, error, quality_score,
-                   length_minutes, speaker_override
+                   length_minutes, speaker_override, source_ids
             FROM episode
             WHERE user_id = $user_id
             ORDER BY created_at DESC LIMIT $limit
             """,
             {"user_id": user_id, "limit": limit},
         )
-    return [EpisodeSummary(**r) for r in rows]
+
+    # Batch-fetch source objects for all episodes in one query
+    from urllib.parse import urlparse
+    seen: set[str] = set()
+    all_source_uuids: list[uuid.UUID] = []
+    for r in rows:
+        for sid in (r.get("source_ids") or []):
+            key = str(sid)
+            if key not in seen:
+                seen.add(key)
+                try:
+                    all_source_uuids.append(uuid.UUID(key))
+                except (ValueError, TypeError):
+                    pass
+
+    source_map: dict[str, EpisodeSourceObject] = {}
+    if all_source_uuids:
+        src_rows = await db_query(
+            """
+            SELECT id, url, title FROM source
+            WHERE id = ANY($ids) AND user_id = $user_id
+            """,
+            {"ids": all_source_uuids, "user_id": user_id},
+        )
+        for s in src_rows:
+            try:
+                domain = urlparse(s["url"]).hostname or s["url"]
+                domain = domain.removeprefix("www.")
+            except Exception:
+                domain = s["url"]
+            source_map[str(s["id"])] = EpisodeSourceObject(
+                id=s["id"], domain=domain, title=s["title"]
+            )
+
+    result = []
+    for r in rows:
+        data = dict(r)
+        data["source_objects"] = [
+            source_map[str(sid)]
+            for sid in (data.get("source_ids") or [])
+            if str(sid) in source_map
+        ]
+        result.append(EpisodeSummary(**data))
+    return result
 
 
 @router.get("/episodes/{episode_id}", response_model=EpisodeDetail)
@@ -108,7 +152,37 @@ async def get_episode(
     )
     if not row:
         raise HTTPException(404, "episode not found")
-    return EpisodeDetail(**row)
+
+    from urllib.parse import urlparse
+    data = dict(row)
+    source_ids = data.get("source_ids") or []
+    source_objects: list[EpisodeSourceObject] = []
+    if source_ids:
+        source_uuids: list[uuid.UUID] = []
+        for sid in source_ids:
+            try:
+                source_uuids.append(uuid.UUID(str(sid)))
+            except (ValueError, TypeError):
+                pass
+        if source_uuids:
+            src_rows = await db_query(
+                """
+                SELECT id, url, title FROM source
+                WHERE id = ANY($ids) AND user_id = $user_id
+                """,
+                {"ids": source_uuids, "user_id": user_id},
+            )
+            for s in src_rows:
+                try:
+                    domain = urlparse(s["url"]).hostname or s["url"]
+                    domain = domain.removeprefix("www.")
+                except Exception:
+                    domain = s["url"]
+                source_objects.append(EpisodeSourceObject(
+                    id=s["id"], domain=domain, title=s["title"]
+                ))
+    data["source_objects"] = source_objects
+    return EpisodeDetail(**data)
 
 
 @router.get("/episodes/{episode_id}/audio")

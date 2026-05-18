@@ -229,9 +229,17 @@ def _overlay_music(body: "AudioSegment", music: "AudioSegment", gain_db: float) 
     return body.overlay(track)
 
 
-def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: str) -> str:
+def synthesize_and_stitch(
+    transcript: list[dict],
+    show_name: str,
+    output_path: str,
+    speaker_override: str | None = None,
+) -> str:
     profile = SHOW_PROFILES[show_name]
-    allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
+    if speaker_override and speaker_override in SPEAKER_PROFILES:
+        allowed_speakers = {speaker_override.lower()}
+    else:
+        allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
 
     bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
     gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
@@ -287,7 +295,12 @@ def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: s
     return output_path
 
 
-def synthesize_and_stitch_v2(transcript: list[dict], show_name: str, output_path: str) -> str:
+def synthesize_and_stitch_v2(
+    transcript: list[dict],
+    show_name: str,
+    output_path: str,
+    speaker_override: str | None = None,
+) -> str:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
     makes far fewer TTS calls, and produces more natural prosody.
@@ -295,7 +308,10 @@ def synthesize_and_stitch_v2(transcript: list[dict], show_name: str, output_path
     from core.audio.stitcher import prepare_segments
 
     profile = SHOW_PROFILES[show_name]
-    allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
+    if speaker_override and speaker_override in SPEAKER_PROFILES:
+        allowed_speakers = {speaker_override.lower()}
+    else:
+        allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
 
     bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
     gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
@@ -618,7 +634,7 @@ async def process_episode(episode_id: str) -> None:
         # 5. Synthesize + stitch
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        synthesize_and_stitch(transcript, show_name, audio_path)
+        synthesize_and_stitch(transcript, show_name, audio_path, speaker_override=speaker_override)
 
         # 6. Persist results onto the existing row
         source_uuids = _coerce_source_uuids(source_ids)
