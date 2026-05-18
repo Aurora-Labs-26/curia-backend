@@ -41,20 +41,9 @@ ARTICLE_CHAR_CAP = 50_000
 
 
 async def scrape_url(url: str) -> tuple[str, str]:
-    logger.info(f"Scraping: {url}")
-    import trafilatura
-    downloaded = trafilatura.fetch_url(url)
-    if not downloaded:
-        raise ValueError(f"Could not download {url}")
-    content = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-    if not content or not content.strip():
-        raise ValueError(f"Could not extract content from {url}")
-    # Extract title from HTML
-    from trafilatura.metadata import extract_metadata
-    metadata = extract_metadata(downloaded)
-    title = (metadata.title if metadata and metadata.title else None) or url
-    logger.info(f"Scraped: {title} ({len(content)} chars)")
-    return content, title
+    """Validate URL then scrape via cascade (trafilatura → firecrawl → fail)."""
+    from core.scraper.cascade import scrape
+    return await scrape(url)
 
 
 def run_transformation(full_text: str, transformation_name: str) -> str:
