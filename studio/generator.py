@@ -230,65 +230,6 @@ def _overlay_music(body: "AudioSegment", music: "AudioSegment", gain_db: float) 
 
 
 def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: str) -> int:
-    profile = SHOW_PROFILES[show_name]
-    allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
-
-    bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
-    gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
-
-    logger.info(
-        f"Synthesizing {len(transcript)} lines "
-        f"(bitrate={bitrate}, gap={gap_ms}ms)..."
-    )
-    clips = []
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for i, line in enumerate(transcript):
-            raw_speaker = (line.get("speaker") or "").strip().lower()
-            if not raw_speaker:
-                raise ValueError(f"Transcript line {i} has no speaker name")
-            if raw_speaker not in allowed_speakers:
-                raw_speaker = next(iter(allowed_speakers))
-            clip_path = os.path.join(tmpdir, f"line_{i:04d}.wav")
-            logger.info(f"  [{i+1}/{len(transcript)}] {raw_speaker}: {line['text'][:60]}...")
-            fmt = synthesize_line_by_speaker(line["text"], raw_speaker, clip_path)
-            if fmt == "mp3":
-                clips.append(AudioSegment.from_mp3(clip_path))
-            else:
-                clips.append(AudioSegment.from_wav(clip_path))
-
-        logger.info("Stitching speech...")
-        gap = AudioSegment.silent(duration=gap_ms)
-        body = AudioSegment.empty()
-        for clip in clips:
-            body += clip + gap
-
-        # Optional intro / outro / music — driven by show profile
-        intro = _load_optional_segment(profile.intro_audio_path, "intro")
-        outro = _load_optional_segment(profile.outro_audio_path, "outro")
-        music = _load_optional_segment(profile.music_audio_path, "music")
-
-        if intro is not None:
-            logger.info(f"  prepending intro ({len(intro)/1000:.1f}s)")
-            body = intro + body
-        if outro is not None:
-            logger.info(f"  appending outro ({len(outro)/1000:.1f}s)")
-            body = body + outro
-        if music is not None:
-            logger.info(
-                f"  overlaying music ({len(music)/1000:.1f}s loop) "
-                f"at {profile.music_gain_db:+.1f} dB"
-            )
-            body = _overlay_music(body, music, profile.music_gain_db)
-
-        body.export(output_path, format="mp3", bitrate=bitrate)
-
-    duration_seconds = len(body) // 1000
-    logger.info(f"Audio exported: {output_path} ({duration_seconds}s)")
-    return duration_seconds
-
-
-def synthesize_and_stitch_v2(transcript: list[dict], show_name: str, output_path: str) -> int:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
     makes far fewer TTS calls, and produces more natural prosody.
