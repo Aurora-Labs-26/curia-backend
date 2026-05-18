@@ -41,20 +41,9 @@ ARTICLE_CHAR_CAP = 50_000
 
 
 async def scrape_url(url: str) -> tuple[str, str]:
-    logger.info(f"Scraping: {url}")
-    import trafilatura
-    downloaded = trafilatura.fetch_url(url)
-    if not downloaded:
-        raise ValueError(f"Could not download {url}")
-    content = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-    if not content or not content.strip():
-        raise ValueError(f"Could not extract content from {url}")
-    # Extract title from HTML
-    from trafilatura.metadata import extract_metadata
-    metadata = extract_metadata(downloaded)
-    title = (metadata.title if metadata and metadata.title else None) or url
-    logger.info(f"Scraped: {title} ({len(content)} chars)")
-    return content, title
+    """Validate URL then scrape via cascade (trafilatura → firecrawl → fail)."""
+    from core.scraper.cascade import scrape
+    return await scrape(url)
 
 
 def run_transformation(full_text: str, transformation_name: str) -> str:
@@ -246,6 +235,25 @@ async def ingest_url(
     return source_id
 
 
+def normalise_url(url: str) -> str:
+    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+    parsed = urlparse(url.strip())
+    STRIP_PARAMS = {
+        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+        "fbclid", "gclid", "ref", "source", "mc_cid", "mc_eid",
+    }
+    qs = {k: v for k, v in parse_qs(parsed.query, keep_blank_values=True).items() if k not in STRIP_PARAMS}
+    path = parsed.path.rstrip("/") or "/"
+    return urlunparse((
+        parsed.scheme.lower(),
+        parsed.netloc.lower(),
+        path,
+        parsed.params,
+        urlencode(qs, doseq=True),
+        "",
+    ))
+
+
 async def get_or_create_source(
     url: str,
     user_id: str = "default",
@@ -255,6 +263,7 @@ async def get_or_create_source(
     Return the source_id for (user_id, url). Inserts a new row if none exists.
     Idempotent — safe for the API's POST /sources to call on every request.
     """
+    url = normalise_url(url)
     existing = await db_fetchrow(
         "SELECT id, status FROM source WHERE user_id = $user_id AND url = $url",
         {"user_id": user_id, "url": url},

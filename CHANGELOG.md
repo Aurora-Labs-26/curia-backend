@@ -4,6 +4,22 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-19 · Claude (claude-sonnet-4-6)
+
+### Feature
+Cascading scraper with URL validation, HEAD check, paywall detection, and Twitter/X routing — replaces the inline trafilatura-only block in `scrape_url`; adds URL normalisation to deduplicate sources with tracking params; filters idea generator to only cluster `ready` sources.
+- **`core/scraper/__init__.py`** — new package marker
+- **`core/scraper/validator.py`** — regex-based URL validation (video, social, shopping, adult, search, messaging, file, private IP); paywall domain set; Twitter detection helpers
+- **`core/scraper/cascade.py`** — cascading scraper: validate → HEAD check → trafilatura → firecrawl → fail, with paywall/Twitter-specific error messages
+- **`core/ingest.py`** — `scrape_url` replaced with thin delegation to `core.scraper.cascade.scrape`; `normalise_url` added to strip UTM/tracking params; `get_or_create_source` calls `normalise_url` as first step
+- **`intelligence/idea_generator.py`** — `load_archive` query now filters `status = 'ready'` so incomplete sources are excluded from clustering
+- **`.env.example`** — documented `FIRECRAWL_API_KEY` as optional fallback scraper key
+
+### Test
+- **`tests/test_url_validator.py`** — full test suite: URL validator, HEAD check, paywall detection, Twitter detection, cascading scraper behaviour
+
+---
+
 ## 2026-05-19 · Claude (claude-sonnet-4-6) (4)
 
 ### Bug Fix

@@ -53,7 +53,7 @@ async def load_archive(state: IdeaGenState) -> IdeaGenState:
 
     # Fetch all sources for this user
     sources_raw = await db_query(
-        "SELECT id, title FROM source WHERE user_id = $user_id ORDER BY created_at DESC",
+        "SELECT id, title FROM source WHERE user_id = $user_id AND status = 'ready' ORDER BY created_at DESC",
         {"user_id": user_id},
     )
 
