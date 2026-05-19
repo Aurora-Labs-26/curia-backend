@@ -21,7 +21,8 @@ import traceback
 from dotenv import load_dotenv
 from loguru import logger
 
-from core.queue import ack, default_worker_id, dequeue, fail
+from core.errors import PermanentError
+from core.queue import ack, default_worker_id, dequeue, fail, fail_permanently
 from worker.handlers import HANDLERS
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -69,6 +70,15 @@ async def _process_one(worker_id: str) -> bool:
         elapsed = time.time() - start
         logger.info(f"[worker] acked id={job.id}")
         worker_logger.info(f"JOB_SUCCESS | type={job.type} id={job.id} duration={elapsed:.2f}s")
+    except PermanentError as exc:
+        elapsed = time.time() - start
+        tb = traceback.format_exc()
+        logger.warning(f"[worker] id={job.id} type={job.type} permanent failure (no retry): {exc}")
+        worker_logger.error(
+            f"JOB_PERMANENT_FAIL | type={job.type} id={job.id} "
+            f"duration={elapsed:.2f}s error={exc}"
+        )
+        await fail_permanently(job.id, f"{exc}\n{tb}")
     except Exception as exc:
         elapsed = time.time() - start
         tb = traceback.format_exc()

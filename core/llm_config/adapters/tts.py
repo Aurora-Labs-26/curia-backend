@@ -63,6 +63,71 @@ def _write_silent_wav(output_path: str, duration_seconds: float = 1.0) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Text chunking — Smallest.ai has a ~500-char limit per request
+# ---------------------------------------------------------------------------
+
+SMALLEST_MAX_CHARS = 200  # Smallest.ai Lightning hard limit is ~200 chars
+
+
+def _chunk_text(text: str, max_chars: int = SMALLEST_MAX_CHARS) -> list[str]:
+    """Split text into chunks guaranteed to be under max_chars.
+
+    Strategy:
+    1. Try sentence boundaries first (cleaner audio breaks).
+    2. Any sentence still over max_chars gets split at word boundaries.
+    3. Any word still over max_chars gets hard-truncated (last resort).
+    """
+    import re
+
+    def _by_words(s: str) -> list[str]:
+        words = s.split()
+        parts: list[str] = []
+        cur = ""
+        for w in words:
+            # Hard-truncate individual words that exceed the limit
+            while len(w) > max_chars:
+                if cur:
+                    parts.append(cur)
+                    cur = ""
+                parts.append(w[:max_chars])
+                w = w[max_chars:]
+            if not cur:
+                cur = w
+            elif len(cur) + 1 + len(w) <= max_chars:
+                cur += " " + w
+            else:
+                parts.append(cur)
+                cur = w
+        if cur:
+            parts.append(cur)
+        return parts or [s[:max_chars]]
+
+    if len(text) <= max_chars:
+        return [text]
+
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    chunks: list[str] = []
+    cur = ""
+    for sentence in sentences:
+        if len(sentence) > max_chars:
+            # sentence too long — flush current and split by words
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.extend(_by_words(sentence))
+        elif not cur:
+            cur = sentence
+        elif len(cur) + 1 + len(sentence) <= max_chars:
+            cur += " " + sentence
+        else:
+            chunks.append(cur)
+            cur = sentence
+    if cur:
+        chunks.append(cur)
+    return chunks or _by_words(text)
+
+
+# ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
 
@@ -336,24 +401,54 @@ class TTSAdapter:
         base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
         endpoint = self.settings.get("endpoint_path", "/api/v1/lightning/get_speech")
         url = f"{base_url}{endpoint}"
-        body = {
-            "voice_id": self.voice_id,
-            "text": text,
-            "language": self.settings.get("language", "en"),
-            "sample_rate": int(self.settings.get("sample_rate", 22050)),
-            "speed": self.settings.get("speed", 1.0),
-            "add_wav_header": True,
-        }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=body,
-            )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
-        with open(output_path, "wb") as f:
-            f.write(resp.content)
+        chunks = _chunk_text(text)
+        if len(chunks) == 1:
+            body = {
+                "voice_id": self.voice_id,
+                "text": chunks[0],
+                "language": self.settings.get("language", "en"),
+                "sample_rate": int(self.settings.get("sample_rate", 22050)),
+                "speed": self.settings.get("speed", 1.0),
+                "add_wav_header": True,
+            }
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+        else:
+            # Multi-chunk: synthesize each, stitch with pydub
+            from pydub import AudioSegment
+            import tempfile, os
+            combined = AudioSegment.empty()
+            async with httpx.AsyncClient(timeout=60) as client:
+                for chunk in chunks:
+                    body = {
+                        "voice_id": self.voice_id,
+                        "text": chunk,
+                        "language": self.settings.get("language", "en"),
+                        "sample_rate": int(self.settings.get("sample_rate", 22050)),
+                        "speed": self.settings.get("speed", 1.0),
+                        "add_wav_header": True,
+                    }
+                    resp = await client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json=body,
+                    )
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp.write(resp.content)
+                        tmp_path = tmp.name
+                    combined += AudioSegment.from_wav(tmp_path)
+                    os.unlink(tmp_path)
+            combined.export(output_path, format="wav")
 
     async def _async_smallest_with_timings(
         self, text: str, output_path: str, api_key: str
@@ -364,56 +459,78 @@ class TTSAdapter:
         start/end are in seconds from the beginning of this clip.
 
         Falls back to empty list if the API doesn't return timestamps (e.g. older endpoint).
+        Chunks long text to stay within Smallest.ai's per-request character limit.
         """
         import json as _json
 
         base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
         endpoint = self.settings.get("endpoint_path", "/api/v1/lightning/get_speech")
         url = f"{base_url}{endpoint}"
-        body = {
-            "voice_id": self.voice_id,
-            "text": text,
-            "language": self.settings.get("language", "en"),
-            "sample_rate": int(self.settings.get("sample_rate", 22050)),
-            "speed": self.settings.get("speed", 1.0),
-            "add_wav_header": True,
-            "timestamps": True,
-        }
+        chunks = _chunk_text(text)
+
+        all_timings: list[dict] = []
+        clip_paths: list[str] = []
+        import tempfile, os
+        time_offset = 0.0
+
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=body,
-            )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+            for chunk in chunks:
+                body = {
+                    "voice_id": self.voice_id,
+                    "text": chunk,
+                    "language": self.settings.get("language", "en"),
+                    "sample_rate": int(self.settings.get("sample_rate", 22050)),
+                    "speed": self.settings.get("speed", 1.0),
+                    "add_wav_header": True,
+                    "timestamps": True,
+                }
+                resp = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
 
-        content_type = resp.headers.get("content-type", "")
-        if "application/json" in content_type:
-            # API returned JSON with audio + timestamps
-            payload = resp.json()
-            # Audio may be base64-encoded in the JSON
-            audio_b64 = payload.get("audio") or payload.get("audio_data")
-            if audio_b64:
-                audio_bytes = base64.b64decode(audio_b64)
-            else:
-                # Some versions embed raw WAV bytes at a key
-                audio_bytes = None
+                content_type = resp.headers.get("content-type", "")
+                if "application/json" in content_type:
+                    payload = resp.json()
+                    audio_b64 = payload.get("audio") or payload.get("audio_data")
+                    if audio_b64:
+                        audio_bytes = base64.b64decode(audio_b64)
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                            tmp.write(audio_bytes)
+                            clip_paths.append(tmp.name)
+                        # Offset timings by accumulated duration
+                        chunk_timings = payload.get("timestamps") or payload.get("words") or []
+                        for t in chunk_timings:
+                            all_timings.append({**t, "start": t.get("start", 0) + time_offset,
+                                                "end": t.get("end", 0) + time_offset})
+                        from pydub import AudioSegment as _AS
+                        time_offset += len(_AS.from_wav(clip_paths[-1])) / 1000.0
+                    else:
+                        # No audio in JSON — synthesize without timings for this chunk
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                            clip_paths.append(tmp.name)
+                        await self._async_smallest(chunk, clip_paths[-1], api_key)
+                else:
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp.write(resp.content)
+                        clip_paths.append(tmp.name)
 
-            if audio_bytes:
-                with open(output_path, "wb") as f:
-                    f.write(audio_bytes)
-            else:
-                # Fallback: no audio in JSON — re-request without timestamps
-                await self._async_smallest(text, output_path, api_key)
-
-            word_timings = payload.get("timestamps") or payload.get("words") or []
-            return word_timings
+        # Stitch clips together
+        if len(clip_paths) == 1:
+            import shutil
+            shutil.move(clip_paths[0], output_path)
         else:
-            # API returned raw WAV bytes (timestamps not supported or flag ignored)
-            with open(output_path, "wb") as f:
-                f.write(resp.content)
-            return []
+            from pydub import AudioSegment
+            combined = AudioSegment.empty()
+            for p in clip_paths:
+                combined += AudioSegment.from_wav(p)
+                os.unlink(p)
+            combined.export(output_path, format="wav")
+
+        return all_timings
 
     async def _async_google(self, text: str, output_path: str, api_key: str) -> None:
         base_url = (self.provider.base_url or "https://texttospeech.googleapis.com/v1").rstrip("/")
@@ -623,20 +740,25 @@ class TTSAdapter:
         """Microsoft Edge TTS — free, no API key required. Outputs MP3 directly."""
         import shutil
         import edge_tts
+        from concurrent.futures import ThreadPoolExecutor
 
         voice = self.voice_id or "en-US-GuyNeural"
         mp3_path = output_path.replace(".wav", ".mp3") if output_path.endswith(".wav") else output_path
 
-        async def _run():
-            communicate = edge_tts.Communicate(text, voice)
-            await communicate.save(mp3_path)
-
-        try:
+        def _run_in_thread():
             loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
+                async def _run():
+                    communicate = edge_tts.Communicate(text, voice)
+                    await communicate.save(mp3_path)
                 loop.run_until_complete(_run())
             finally:
                 loop.close()
+
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                ex.submit(_run_in_thread).result()
             if output_path != mp3_path:
                 shutil.move(mp3_path, output_path)
         except Exception as e:
@@ -688,54 +810,76 @@ class TTSAdapter:
     ) -> list[dict]:
         """
         Sync variant: synthesize via Smallest.ai Lightning with timestamps=True.
+        Chunks long text to stay within Smallest.ai's per-request character limit.
         Returns word-level timings list (may be empty if API doesn't support timestamps).
         """
-        import json as _json
+        import tempfile, os as _os
+        from pydub import AudioSegment
 
         base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
         endpoint = self.settings.get("endpoint_path", "/api/v1/lightning/get_speech")
         url = f"{base_url}{endpoint}"
+        chunks = _chunk_text(text)
+        logger.debug(f"[tts] input len={len(text)} → {len(chunks)} chunks, sizes={[len(c) for c in chunks]}")
 
-        body = {
-            "voice_id": self.voice_id,
-            "text": text,
-            "language": self.settings.get("language", "en"),
-            "sample_rate": int(self.settings.get("sample_rate", 22050)),
-            "speed": self.settings.get("speed", 1.0),
-            "add_wav_header": True,
-            "timestamps": True,
-        }
+        all_timings: list[dict] = []
+        clip_paths: list[str] = []
+        time_offset = 0.0
 
         try:
             with httpx.Client(timeout=60) as client:
-                resp = client.post(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=body,
-                )
-            if resp.status_code != 200:
-                raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+                for chunk in chunks:
+                    body = {
+                        "voice_id": self.voice_id,
+                        "text": chunk,
+                        "language": self.settings.get("language", "en"),
+                        "sample_rate": int(self.settings.get("sample_rate", 22050)),
+                        "speed": self.settings.get("speed", 1.0),
+                        "add_wav_header": True,
+                        "timestamps": True,
+                    }
+                    resp = client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json=body,
+                    )
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
 
-            content_type = resp.headers.get("content-type", "")
-            if "application/json" in content_type:
-                payload = resp.json()
-                audio_b64 = payload.get("audio") or payload.get("audio_data")
-                if audio_b64:
-                    audio_bytes = base64.b64decode(audio_b64)
-                    with open(output_path, "wb") as f:
-                        f.write(audio_bytes)
-                else:
-                    # No audio in JSON — fallback to plain synthesis
-                    self._synthesize_smallest(text, output_path, api_key)
-                return payload.get("timestamps") or payload.get("words") or []
+                    content_type = resp.headers.get("content-type", "")
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp_path = tmp.name
+
+                    if "application/json" in content_type:
+                        payload = resp.json()
+                        audio_b64 = payload.get("audio") or payload.get("audio_data")
+                        if audio_b64:
+                            with open(tmp_path, "wb") as f:
+                                f.write(base64.b64decode(audio_b64))
+                        else:
+                            self._synthesize_smallest(chunk, tmp_path, api_key)
+                        chunk_timings = payload.get("timestamps") or payload.get("words") or []
+                        for t in chunk_timings:
+                            all_timings.append({**t, "start": t.get("start", 0) + time_offset,
+                                                "end": t.get("end", 0) + time_offset})
+                    else:
+                        with open(tmp_path, "wb") as f:
+                            f.write(resp.content)
+
+                    clip_paths.append(tmp_path)
+                    time_offset += len(AudioSegment.from_wav(tmp_path)) / 1000.0
+
+            if len(clip_paths) == 1:
+                import shutil
+                shutil.move(clip_paths[0], output_path)
             else:
-                # Raw WAV — timestamps not returned by this endpoint version
-                with open(output_path, "wb") as f:
-                    f.write(resp.content)
-                return []
+                combined = AudioSegment.empty()
+                for p in clip_paths:
+                    combined += AudioSegment.from_wav(p)
+                    _os.unlink(p)
+                combined.export(output_path, format="wav")
+
+            return all_timings
         except RuntimeError:
             raise
         except Exception as e:

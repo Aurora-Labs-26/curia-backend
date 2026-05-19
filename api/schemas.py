@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 class CreateSourceRequest(BaseModel):
     url: HttpUrl
+    auto_generate: bool = True  # False when the caller (share sheet) will trigger generation explicitly
 
 
 class SourceSummary(BaseModel):

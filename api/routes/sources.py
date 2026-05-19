@@ -8,6 +8,7 @@ import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from fastapi.responses import Response
 
 from api.auth import current_user_id
@@ -37,6 +38,7 @@ async def create_source(
     Worker scrapes + transforms + embeds; status moves queued → scraping → ... → ready.
     """
     url_str = str(req.url)
+    logger.info(f"[create_source] url={url_str[-40:]} auto_generate={req.auto_generate}")
     source_id = await get_or_create_source(url=url_str, user_id=user_id)
 
     # Fetch the row's status to decide whether to enqueue a fresh job.
@@ -49,11 +51,33 @@ async def create_source(
     job_id = None
     # Re-enqueue when failed or never-ingested. If already running/ready, skip.
     if status in ("queued", "failed"):
-        job_id = await enqueue(
-            type="ingest",
-            payload={"source_id": source_id, "user_id": user_id, "url": url_str},
-            user_id=user_id,
+        existing_job = await db_fetchrow(
+            """
+            SELECT id
+            FROM jobs
+            WHERE type = 'ingest'
+              AND status IN ('queued', 'running')
+              AND payload->>'source_id' = $source_id
+              AND user_id = $user_id
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            {"source_id": source_id, "user_id": user_id},
         )
+        if existing_job:
+            job_id = existing_job["id"]
+            logger.info(f"[create_source] reusing ingest job={str(job_id)[:8]} source={source_id[:8]}")
+        else:
+            job_id = await enqueue(
+                type="ingest",
+                payload={
+                    "source_id": source_id,
+                    "user_id": user_id,
+                    "url": url_str,
+                    "auto_generate": req.auto_generate,
+                },
+                user_id=user_id,
+            )
     return CreateJobResponse(
         id=uuid.UUID(source_id),
         status=status,

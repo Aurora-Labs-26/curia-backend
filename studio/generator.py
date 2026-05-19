@@ -238,6 +238,23 @@ def _overlay_music(body: "AudioSegment", music: "AudioSegment", gain_db: float) 
     return body.overlay(track)
 
 
+def _derive_display_fields(outline: dict, duration_seconds: int) -> tuple[str, list[dict]]:
+    """Extract description and chapters from the outline dict."""
+    description = outline.get("thread") or outline.get("central_tension") or ""
+    segments = outline.get("segments") or []
+    duration_minutes = duration_seconds / 60 if duration_seconds else 0
+    segment_count = max(1, len(segments))
+    chapters = []
+    for i, seg in enumerate(segments):
+        start_minute = round(duration_minutes * i / segment_count)
+        chapters.append({
+            "id": f"segment-{seg.get('segment', i + 1)}",
+            "title": seg.get("title", ""),
+            "start_minute": start_minute,
+        })
+    return description, chapters
+
+
 def synthesize_and_stitch(
     transcript: list[dict],
     show_name: str,
@@ -683,13 +700,17 @@ async def process_episode(episode_id: str) -> None:
 
         # 6. Persist results onto the existing row
         # Derive actual duration from the stitched MP3
+        actual_duration_seconds: int | None = None
         actual_length_minutes: int | None = None
         try:
             from pydub import AudioSegment as _AS
             _audio = _AS.from_mp3(audio_path)
+            actual_duration_seconds = int(_audio.duration_seconds)
             actual_length_minutes = max(1, round(_audio.duration_seconds / 60))
         except Exception:
             pass
+
+        description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0)
 
         source_uuids = _coerce_source_uuids(source_ids)
         await db_execute(
@@ -706,6 +727,9 @@ async def process_episode(episode_id: str) -> None:
                 regenerated = $regenerated,
                 tts_timings = $tts_timings::jsonb,
                 length_minutes = $length_minutes,
+                duration_seconds = $duration_seconds,
+                description = $description,
+                chapters = $chapters::jsonb,
                 status = 'ready',
                 error = NULL
             WHERE id = $id::uuid
@@ -723,6 +747,9 @@ async def process_episode(episode_id: str) -> None:
                 "regenerated": regenerated,
                 "tts_timings": json.dumps(tts_timings),
                 "length_minutes": actual_length_minutes,
+                "duration_seconds": actual_duration_seconds,
+                "description": description,
+                "chapters": json.dumps(chapters),
             },
         )
 
@@ -732,7 +759,10 @@ async def process_episode(episode_id: str) -> None:
                 "UPDATE show_idea SET generated = true WHERE id = $id::uuid",
                 {"id": str(show_idea_id)},
             )
-        await log_covered_topics(user_id, show_name, episode_id, outline, source_ids)
+        try:
+            await log_covered_topics(user_id, show_name, episode_id, outline, source_ids)
+        except Exception as _ct_err:
+            logger.warning(f"covered_topic log skipped for {episode_id}: {_ct_err}")
 
         _ep_elapsed = _ep_time.time() - _ep_start
         logger.info(f"--- Done: episode {episode_id} title='{title}' ---")

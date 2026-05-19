@@ -65,6 +65,16 @@ def default_worker_id() -> str:
 # ---------------------------------------------------------------------------
 
 
+# Lower number = higher priority (processed first).
+# ingest and generate_ideas are user-facing — they must not wait behind long synthesis jobs.
+_JOB_PRIORITY: dict[str, int] = {
+    "ingest": 1,
+    "generate_ideas": 2,
+    "generate_from_source": 3,
+    "generate_episode": 10,  # long-running; yields to ingest
+}
+
+
 async def enqueue(
     type: str,
     payload: dict[str, Any],
@@ -77,12 +87,13 @@ async def enqueue(
     Enqueue a job. Returns the new job id.
     Payload is JSON-serialized.
     """
+    priority = _JOB_PRIORITY.get(type, 10)
     payload_json = json.dumps(payload)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO jobs (type, payload, user_id, correlation_id, max_attempts)
-            VALUES ($1, $2::jsonb, $3, $4, $5)
+            INSERT INTO jobs (type, payload, user_id, correlation_id, max_attempts, priority)
+            VALUES ($1, $2::jsonb, $3, $4, $5, $6)
             RETURNING id
             """,
             type,
@@ -90,6 +101,7 @@ async def enqueue(
             user_id,
             correlation_id,
             max_attempts,
+            priority,
         )
         job_id = row["id"]
     logger.info(f"[queue] enqueued type={type} id={job_id} user_id={user_id}")
@@ -112,7 +124,7 @@ async def dequeue(worker_id: Optional[str] = None) -> Optional[Job]:
                 SELECT id, type, payload, user_id, attempts, max_attempts, correlation_id
                 FROM jobs
                 WHERE status = 'queued' AND attempts < max_attempts
-                ORDER BY created_at ASC
+                ORDER BY priority ASC, created_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
                 """
@@ -189,6 +201,29 @@ async def fail(job_id: UUID, error: str) -> None:
             (error or "")[:2000],
         )
     logger.warning(f"[queue] fail id={job_id} error={error[:200]}")
+
+
+async def fail_permanently(job_id: UUID, error: str) -> None:
+    """
+    Immediately mark a job as permanently failed — no retry.
+    Used for deterministic failures (404, validation reject, etc.) where retrying is pointless.
+    """
+    async with get_db() as conn:
+        await conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'failed',
+                attempts = max_attempts,
+                last_error = $2,
+                locked_at = NULL,
+                locked_by = NULL,
+                updated_at = now()
+            WHERE id = $1
+            """,
+            job_id,
+            (error or "")[:2000],
+        )
+    logger.warning(f"[queue] fail_permanently id={job_id} error={error[:200]}")
 
 
 # ---------------------------------------------------------------------------

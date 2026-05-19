@@ -36,6 +36,7 @@ async def get_recent_sources(user_id: str, pool: str, limit: int = 5) -> list[di
         SELECT id, title, url, created_at
         FROM source
         WHERE user_id = $user_id
+          AND status = 'ready'
         ORDER BY created_at DESC
         LIMIT $limit
         """,

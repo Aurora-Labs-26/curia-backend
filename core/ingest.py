@@ -237,11 +237,22 @@ async def ingest_url(
 
 def normalise_url(url: str) -> str:
     from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
-    parsed = urlparse(url.strip())
+    url = url.strip()
+
+    # Rewrite open.substack.com → substack.com so trafilatura can scrape it.
+    # open.substack.com is Substack's share/preview domain (requires login);
+    # the canonical URL on substack.com is publicly readable.
+    parsed_pre = urlparse(url)
+    if parsed_pre.netloc.lower() == "open.substack.com":
+        url = urlunparse(parsed_pre._replace(netloc="substack.com"))
+
+    parsed = urlparse(url)
     STRIP_PARAMS = {
         "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
         "fbclid", "gclid", "ref", "source", "mc_cid", "mc_eid",
     }
+    if parsed.netloc.lower().endswith("substack.com"):
+        STRIP_PARAMS = {*STRIP_PARAMS, "r", "publication_id", "post_id", "isFreemail"}
     qs = {k: v for k, v in parse_qs(parsed.query, keep_blank_values=True).items() if k not in STRIP_PARAMS}
     path = parsed.path.rstrip("/") or "/"
     return urlunparse((

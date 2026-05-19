@@ -6,13 +6,30 @@ Cascading scraper: validate → HEAD check → trafilatura (free) → firecrawl 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
 
+from core.errors import PermanentError
 from .validator import validate_url, is_likely_paywalled, is_twitter_url
+
+
+def normalize_url(url: str) -> str:
+    """
+    Rewrite known broken URL patterns to their canonical form before scraping.
+
+    - substack.com/pub/<author>/p/<slug> → <author>.substack.com/p/<slug>
+    """
+    m = re.match(r"https?://(?:www\.)?substack\.com/pub/([^/]+)/p/(.+)", url)
+    if m:
+        author, slug = m.group(1), m.group(2)
+        canonical = f"https://{author}.substack.com/p/{slug}"
+        logger.info(f"[scraper] normalized substack URL: {url} → {canonical}")
+        return canonical
+    return url
 
 MIN_CONTENT_LENGTH = 200
 
@@ -44,14 +61,33 @@ async def head_check(url: str) -> HeadCheckResult:
         return HeadCheckResult(ok=True, status_code=0, reason=f"HEAD check failed: {e}")
 
 
+async def resolve_redirects(url: str) -> str:
+    """Follow redirects and return the final URL. Used to unwrap share/redirect URLs like open.substack.com."""
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.head(url)
+            final = str(resp.url)
+            if final != url:
+                logger.info(f"[scraper] redirect {url} → {final}")
+            return final
+    except Exception:
+        return url
+
+
 async def scrape(url: str) -> tuple[str, str]:
+    # Normalize known broken URL patterns before anything else
+    url = normalize_url(url)
+
     result = validate_url(url)
     if not result.valid:
-        raise ValueError(result.reason)
+        raise PermanentError(result.reason)
+
+    # Resolve any redirects (e.g. open.substack.com share links → real article URL)
+    url = await resolve_redirects(url)
 
     head = await head_check(url)
     if not head.ok:
-        raise ValueError(head.reason)
+        raise PermanentError(head.reason)
 
     hostname = (urlparse(url).hostname or "").lower()
     is_paywall_domain = is_likely_paywalled(hostname)
@@ -84,18 +120,18 @@ async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str
         logger.warning(f"[scraper] firecrawl failed: {e}")
 
     if is_paywall_domain:
-        raise ValueError(
+        raise PermanentError(
             "Could not extract content — this article is likely behind a paywall. "
             "Try a non-paywalled source or check if the article has a free version."
         )
 
     if is_twitter_url(url):
-        raise ValueError(
+        raise PermanentError(
             "Could not extract this Twitter/X thread. "
             "The thread may be deleted, private, or too short to extract."
         )
 
-    raise ValueError(f"Could not extract content from {url} — tried trafilatura and firecrawl")
+    raise PermanentError(f"Could not extract content from {url} — tried trafilatura and firecrawl")
 
 
 async def _scrape_trafilatura(url: str) -> tuple[str, str]:

@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from api.routes import admin, auth, episodes, health, ideas, jobs, me, sources, stream
+from api.routes import admin, auth, episodes, generate_from_source, health, ideas, jobs, me, sources, stream
 from core.db.connection import close_pool, get_pool
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -86,6 +86,7 @@ app.include_router(me.router, tags=["me"])
 app.include_router(sources.router, tags=["sources"])
 app.include_router(ideas.router, tags=["ideas"])
 app.include_router(episodes.router, tags=["episodes"])
+app.include_router(generate_from_source.router, tags=["generate"])
 app.include_router(jobs.router, tags=["jobs"])
 app.include_router(stream.router, tags=["streaming"])
 app.include_router(admin.router)   # QA-only; gated inside via Depends(qa_required)
