@@ -67,10 +67,10 @@ providers:
 
   # ── Embedding providers ────────────────────────────────────────────────────
   #
-  # openai_embed:
-  #   type: openai
-  #   api_key_env: OPENAI_API_KEY
-  #   base_url: https://api.openai.com/v1
+  openai_embed:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
   #
   # cohere_embed:
   #   type: cohere
@@ -216,11 +216,11 @@ models:
 
   # ── Additional embedding model aliases ─────────────────────────────────────
   #
-  # text-embedding-3-small:
-  #   provider: openai_embed
-  #   model_id: text-embedding-3-small
-  #   kind: embedding
-  #   dimension: 1536
+  text-embedding-3-small:
+    provider: openai_embed
+    model_id: text-embedding-3-small
+    kind: embedding
+    dimension: 1536
   #
   # text-embedding-3-large:
   #   provider: openai_embed
@@ -321,7 +321,7 @@ bindings:
     outline:    haiku-4-5
     transcript: sonnet-4-6
 
-    embedding:  voyage-3
+    embedding:  text-embedding-3-small
 
     # Future-reserved — these are noted now so the YAML is forward-compatible
     judge:              sonnet-4-6

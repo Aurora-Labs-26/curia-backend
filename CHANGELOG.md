@@ -4,6 +4,12 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-19 · Claude (claude-sonnet-4-6) (2)
+
+### Bug Fix
+`GET /episodes` crashed on every call — `play_progress` and `listened` columns were referenced in SQL but never added via migration, causing the Shows tab to always show empty/error.
+- **`alembic/versions/0016_episode_playback_progress.py`** — adds `play_progress float` and `listened boolean NOT NULL DEFAULT false` to the `episode` table
+
 ## 2026-05-19 · Claude (claude-sonnet-4-6)
 
 ### Feature
