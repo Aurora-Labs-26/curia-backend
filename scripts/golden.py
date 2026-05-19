@@ -251,7 +251,7 @@ async def generate_and_rate(user_id: str, source_ids: list[str] | None = None, s
     )
 
     try:
-        await process_episode(episode_id=episode_id, user_id=user_id)
+        await process_episode(episode_id=episode_id)
     except Exception as e:
         print(f"  {RED}Episode generation failed: {e}{RESET}")
         return
@@ -378,7 +378,8 @@ async def main():
             for i, s in enumerate(sources):
                 print(f"  {CYAN}{i+1}{RESET}. {s.get('title', s.get('url', '?'))[:60]}")
 
-            fmt = input(f"\n  Format [{CYAN}clarity_engine{RESET}]: ").strip() or "clarity_engine"
+            _pick = input(f"\n  Pick source # (or Enter for all): ").strip()
+            fmt = input(f"  Format [{CYAN}clarity_engine{RESET}]: ").strip() or "clarity_engine"
             await generate_and_rate(user_id, show_name=fmt)
 
         elif choice == "3":
