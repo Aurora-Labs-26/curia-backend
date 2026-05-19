@@ -438,6 +438,45 @@ A few load-bearing conventions worth knowing before you change things:
 - **All long-running work goes through the queue.** API endpoints enqueue and return 202; workers do the actual work. HTTP request timeouts are a real thing.
 - **Auth is a single pattern.** `Depends(current_user)` for "user can do this", `Depends(qa_required)` for QA only. Don't write your own.
 
+### Golden dataset collection
+
+Build a human-rated ground truth dataset for evaluating pipeline quality. The TUI runs the full pipeline and lets you rate each stage as good/bad, with inline editing to create "golden" reference outputs.
+
+```bash
+# Start Postgres first
+docker compose up postgres -d
+
+# Run the TUI
+python scripts/golden.py
+```
+
+**Menu:**
+- **Option 1** — Evaluate a source: paste a URL → pipeline ingests it → rate scrape quality + each of the 7 transforms (summary, metadata, insights, stakes, tensions, counterpoints, examples)
+- **Option 2** — Evaluate an episode: pick from ready sources → generate episode → rate title, outline, transcript, judge score
+- **Option 3** — Full run: ingest URL + generate episode + rate everything end-to-end
+- **Option 4** — View dataset stats and pass rates
+
+**Rating flow:**
+```
+[g]ood — LLM output is correct, becomes the golden reference
+[b]ad  — LLM output is wrong, optionally provide the correct version
+[e]dit — open the output in your editor, fix it, save as golden
+```
+
+**Output files:**
+```
+data/golden_sources.csv   — one row per source, verdict + golden for each transform
+data/golden_episodes.csv  — one row per episode, verdict + golden for title/outline/transcript/judge
+```
+
+Use this dataset to:
+- Measure if prompt changes improve output quality
+- Calibrate the LLM judge (does it agree with your ratings?)
+- Catch regressions after code changes
+- Build training examples for GEPA optimization
+
+---
+
 ### Day-to-day workflow
 
 ```bash
