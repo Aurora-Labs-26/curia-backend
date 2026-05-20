@@ -17,8 +17,13 @@ async def handle_ingest(payload: dict) -> None:
     source_id = payload.get("source_id")
     if not source_id:
         raise ValueError("ingest job: missing source_id in payload")
-    logger.info(f"[handle_ingest] processing source_id={source_id}")
-    await process_source(source_id=source_id)
+    # Only mark the source 'failed' on the final retry, so the pile doesn't
+    # flash "Failed" between the auto-retries.
+    attempt = payload.get("__attempt__", 1)
+    max_attempts = payload.get("__max_attempts__", 1)
+    is_final_attempt = attempt >= max_attempts
+    logger.info(f"[handle_ingest] processing source_id={source_id} attempt={attempt}/{max_attempts}")
+    await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
 
     source_row = await db_fetchrow(
         "SELECT user_id FROM source WHERE id = $source_id::uuid",

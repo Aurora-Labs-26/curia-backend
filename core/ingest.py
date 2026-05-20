@@ -146,12 +146,17 @@ async def embed_primitive(source_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def process_source(source_id: str) -> None:
+async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
     """
     Process a source row that already exists in the DB.
     Reads url + user_id from the row, runs scrape → transform → embed → primitive.
     Status moves through 'scraping' → 'transforming' → 'embedding' → 'ready'.
-    On any exception: status='failed' + error column set, then re-raises.
+
+    On exception: the error column is always recorded, but status is only set to
+    'failed' on the final retry (is_final_attempt). On intermediate attempts the
+    status is left as-is (still 'scraping'/etc.) so the pile shows it as processing
+    rather than flashing "Failed" between auto-retries. Always re-raises so the
+    worker can requeue.
 
     Used by the worker handler. Idempotent-ish (insights are appended; safe to re-run if
     insights table is cleared or duplicates are tolerated).
@@ -212,7 +217,16 @@ async def process_source(source_id: str) -> None:
         logger.info(f"Ingestion complete: {source_id}")
 
     except Exception as e:
-        await _set_status(source_id, "failed", error=str(e)[:1000])
+        err = str(e)[:1000]
+        if is_final_attempt:
+            await _set_status(source_id, "failed", error=err)
+        else:
+            # Retry pending — record the error but keep the in-progress status so
+            # the pile doesn't show "Failed" mid-retry.
+            await db_execute(
+                "UPDATE source SET error = $error, updated_at = now() WHERE id = $id::uuid",
+                {"id": source_id, "error": err},
+            )
         raise
 
 

@@ -31,8 +31,38 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 # Polling interval when the queue is empty. Trades latency for DB load.
 EMPTY_QUEUE_SLEEP_SECONDS = float(os.getenv("CURIA_WORKER_POLL_SECONDS", "2"))
 
+# Safety-net: soft-hide failed sources older than this, regardless of whether the
+# user ever opened the app (the client clears on cold-start, this is the backstop).
+FAILED_PURGE_DAYS = int(os.getenv("CURIA_FAILED_PURGE_DAYS", "7"))
+PURGE_INTERVAL_SECONDS = 3600  # run the purge at most hourly
+_last_purge_at: float = 0.0
+
 
 _shutdown = asyncio.Event()
+
+
+async def _maybe_purge_failed_sources() -> None:
+    """Throttled backstop: soft-hide failed sources older than FAILED_PURGE_DAYS."""
+    global _last_purge_at
+    now = time.time()
+    if now - _last_purge_at < PURGE_INTERVAL_SECONDS:
+        return
+    _last_purge_at = now
+    from core.db.connection import db_query
+    try:
+        rows = await db_query(
+            f"""
+            UPDATE source SET hidden = true, updated_at = now()
+            WHERE status = 'failed' AND hidden = false
+              AND created_at < now() - interval '{FAILED_PURGE_DAYS} days'
+            RETURNING id
+            """,
+            {},
+        )
+        if rows:
+            logger.info(f"[worker] safety-net purge: soft-hid {len(rows)} stale failed sources")
+    except Exception as e:
+        logger.warning(f"[worker] safety-net purge failed: {e}")
 
 
 def _install_signal_handlers() -> None:
@@ -65,6 +95,10 @@ async def _process_one(worker_id: str) -> bool:
 
     try:
         logger.info(f"[worker] running type={job.type} id={job.id} attempt={job.attempts}/{job.max_attempts}")
+        # Expose retry context to handlers (ephemeral — not persisted to the job row)
+        if isinstance(job.payload, dict):
+            job.payload["__attempt__"] = job.attempts
+            job.payload["__max_attempts__"] = job.max_attempts
         await handler(job.payload)
         await ack(job.id)
         elapsed = time.time() - start
@@ -114,6 +148,9 @@ async def main() -> None:
 
         # Check for prompt file changes each poll cycle
         check_prompt_changes(PROMPTS_DIR)
+
+        # Backstop cleanup of stale failed sources (throttled internally)
+        await _maybe_purge_failed_sources()
 
         if not processed:
             try:
