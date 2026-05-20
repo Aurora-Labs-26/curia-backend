@@ -4,6 +4,11 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-20 · Claude (claude-sonnet-4-6) (3)
+
+### Feature
+- **`scripts/dashboard.py`** — unified real-time pipeline dashboard: persistent header with live counts + active stage spinners, scrolling event log for all components (SOURCE, JOB, CLUSTER, IDEA, EPISODE, LLM); `--llm` flag adds LLM call events, `--llm-output` adds response previews
+
 ## 2026-05-20 · Claude (claude-sonnet-4-6) (2)
 
 ### Feature
