@@ -36,6 +36,37 @@ ARTICLE_CHAR_CAP = 50_000
 
 
 # ---------------------------------------------------------------------------
+# Image extraction
+# ---------------------------------------------------------------------------
+
+
+async def _extract_and_store_images(source_id: str, full_text: str) -> None:
+    try:
+        from core.scraper.images import extract_image_urls, download_and_upload_images
+        images = extract_image_urls(full_text)
+        if not images:
+            return
+        uploaded = await download_and_upload_images(images, source_id)
+        for img in uploaded:
+            await db_execute(
+                """
+                INSERT INTO source_image (source_id, original_url, blob_url, alt_text, content_type, size_bytes)
+                VALUES ($sid::uuid, $orig, $blob, $alt, $ctype, $size)
+                """,
+                {
+                    "sid": source_id,
+                    "orig": img["original_url"],
+                    "blob": img["blob_url"],
+                    "alt": img["alt"],
+                    "ctype": img["content_type"],
+                    "size": img["size_bytes"],
+                },
+            )
+    except Exception as e:
+        logger.warning(f"[ingest] image extraction failed for {source_id}: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Atoms
 # ---------------------------------------------------------------------------
 
@@ -181,6 +212,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
                 """,
                 {"id": source_id, "title": title, "full_text": full_text},
             )
+            await _extract_and_store_images(source_id, full_text)
         else:
             full_text = row["full_text"]
 

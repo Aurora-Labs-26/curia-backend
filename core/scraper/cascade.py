@@ -1,6 +1,8 @@
 """
 core/scraper/cascade.py
-Cascading scraper: validate → HEAD check → trafilatura (free) → firecrawl (credits) → fail.
+Cascading scraper: validate → HEAD check → trafilatura (free) → Jina (free) → firecrawl (credits) → fail.
+Twitter/X goes straight to firecrawl (only thing that works).
+Each tier catches its own errors and falls through to the next.
 """
 
 from __future__ import annotations
@@ -18,11 +20,6 @@ from .validator import validate_url, is_likely_paywalled, is_twitter_url
 
 
 def normalize_url(url: str) -> str:
-    """
-    Rewrite known broken URL patterns to their canonical form before scraping.
-
-    - substack.com/pub/<author>/p/<slug> → <author>.substack.com/p/<slug>
-    """
     m = re.match(r"https?://(?:www\.)?substack\.com/pub/([^/]+)/p/(.+)", url)
     if m:
         author, slug = m.group(1), m.group(2)
@@ -30,6 +27,7 @@ def normalize_url(url: str) -> str:
         logger.info(f"[scraper] normalized substack URL: {url} → {canonical}")
         return canonical
     return url
+
 
 MIN_CONTENT_LENGTH = 200
 
@@ -62,7 +60,6 @@ async def head_check(url: str) -> HeadCheckResult:
 
 
 async def resolve_redirects(url: str) -> str:
-    """Follow redirects and return the final URL. Used to unwrap share/redirect URLs like open.substack.com."""
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.head(url)
@@ -75,14 +72,12 @@ async def resolve_redirects(url: str) -> str:
 
 
 async def scrape(url: str) -> tuple[str, str]:
-    # Normalize known broken URL patterns before anything else
     url = normalize_url(url)
 
     result = validate_url(url)
     if not result.valid:
         raise PermanentError(result.reason)
 
-    # Resolve any redirects (e.g. open.substack.com share links → real article URL)
     url = await resolve_redirects(url)
 
     head = await head_check(url)
@@ -93,19 +88,32 @@ async def scrape(url: str) -> tuple[str, str]:
     is_paywall_domain = is_likely_paywalled(hostname)
     is_twitter = is_twitter_url(url)
 
+    # Twitter/X: only firecrawl works (headless browser needed)
     if is_twitter:
-        logger.info(f"[scraper] Twitter/X URL detected — going straight to firecrawl")
+        logger.info(f"[scraper] Twitter/X URL — going straight to firecrawl")
         return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
+    # Tier 1: trafilatura (free, local, no network dependency)
     try:
         content, title = await _scrape_trafilatura(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] trafilatura success: {len(content)} chars")
             return content.strip(), title or url
-        logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
+        logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying jina...")
     except Exception as e:
-        logger.info(f"[scraper] trafilatura failed ({e}), trying firecrawl...")
+        logger.info(f"[scraper] trafilatura failed ({e}), trying jina...")
 
+    # Tier 2: Jina Reader (free, handles JS-rendered pages)
+    try:
+        content, title = await _scrape_jina(url)
+        if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
+            logger.info(f"[scraper] jina success: {len(content)} chars")
+            return content.strip(), title or url
+        logger.info(f"[scraper] jina returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
+    except Exception as e:
+        logger.info(f"[scraper] jina failed ({e}), trying firecrawl...")
+
+    # Tier 3: Firecrawl (paid credits, headless browser)
     return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
 
@@ -131,7 +139,12 @@ async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str
             "The thread may be deleted, private, or too short to extract."
         )
 
-    raise PermanentError(f"Could not extract content from {url} — tried trafilatura and firecrawl")
+    raise PermanentError(f"Could not extract content from {url} — tried trafilatura, jina, and firecrawl")
+
+
+# ---------------------------------------------------------------------------
+# Tier 1: trafilatura (free, local)
+# ---------------------------------------------------------------------------
 
 
 async def _scrape_trafilatura(url: str) -> tuple[str, str]:
@@ -156,6 +169,38 @@ async def _scrape_trafilatura(url: str) -> tuple[str, str]:
         return content, title
 
     return await asyncio.to_thread(_fetch_and_extract)
+
+
+# ---------------------------------------------------------------------------
+# Tier 2: Jina Reader (free, JS-capable)
+# ---------------------------------------------------------------------------
+
+
+async def _scrape_jina(url: str) -> tuple[str, str]:
+    jina_url = f"https://r.jina.ai/{url}"
+    headers = {"Accept": "application/json"}
+
+    api_key = os.getenv("JINA_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        resp = await client.get(jina_url, headers=headers)
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Jina Reader error {resp.status_code}: {resp.text[:200]}")
+
+    data = resp.json()
+    inner = data.get("data", data)
+    content = inner.get("content", "") or ""
+    title = inner.get("title", "") or ""
+
+    return content, title
+
+
+# ---------------------------------------------------------------------------
+# Tier 3: Firecrawl (paid credits, headless browser)
+# ---------------------------------------------------------------------------
 
 
 async def _scrape_firecrawl(url: str) -> tuple[str, str]:
