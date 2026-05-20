@@ -130,7 +130,12 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
             orig_sid = sid_to_original.get(bare, bare)
             source_embeddings[orig_sid] = list(emb) if hasattr(emb, "__iter__") else emb
 
+    no_embedding = [s["id"] for s in sources if s["id"] not in source_embeddings]
     logger.info(f"[cluster_sources] Got primitive embeddings for {len(source_embeddings)} sources")
+    if no_embedding:
+        id_to_title = {s["id"]: s.get("title", "?") for s in sources}
+        for sid in no_embedding:
+            logger.debug(f"[cluster_sources] NO_EMBEDDING: {id_to_title.get(sid, sid)[:80]}")
 
     # Cosine similarity
     def cosine(a, b):
@@ -191,6 +196,27 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
 
     logger.info(f"[cluster_sources] {len(new_scores)} new pairs computed, {len(scores)//2 - len(new_scores)} from cache")
 
+    # Log all above-threshold pairs so you can see what's connecting
+    id_to_title = {s["id"]: s.get("title", "?") for s in sources}
+    above = sorted(
+        [(a, b, sc) for (a, b), sc in scores.items() if a < b and sc >= SIMILARITY_THRESHOLD],
+        key=lambda x: -x[2],
+    )
+    if above:
+        logger.debug(f"[cluster_sources] {len(above)} pairs above threshold ({SIMILARITY_THRESHOLD}):")
+        for a, b, sc in above:
+            logger.debug(f"  {sc:.3f}  '{id_to_title.get(a, a)[:50]}'  ↔  '{id_to_title.get(b, b)[:50]}'")
+    else:
+        logger.debug(f"[cluster_sources] No pairs above threshold ({SIMILARITY_THRESHOLD}) — all sources will be standalone")
+
+    # Log below-threshold pairs at trace level (high volume — only useful for deep debugging)
+    below = sorted(
+        [(a, b, sc) for (a, b), sc in scores.items() if a < b and sc < SIMILARITY_THRESHOLD],
+        key=lambda x: -x[2],
+    )
+    for a, b, sc in below:
+        logger.trace(f"  {sc:.3f}  BELOW '{id_to_title.get(a, a)[:50]}'  ↔  '{id_to_title.get(b, b)[:50]}'")
+
     def is_clique(members):
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
@@ -227,7 +253,13 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
         if sid not in in_clique:
             clusters.append([sid])
 
-    logger.info(f"[cluster_sources] {len(clusters)} clusters formed")
+    # Log final cluster membership
+    for i, cluster in enumerate(clusters):
+        members = ", ".join(f"'{id_to_title.get(sid, sid)[:40]}'" for sid in cluster)
+        kind = "cluster" if len(cluster) > 1 else "standalone"
+        logger.info(f"[cluster_sources] [{kind}] {members}")
+
+    logger.info(f"[cluster_sources] {len(clusters)} clusters formed ({len([c for c in clusters if len(c) > 1])} multi-source, {len([c for c in clusters if len(c) == 1])} standalone)")
     return {**state, "clusters": clusters}
 
 

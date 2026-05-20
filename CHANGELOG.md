@@ -4,6 +4,16 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-20 · Claude (claude-sonnet-4-6) (2)
+
+### Feature
+Pipeline observability — verbose cluster logging, LLM log tail, terminal test scripts for share and remix flows.
+- **`intelligence/idea_generator.py`** — `cluster_sources` now logs: sources missing primitive embeddings, all above-threshold pairs with scores and titles, below-threshold pairs at TRACE level, final cluster membership with source titles
+- **`core/logging.py`** — terminal log level now controlled by `CURIA_LOG_LEVEL` env var (default INFO; set DEBUG to see cluster scores and LLM outputs in terminal)
+- **`scripts/tail_llm.py`** — new: pretty-prints `logs/llm.log` live; `--outputs` flag shows full LLM response text; `--all` includes historical entries
+- **`scripts/test_share.py`** — new: ingest a URL + enqueue `generate_from_source` from terminal, with format/speaker/length/angle overrides
+- **`scripts/test_remix.py`** — new: trigger a remix on existing source (by URL or source_id), `--list` shows recent sources
+
 ## 2026-05-20 · Claude (claude-sonnet-4-6)
 
 ### Feature
