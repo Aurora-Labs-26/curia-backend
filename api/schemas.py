@@ -102,6 +102,7 @@ class EpisodeSummary(BaseModel):
     outline: Optional[Any] = None
     play_progress: Optional[float] = None
     listened: bool = False
+    last_played_at: Optional[datetime] = None
 
 
 class EpisodeSourceObject(BaseModel):

@@ -185,12 +185,21 @@ def generate_transcript(
 #   CURIA_STITCH_GAP_MS      silence between transcript lines (default 400)
 #
 # Per show profile (studio/shows/profiles.py):
-#   intro_audio_path         pre-rendered WAV/MP3 prepended to the body
-#   outro_audio_path         appended to the body
+#   intro_audio_path         pre-rendered WAV/MP3 crossfaded into the TTS body
+#   outro_audio_path         crossfaded out from the TTS body
 #   music_audio_path         looped + overlaid under the body at music_gain_db
 #
 # All three are optional; behavior with none set matches the pre-existing
 # "speech only, 400 ms gaps" stitcher.
+#
+# Intro/outro crossfade constants — tune by ear, no code changes needed:
+INTRO_FULL_MS     = 8000   # intro plays at full volume for this long
+INTRO_FADE_MS     = 5000   # intro fades out over this long, overlapping TTS start
+INTRO_GAIN_DB     = 4.0    # dB above episode level (intro punches over voice at open)
+OUTRO_FADE_IN_MS  = 5000   # outro fades in under last N ms of TTS
+OUTRO_FULL_MS     = 3000   # outro plays at full volume after TTS ends
+OUTRO_FADE_OUT_MS = 2000   # outro fades to silence
+OUTRO_GAIN_DB     = 0.0    # dB relative to episode level (matched, sits underneath)
 
 
 def synthesize_line_by_speaker(text: str, speaker: str, output_path: str) -> str:
@@ -238,15 +247,27 @@ def _overlay_music(body: "AudioSegment", music: "AudioSegment", gain_db: float) 
     return body.overlay(track)
 
 
-def _derive_display_fields(outline: dict, duration_seconds: int) -> tuple[str, list[dict]]:
-    """Extract description and chapters from the outline dict."""
+def _derive_display_fields(
+    outline: dict, duration_seconds: int, intro_ms: int = 0
+) -> tuple[str, list[dict]]:
+    """Extract description and chapters from the outline dict.
+
+    intro_ms: the number of milliseconds of intro music that precede the first
+    spoken word in the final stitched MP3. Chapter 1 always starts at 0:00
+    (it absorbs the intro visually); all subsequent chapters are shifted right
+    by intro_ms so their scrubber positions match the stitched file.
+    """
     description = outline.get("thread") or outline.get("central_tension") or ""
     segments = outline.get("segments") or []
     duration_minutes = duration_seconds / 60 if duration_seconds else 0
     segment_count = max(1, len(segments))
+    intro_minutes = intro_ms / 60000  # fractional — do NOT round
     chapters = []
     for i, seg in enumerate(segments):
-        start_minute = round(duration_minutes * i / segment_count)
+        # Evenly distribute segments over body duration, then shift by intro offset.
+        # Chapter 1 (i=0) starts at 0:00 regardless — it absorbs the intro music.
+        body_start = duration_minutes * i / segment_count
+        start_minute = body_start if i == 0 else body_start + intro_minutes
         chapters.append({
             "id": f"segment-{seg.get('segment', i + 1)}",
             "title": seg.get("title", ""),
@@ -313,14 +334,41 @@ def synthesize_and_stitch(
         outro = _load_optional_segment(profile.outro_audio_path, "outro")
         music = _load_optional_segment(profile.music_audio_path, "music")
 
+        # intro_offset_ms = how far into the final MP3 the first spoken word lands.
+        # With crossfade: speech starts at INTRO_FULL_MS (not at end of full intro clip).
         intro_offset_ms = 0
+
         if intro is not None:
-            logger.info(f"  prepending intro ({len(intro)/1000:.1f}s)")
-            intro_offset_ms = len(intro)
-            body = intro + body
+            logger.info(f"  crossfading intro ({len(intro)/1000:.1f}s source)")
+            # Gain-match intro to episode level, then boost by INTRO_GAIN_DB
+            episode_dbfs = body.dBFS
+            intro_gain = (episode_dbfs - intro.dBFS + INTRO_GAIN_DB) if intro.dBFS != float("-inf") else 0
+            intro = intro.apply_gain(intro_gain)
+            # Cut: full section + fade section
+            intro_full_clip = intro[:INTRO_FULL_MS]
+            intro_fade_clip = intro[INTRO_FULL_MS: INTRO_FULL_MS + INTRO_FADE_MS].fade_out(INTRO_FADE_MS)
+            # Assemble: full intro + body, then overlay fade zone over TTS start
+            body = intro_full_clip + body
+            body = body.overlay(intro_fade_clip, position=INTRO_FULL_MS)
+            intro_offset_ms = INTRO_FULL_MS  # speech starts here in the final file
+
         if outro is not None:
-            logger.info(f"  appending outro ({len(outro)/1000:.1f}s)")
-            body = body + outro
+            logger.info(f"  crossfading outro ({len(outro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            outro_gain = (episode_dbfs - outro.dBFS + OUTRO_GAIN_DB) if outro.dBFS != float("-inf") else 0
+            outro = outro.apply_gain(outro_gain)
+            # Cut outro clip: fade-in + full + fade-out
+            outro_fade_in  = outro[:OUTRO_FADE_IN_MS].fade_in(OUTRO_FADE_IN_MS)
+            outro_full_clip = outro[OUTRO_FADE_IN_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS]
+            outro_fade_out = outro[OUTRO_FADE_IN_MS + OUTRO_FULL_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS + OUTRO_FADE_OUT_MS].fade_out(OUTRO_FADE_OUT_MS)
+            outro_ready = outro_fade_in + outro_full_clip + outro_fade_out
+            # Outro fade-in starts OUTRO_FADE_IN_MS before TTS ends; tail extends after
+            tts_end_pos = len(body)
+            outro_start_pos = tts_end_pos - OUTRO_FADE_IN_MS
+            tail_ms = OUTRO_FULL_MS + OUTRO_FADE_OUT_MS
+            body = body + AudioSegment.silent(duration=tail_ms)
+            body = body.overlay(outro_ready, position=max(0, outro_start_pos))
+
         if music is not None:
             logger.info(
                 f"  overlaying music ({len(music)/1000:.1f}s loop) "
@@ -402,12 +450,34 @@ def synthesize_and_stitch_v2(
         outro = _load_optional_segment(profile.outro_audio_path, "outro")
         music = _load_optional_segment(profile.music_audio_path, "music")
 
+        intro_offset_ms = 0
+
         if intro is not None:
-            logger.info(f"  prepending intro ({len(intro)/1000:.1f}s)")
-            body = intro + body
+            logger.info(f"  crossfading intro ({len(intro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            intro_gain = (episode_dbfs - intro.dBFS + INTRO_GAIN_DB) if intro.dBFS != float("-inf") else 0
+            intro = intro.apply_gain(intro_gain)
+            intro_full_clip = intro[:INTRO_FULL_MS]
+            intro_fade_clip = intro[INTRO_FULL_MS: INTRO_FULL_MS + INTRO_FADE_MS].fade_out(INTRO_FADE_MS)
+            body = intro_full_clip + body
+            body = body.overlay(intro_fade_clip, position=INTRO_FULL_MS)
+            intro_offset_ms = INTRO_FULL_MS
+
         if outro is not None:
-            logger.info(f"  appending outro ({len(outro)/1000:.1f}s)")
-            body = body + outro
+            logger.info(f"  crossfading outro ({len(outro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            outro_gain = (episode_dbfs - outro.dBFS + OUTRO_GAIN_DB) if outro.dBFS != float("-inf") else 0
+            outro = outro.apply_gain(outro_gain)
+            outro_fade_in   = outro[:OUTRO_FADE_IN_MS].fade_in(OUTRO_FADE_IN_MS)
+            outro_full_clip = outro[OUTRO_FADE_IN_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS]
+            outro_fade_out  = outro[OUTRO_FADE_IN_MS + OUTRO_FULL_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS + OUTRO_FADE_OUT_MS].fade_out(OUTRO_FADE_OUT_MS)
+            outro_ready = outro_fade_in + outro_full_clip + outro_fade_out
+            tts_end_pos   = len(body)
+            outro_start_pos = tts_end_pos - OUTRO_FADE_IN_MS
+            tail_ms = OUTRO_FULL_MS + OUTRO_FADE_OUT_MS
+            body = body + AudioSegment.silent(duration=tail_ms)
+            body = body.overlay(outro_ready, position=max(0, outro_start_pos))
+
         if music is not None:
             logger.info(
                 f"  overlaying music ({len(music)/1000:.1f}s loop) "
@@ -417,8 +487,8 @@ def synthesize_and_stitch_v2(
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s)")
-    return output_path
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), intro_offset={intro_offset_ms}ms")
+    return output_path, intro_offset_ms
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +780,9 @@ async def process_episode(episode_id: str) -> None:
         except Exception:
             pass
 
-        description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0)
+        # Pass intro_ms so chapter startMinutes are offset correctly in the stitched file
+        intro_ms = tts_timings[0]["start_ms"] if tts_timings else 0
+        description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0, intro_ms=intro_ms)
 
         source_uuids = _coerce_source_uuids(source_ids)
         await db_execute(

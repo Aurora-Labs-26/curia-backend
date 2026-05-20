@@ -67,6 +67,10 @@ providers:
 
   # ── Embedding providers ────────────────────────────────────────────────────
   #
+  openai_llm:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+
   openai_embed:
     type: openai
     api_key_env: OPENAI_API_KEY

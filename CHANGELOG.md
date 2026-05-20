@@ -4,6 +4,25 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-20 · Claude (claude-sonnet-4-6)
+
+### Feature
+`last_played_at` column on episode — stamped on every progress update, returned in GET /episodes, powers listening history.
+- **`alembic/versions/0017_episode_last_played_at.py`** — migration adding `last_played_at` (timestamptz, nullable) to episode table
+- **`api/routes/episodes.py`** — UPDATE progress sets `last_played_at = NOW()`; both SELECT queries include the column
+- **`api/schemas.py`** — `EpisodeSummary` exposes `last_played_at: Optional[datetime]`
+
+---
+
+## 2026-05-20 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+Intro/outro crossfade stitching — all timings now describe the final stitched MP3, not the raw TTS body. No frontend changes required.
+- **`studio/generator.py`** — replaced simple intro/outro prepend/append with pydub overlay crossfades (intro: 8s full + 5s fade-out overlapping TTS start; outro: 5s fade-in under TTS end + 3s full + 2s fade-out). Added `INTRO_FULL_MS`, `INTRO_FADE_MS`, `INTRO_GAIN_DB`, `OUTRO_FADE_IN_MS`, `OUTRO_FULL_MS`, `OUTRO_FADE_OUT_MS`, `OUTRO_GAIN_DB` constants. `tts_timings` offset is now `INTRO_FULL_MS` (when speech starts), not total intro clip length. `synthesize_and_stitch_v2` now tracks and returns `intro_offset_ms` (was missing). `_derive_display_fields` accepts `intro_ms` param, removes `round()` on chapter `startMinute`, shifts chapters 2+ by `intro_ms/60000` fractional minutes.
+- **`studio/shows/profiles.py`** — updated docstring to reflect crossfade behaviour (was "prepend/append"). Added `_AUDIO_INTRO` / `_AUDIO_OUTRO` constants pointing to `assets/audio/`; wired into all four show profiles.
+- **`assets/audio/intro.mp3`** — full intro music source file (full-length, backend cuts at stitch time)
+- **`assets/audio/outro.mp3`** — full outro music source file (full-length, backend cuts at stitch time)
+
 ## 2026-05-19 · Claude (claude-sonnet-4-6) (2)
 
 ### Bug Fix
