@@ -1,15 +1,20 @@
-"""GET /me, GET/PUT /me/kb, GET /me/rubric/{task} — current user surface."""
+"""GET /me, GET/PUT /me/kb, GET /me/rubric/{task}, PUT /me/fcm-token — current user surface."""
 
 from fastapi import APIRouter, Depends, HTTPException, Path
+from pydantic import BaseModel
 
 from api.auth import CurrentUser, current_user
 from api.schemas import MeResponse, RubricResponse
-from core.db.connection import db_fetchrow
+from core.db.connection import db_execute, db_fetchrow
 from core.kb import UserKB, load_kb, save_kb
 from optimization.guidelines import get_guidelines
 from optimization.rubrics.generator import generate_judge_prompt_async
 
 router = APIRouter()
+
+
+class FcmTokenRequest(BaseModel):
+    token: str
 
 
 @router.get("/me", response_model=MeResponse)
@@ -42,6 +47,14 @@ async def put_kb(payload: UserKB, user: CurrentUser = Depends(current_user)) -> 
     """
     await save_kb(user.id, payload)
     return payload
+
+
+@router.put("/me/fcm-token", status_code=204)
+async def put_fcm_token(payload: FcmTokenRequest, user: CurrentUser = Depends(current_user)) -> None:
+    await db_execute(
+        "UPDATE users SET fcm_token = $token WHERE id = $id",
+        {"token": payload.token, "id": user.id},
+    )
 
 
 @router.get("/me/rubric/{task}", response_model=RubricResponse)

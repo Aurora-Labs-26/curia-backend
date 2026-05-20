@@ -1,15 +1,15 @@
 """add source_image table for scraped images stored in blob storage
 
-Revision ID: 0021_source_images
-Revises: 0020_source_hidden
+Revision ID: 0023_source_images
+Revises: 0022_user_fcm_token
 Create Date: 2026-05-20
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0021_source_images"
-down_revision = "0020_source_hidden"
+revision = "0023_source_images"
+down_revision = "0022_user_fcm_token"
 branch_labels = None
 depends_on = None
 
