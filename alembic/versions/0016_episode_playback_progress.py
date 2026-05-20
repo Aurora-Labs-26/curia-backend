@@ -15,8 +15,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("episode", sa.Column("play_progress", sa.Float(), nullable=True, server_default=None))
-    op.add_column("episode", sa.Column("listened", sa.Boolean(), nullable=False, server_default="false"))
+    conn = op.get_bind()
+    if not conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns WHERE table_name='episode' AND column_name='play_progress'"
+    )).fetchone():
+        op.add_column("episode", sa.Column("play_progress", sa.Float(), nullable=True, server_default=None))
+    if not conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns WHERE table_name='episode' AND column_name='listened'"
+    )).fetchone():
+        op.add_column("episode", sa.Column("listened", sa.Boolean(), nullable=False, server_default="false"))
 
 
 def downgrade() -> None:

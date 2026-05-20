@@ -175,7 +175,7 @@ Open question: What happens when we connect real sources?
     transcript = generate_transcript(briefing, outline, SHOW_NAME)
 
     # Step 5: Synthesize + stitch
-    output = synthesize_and_stitch(transcript, SHOW_NAME, OUTPUT_PATH)
+    output, _tts_timings = synthesize_and_stitch(transcript, SHOW_NAME, OUTPUT_PATH)
 
     print(f"\nDone. Episode saved to: {output}")
 
