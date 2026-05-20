@@ -4,6 +4,21 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-20 · Claude (claude-sonnet-4-6) (6)
+
+### Feature
+FCM push notifications: device token storage + push on episode ready.
+- **`alembic/versions/0022_user_fcm_token.py`** — adds `fcm_token TEXT` column to `users` table
+- **`api/routes/me.py`** — new `PUT /me/fcm-token` endpoint; saves device token for the current user; 204 response
+- **`worker/handlers/generate_episode.py`** — `_notify_episode_ready()`: after episode generates, looks up user's `fcm_token` and fires FCM push ("Your show is ready"); no-ops silently if token is absent; logs warning on send failure without crashing the job
+
+## 2026-05-20 · Claude (claude-sonnet-4-6) (5)
+
+### Feature
+Per-episode feedback: thumbs up/down + optional note, stored as JSONB on the episode row.
+- **`alembic/versions/0021_episode_feedback.py`** — adds `feedback JSONB` column to episode table
+- **`api/routes/episodes.py`** — new `POST /episodes/{id}/feedback` endpoint; upserts `{ rating, note }` JSON into the column; 204 response
+
 ## 2026-05-20 · Claude (claude-sonnet-4-6) (4)
 
 ### Feature

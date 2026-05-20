@@ -4,12 +4,14 @@ POST /episodes — create episode row + enqueue generation job.
 GET /episodes, GET /episodes/:id, GET /episodes/:id/audio.
 """
 
+import json
 import os
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from api.auth import current_user_id
 from api.schemas import (
@@ -211,6 +213,31 @@ async def update_episode_progress(
             "user_id": user_id,
             "play_progress": max(0.0, min(1.0, play_progress)),
             "listened": listened,
+        },
+    )
+
+
+class FeedbackRequest(BaseModel):
+    rating: str
+    note: str | None = None
+
+
+@router.post("/episodes/{episode_id}/feedback", status_code=204)
+async def submit_episode_feedback(
+    episode_id: uuid.UUID,
+    body: FeedbackRequest,
+    user_id: str = Depends(current_user_id),
+) -> None:
+    await db_execute(
+        """
+        UPDATE episode
+        SET feedback = $feedback
+        WHERE id = $id::uuid AND user_id = $user_id
+        """,
+        {
+            "id": str(episode_id),
+            "user_id": user_id,
+            "feedback": json.dumps({"rating": body.rating, "note": body.note}),
         },
     )
 
