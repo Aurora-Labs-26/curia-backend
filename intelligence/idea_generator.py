@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from loguru import logger
 
-from core.db.connection import db_execute, db_query
+from core.db.connection import db_execute, db_fetchrow, db_query
 from core.embeddings import get_embedding
 from core.kb import UserKB, load_kb
 from core.prompts.idea_evaluation import (
@@ -465,7 +465,25 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
 
     logger.info(f"[save_ideas] Saving {len(ideas)} ideas")
 
+    from core.angle.validator import validate_angle
+
+    source_summaries = []
+    for src_id in (state.get("source_ids") or []):
+        row = await db_fetchrow(
+            "SELECT content FROM source_insight WHERE source_id = $id::uuid AND insight_type = 'summary'",
+            {"id": str(src_id)},
+        )
+        if row and row.get("content"):
+            source_summaries.append(row["content"])
+
     for idea in ideas:
+        angle = idea.get("angle", "")
+        if angle:
+            result = await validate_angle(angle, source_summaries=source_summaries or None)
+            if not result.valid:
+                logger.info(f"[save_ideas] DROP (angle invalid): {angle[:80]} — {result.reason}")
+                continue
+
         # Coerce source_ids to UUIDs (uuid[] column)
         from uuid import UUID
         raw_ids = idea.get("source_ids", []) or []

@@ -14,7 +14,7 @@ already applied.
 from alembic import op
 
 revision = "0013_source_similarity"
-down_revision = "0010_embedding_1536"
+down_revision = "0012_episode_display_fields"
 branch_labels = None
 depends_on = None
 
