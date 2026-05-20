@@ -404,7 +404,7 @@ def synthesize_and_stitch_v2(
     show_name: str,
     output_path: str,
     speaker_override: str | None = None,
-) -> str:
+) -> tuple[str, int]:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
     makes far fewer TTS calls, and produces more natural prosody.
