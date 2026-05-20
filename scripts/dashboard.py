@@ -122,8 +122,12 @@ def fmt_payload(payload_str) -> str:
 
 # ── Event log line builder ────────────────────────────────────────────────────
 
+def strip_ansi(s: str) -> str:
+    import re
+    return re.sub(r'\033\[[0-9;]*m', '', s)
+
 def make_line(component: str, lines: list[str]) -> list[str]:
-    """Return formatted output lines for one event."""
+    """Return formatted output lines for one event, truncated to terminal width."""
     c, label = COMP.get(component, (GRY, f"  {component:<7}"))
     w = term_width()
     out = []
@@ -132,7 +136,14 @@ def make_line(component: str, lines: list[str]) -> list[str]:
             prefix = f"{GRY}{ts()}{R}  {B}{c}{label}{R}  "
         else:
             prefix = f"           {D}│{R}  "
-        out.append(prefix + line)
+        full = prefix + line
+        # Truncate based on visible length (strip ANSI for measurement)
+        visible = strip_ansi(full)
+        if len(visible) > w:
+            # Trim the content part, keeping prefix intact
+            over = len(visible) - w
+            full = prefix + line[:max(0, len(strip_ansi(line)) - over - 1)] + f"{GRY}…{R}"
+        out.append(full)
     return out
 
 # ── Header ───────────────────────────────────────────────────────────────────
@@ -198,15 +209,16 @@ class LLMLogReader:
                 rec = json.loads(line)
             except Exception:
                 continue
-            msg = rec.get("text", "")
+            try:
+                msg = rec["record"]["message"]
+            except Exception:
+                continue
             if not msg:
-                try:
-                    msg = rec["record"]["message"]
-                except Exception:
-                    continue
+                continue
 
             if "LLM_CALL_START" in msg:
-                parts = dict(p.split("=", 1) for p in msg.split("|")[1].strip().split() if "=" in p)
+                # format: "LLM_CALL_START | task=outline show=sharp-take briefing_len=1234"
+                parts = dict(p.split("=", 1) for p in msg.split(" | ", 1)[-1].split() if "=" in p)
                 task  = parts.get("task", "?")
                 show  = parts.get("show", "")
                 blen  = parts.get("briefing_len", "?")
@@ -215,7 +227,7 @@ class LLMLogReader:
                 ]))
 
             elif "LLM_CALL_END" in msg:
-                parts = dict(p.split("=", 1) for p in msg.split("|")[1].strip().split() if "=" in p)
+                parts = dict(p.split("=", 1) for p in msg.split(" | ", 1)[-1].split() if "=" in p)
                 dur   = parts.get("duration", "?")
                 olen  = parts.get("output_len", "?")
                 events.append(make_line("LLM", [
@@ -223,7 +235,8 @@ class LLMLogReader:
                 ]))
 
             elif "LLM_OUTPUT" in msg and self.show_output:
-                segs = msg.split("|", 2)
+                # format: "LLM_OUTPUT | task=outline | <json text>"
+                segs = msg.split(" | ", 2)
                 text = segs[2].strip() if len(segs) > 2 else msg
                 preview = trunc(text.replace("\n", " "), term_width() - 20)
                 events.append(make_line("LLM", [
