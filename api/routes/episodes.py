@@ -5,12 +5,11 @@ GET /episodes, GET /episodes/:id, GET /episodes/:id/audio.
 """
 
 import json
-import os
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.auth import current_user_id
@@ -157,7 +156,8 @@ async def get_episode(
         SELECT id, show_name, title, status, created_at, error,
                transcript, outline, audio_path, source_ids, editorial_direction,
                quality_score, quality_feedback, quality_violations, regenerated,
-               length_minutes, speaker_override, tts_timings
+               length_minutes, speaker_override, tts_timings,
+               play_progress, listened, last_played_at
         FROM episode
         WHERE id = $id::uuid AND user_id = $user_id
         """,
@@ -234,15 +234,20 @@ async def submit_episode_feedback(
     body: FeedbackRequest,
     user_id: str = Depends(current_user_id),
 ) -> None:
+    row = await db_fetchrow(
+        "SELECT id FROM episode WHERE id = $id::uuid AND user_id = $user_id",
+        {"id": str(episode_id), "user_id": user_id},
+    )
+    if not row:
+        raise HTTPException(404, "episode not found")
     await db_execute(
         """
         UPDATE episode
         SET feedback = $feedback
-        WHERE id = $id::uuid AND user_id = $user_id
+        WHERE id = $id::uuid
         """,
         {
             "id": str(episode_id),
-            "user_id": user_id,
             "feedback": json.dumps({"rating": body.rating, "note": body.note}),
         },
     )
@@ -250,7 +255,9 @@ async def submit_episode_feedback(
 
 @router.get("/episodes/{episode_id}/audio")
 async def get_episode_audio(
-    episode_id: uuid.UUID, user_id: str = Depends(current_user_id)
+    episode_id: uuid.UUID,
+    request: Request,
+    user_id: str = Depends(current_user_id),
 ):
     row = await db_fetchrow(
         """
@@ -266,9 +273,57 @@ async def get_episode_audio(
     audio_path = row.get("audio_path")
     if not audio_path or not Path(audio_path).exists():
         raise HTTPException(410, "audio file missing on disk")
+
+    file_size = Path(audio_path).stat().st_size
     filename = f"{row.get('title') or 'episode'}.mp3"
-    return FileResponse(
-        path=audio_path,
+    range_header = request.headers.get("range")
+
+    def _iter_file(path: str, start: int, end: int, chunk: int = 1024 * 64):
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                data = f.read(min(chunk, remaining))
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+
+    if range_header:
+        try:
+            range_val = range_header.strip().replace("bytes=", "")
+            range_start, range_end = range_val.split("-")
+            start = int(range_start)
+            end = int(range_end) if range_end else file_size - 1
+        except (ValueError, AttributeError):
+            raise HTTPException(416, "invalid Range header")
+
+        end = min(end, file_size - 1)
+        if start > end or start < 0:
+            raise HTTPException(416, "range not satisfiable")
+
+        content_length = end - start + 1
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Disposition": f'inline; filename="{filename}"',
+        }
+        return StreamingResponse(
+            _iter_file(audio_path, start, end),
+            status_code=206,
+            media_type="audio/mpeg",
+            headers=headers,
+        )
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(file_size),
+        "Content-Disposition": f'inline; filename="{filename}"',
+    }
+    return StreamingResponse(
+        _iter_file(audio_path, 0, file_size - 1),
+        status_code=200,
         media_type="audio/mpeg",
-        filename=filename,
+        headers=headers,
     )

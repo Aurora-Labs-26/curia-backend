@@ -59,7 +59,7 @@ async def put_fcm_token(payload: FcmTokenRequest, user: CurrentUser = Depends(cu
 
 @router.get("/me/rubric/{task}", response_model=RubricResponse)
 async def get_my_rubric(
-    task: str = Path(..., regex="^(transcript|outline)$"),
+    task: str = Path(..., pattern="^(transcript|outline)$"),
     user: CurrentUser = Depends(current_user),
 ) -> RubricResponse:
     """

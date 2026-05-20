@@ -467,18 +467,21 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
 
     from core.angle.validator import validate_angle
 
-    source_summaries = []
-    for src_id in (state.get("source_ids") or []):
-        row = await db_fetchrow(
-            "SELECT content FROM source_insight WHERE source_id = $id::uuid AND insight_type = 'summary'",
-            {"id": str(src_id)},
-        )
-        if row and row.get("content"):
-            source_summaries.append(row["content"])
-
+    saved_ideas = []
     for idea in ideas:
         angle = idea.get("angle", "")
         if angle:
+            idea_source_ids = idea.get("source_ids", []) or []
+            source_summaries = []
+            for src_id in idea_source_ids:
+                sid_str = str(src_id).replace("source:", "")
+                row = await db_fetchrow(
+                    "SELECT content FROM source_insight WHERE source_id = $id::uuid AND insight_type = 'summary'",
+                    {"id": sid_str},
+                )
+                if row and row.get("content"):
+                    source_summaries.append(row["content"])
+
             result = await validate_angle(angle, source_summaries=source_summaries or None)
             if not result.valid:
                 logger.info(f"[save_ideas] DROP (angle invalid): {angle[:80]} — {result.reason}")
