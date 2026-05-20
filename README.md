@@ -15,10 +15,10 @@ You save articles. Curia reads them, finds thematic connections, generates an ep
 
 ## What it does
 
-1. **Ingest** — scrape a URL, extract full text, run 7 Claude transformations (summary, metadata, key_insights, human_stakes, core_tensions, counterpoints, examples), embed chunks via Voyage, store in Postgres + pgvector.
+1. **Ingest** — scrape a URL via cascading scraper (trafilatura → Jina Reader → Firecrawl), extract full text, extract and upload article images to blob storage (S3/R2/local), run 7 Claude transformations (summary, metadata, key_insights, human_stakes, core_tensions, counterpoints, examples), embed chunks via Voyage, store in Postgres + pgvector. Twitter/X threads route straight to Firecrawl.
 2. **Cluster** — embed `core_tensions + counterpoints` per source, find cliques of articles with cosine similarity ≥ 0.70.
 3. **Ideate** — for each cluster (and standalones), Claude generates a show idea: angle + format. KB-aware: skips ideas matching your dislikes; biases toward your active interests.
-4. **Generate** — selector picks sources for the episode (KB-derived editorial direction when none given), builds a briefing packet (with KB-derived listener context), Haiku writes an outline, Sonnet writes a transcript shaped by your tone/length/ambiguity preferences.
+4. **Generate** — selector picks sources for the episode (KB-derived editorial direction when none given), validates the editorial angle (rule-based + LLM grounding check), builds a briefing packet (with KB-derived listener context), Haiku writes an outline, Sonnet writes a transcript shaped by your tone/length/ambiguity preferences.
 5. **Judge** — an LLM-as-judge scores the transcript against a rubric rendered from `(company guidelines + your KB)`. If it scores below threshold, the transcript is regenerated once.
 6. **Synthesize** — transcript lines are merged into paragraphs (same-speaker runs), split into TTS-sized segments, rendered through one of seven TTS providers (config-selectable, native async), stitched with gaps, optionally prepended with an intro / appended with an outro / overlaid with music, exported as MP3. Also supports real-time streaming via WebSocket.
 7. **Optimize** — QA can curate trainsets, edit guidelines, run GEPA against the rubric metric, and promote optimized prompt artifacts.
@@ -53,7 +53,10 @@ External APIs (real, not local):
   · LLMs: Anthropic, OpenAI, Gemini, Grok, vLLM, OpenRouter — required (at least one)
   · Embeddings: Voyage, OpenAI, Cohere, Jina, Mistral, Gemini — optional (zero-vector stub if missing)
   · TTS: ElevenLabs, OpenAI, Cartesia, Smallest.ai, edge_tts, Google Cloud — optional, swap via config
+  · Scraping: trafilatura (free) → Jina Reader (free) → Firecrawl (credits) — cascading fallback
+  · Storage: S3/R2/MinIO for article images — optional (local filesystem fallback)
   · Auth: Firebase (optional — falls back to legacy bearer tokens)
+  · Push: Firebase Cloud Messaging — optional (episode-ready notifications)
 ```
 
 Two run modes from one Docker image (`Dockerfile`): `uvicorn api.main:app` (api) and `python -m worker.main` (worker). Postgres runs as the third compose service.
@@ -147,14 +150,21 @@ GET    /me/rubric/{task}             render the judge prompt scoring my outputs
 
 POST   /sources                      idempotent on (user_id, url) — returns existing id if dup
 GET    /sources      GET /sources/:id      DELETE /sources/:id
+POST   /sources/clear-failed         soft-hide all failed sources for current user
 
 POST   /ideas/generate
 GET    /ideas        GET /ideas/:id
 
 POST   /episodes                     {show_name, show_idea_id?, editorial_direction?, speaker?, length_minutes?}
-GET    /episodes     GET /episodes/:id      GET /episodes/:id/audio
+GET    /episodes     GET /episodes/:id      GET /episodes/:id/audio (Range supported)
+PUT    /episodes/:id/progress        save playback position (play_progress, listened)
+POST   /episodes/:id/feedback        thumbs up/down + optional note (JSONB)
+
+POST   /generate-from-source         ingest URL → generate episode in one call
 
 GET    /jobs/:id                     poll job status after async operations
+
+PUT    /me/fcm-token                 save device push token for FCM notifications
 
 # Streaming
 WS     /ws/episodes/:id/stream?token=ck_...    real-time audio streaming via WebSocket
@@ -292,7 +302,8 @@ curia/
 │   └── handlers/
 │       ├── ingest.py
 │       ├── generate_ideas.py
-│       ├── generate_episode.py
+│       ├── generate_episode.py    (+ FCM push on completion)
+│       ├── generate_from_source.py  ingest → ideas → episode in one job
 │       └── optimization.py
 │
 ├── core/
@@ -316,6 +327,14 @@ curia/
 │   │   ├── outline.py            episode outline
 │   │   ├── transcript.py         episode transcript
 │   │   └── loader.py             file-based prompt override (prompts/*.txt)
+│   ├── angle/                 editorial direction validation
+│   │   └── validator.py           rule-based (gibberish/injection/code) + LLM grounding
+│   ├── scraper/               cascading URL scraper
+│   │   ├── validator.py           regex URL validation (video, shopping, etc.)
+│   │   ├── cascade.py             trafilatura → Jina → Firecrawl → fail
+│   │   └── images.py              extract + download article images
+│   ├── storage/               blob storage abstraction
+│   │   └── blob.py                S3-compatible (AWS, R2, MinIO) + local fallback
 │   ├── ingest.py              process_source(source_id) — worker entry
 │   ├── embeddings.py          delegates to llm_config.resolve.embedder()
 │   ├── tts.py                 sync + async + bytes facades
