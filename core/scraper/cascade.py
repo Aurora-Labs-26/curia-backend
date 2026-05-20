@@ -1,23 +1,35 @@
 """
 core/scraper/cascade.py
-Cascading scraper: validate → HEAD check → trafilatura (free) → firecrawl (credits) → fail.
+Cascading scraper: validate → HEAD check → trafilatura (free) → Jina (free) → firecrawl (credits) → fail.
+Twitter/X goes straight to firecrawl (only thing that works).
+Each tier catches its own errors and falls through to the next.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
 
+from core.errors import PermanentError
 from .validator import validate_url, is_likely_paywalled, is_twitter_url
 
+
+def normalize_url(url: str) -> str:
+    m = re.match(r"https?://(?:www\.)?substack\.com/pub/([^/]+)/p/(.+)", url)
+    if m:
+        author, slug = m.group(1), m.group(2)
+        canonical = f"https://{author}.substack.com/p/{slug}"
+        logger.info(f"[scraper] normalized substack URL: {url} → {canonical}")
+        return canonical
+    return url
+
+
 MIN_CONTENT_LENGTH = 200
-
-
-# ── HEAD check ────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -28,7 +40,6 @@ class HeadCheckResult:
 
 
 async def head_check(url: str) -> HeadCheckResult:
-    """Quick HEAD request to catch 404/403/5xx before wasting scrape credits."""
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.head(url)
@@ -43,56 +54,70 @@ async def head_check(url: str) -> HeadCheckResult:
         return HeadCheckResult(ok=True, status_code=resp.status_code)
 
     except httpx.TimeoutException:
-        # Don't block on slow sites — let the scraper try
         return HeadCheckResult(ok=True, status_code=0, reason="HEAD timeout — proceeding to scrape")
     except Exception as e:
-        # Network errors, DNS failures, etc. — let scraper try
         return HeadCheckResult(ok=True, status_code=0, reason=f"HEAD check failed: {e}")
 
 
-# ── Main cascade ──────────────────────────────────────────────────────────────
+async def resolve_redirects(url: str) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.head(url)
+            final = str(resp.url)
+            if final != url:
+                logger.info(f"[scraper] redirect {url} → {final}")
+            return final
+    except Exception:
+        return url
 
 
 async def scrape(url: str) -> tuple[str, str]:
-    """
-    Scrape a URL using cascading fallbacks. Returns (content, title).
-    Raises ValueError with a clear, user-facing reason on failure.
-    """
-    # Step 0: Regex validation
+    url = normalize_url(url)
+
     result = validate_url(url)
     if not result.valid:
-        raise ValueError(result.reason)
+        raise PermanentError(result.reason)
 
-    # Step 1: HEAD check (catch 404/403/5xx early)
+    url = await resolve_redirects(url)
+
     head = await head_check(url)
     if not head.ok:
-        raise ValueError(head.reason)
+        raise PermanentError(head.reason)
 
     hostname = (urlparse(url).hostname or "").lower()
     is_paywall_domain = is_likely_paywalled(hostname)
     is_twitter = is_twitter_url(url)
 
+    # Twitter/X: only firecrawl works (headless browser needed)
     if is_twitter:
-        logger.info(f"[scraper] Twitter/X URL detected — going straight to firecrawl")
-        # Twitter needs JS rendering, skip trafilatura
+        logger.info(f"[scraper] Twitter/X URL — going straight to firecrawl")
         return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
-    # Step 2: Trafilatura (free, fast, no JS)
+    # Tier 1: trafilatura (free, local, no network dependency)
     try:
         content, title = await _scrape_trafilatura(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] trafilatura success: {len(content)} chars")
             return content.strip(), title or url
-        logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
+        logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying jina...")
     except Exception as e:
-        logger.info(f"[scraper] trafilatura failed ({e}), trying firecrawl...")
+        logger.info(f"[scraper] trafilatura failed ({e}), trying jina...")
 
-    # Step 3: Firecrawl (uses credits)
+    # Tier 2: Jina Reader (free, handles JS-rendered pages)
+    try:
+        content, title = await _scrape_jina(url)
+        if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
+            logger.info(f"[scraper] jina success: {len(content)} chars")
+            return content.strip(), title or url
+        logger.info(f"[scraper] jina returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
+    except Exception as e:
+        logger.info(f"[scraper] jina failed ({e}), trying firecrawl...")
+
+    # Tier 3: Firecrawl (paid credits, headless browser)
     return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
 
 async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str]:
-    """Try firecrawl, then fail with a specific error message."""
     try:
         content, title = await _scrape_firecrawl(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
@@ -102,27 +127,27 @@ async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str
     except Exception as e:
         logger.warning(f"[scraper] firecrawl failed: {e}")
 
-    # Build a specific error message
     if is_paywall_domain:
-        raise ValueError(
-            f"Could not extract content — this article is likely behind a paywall. "
-            f"Try a non-paywalled source or check if the article has a free version."
+        raise PermanentError(
+            "Could not extract content — this article is likely behind a paywall. "
+            "Try a non-paywalled source or check if the article has a free version."
         )
 
     if is_twitter_url(url):
-        raise ValueError(
-            f"Could not extract this Twitter/X thread. "
-            f"The thread may be deleted, private, or too short to extract."
+        raise PermanentError(
+            "Could not extract this Twitter/X thread. "
+            "The thread may be deleted, private, or too short to extract."
         )
 
-    raise ValueError(f"Could not extract content from {url} — tried trafilatura and firecrawl")
+    raise PermanentError(f"Could not extract content from {url} — tried trafilatura, jina, and firecrawl")
 
 
-# ── Scrapers ──────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Tier 1: trafilatura (free, local)
+# ---------------------------------------------------------------------------
 
 
 async def _scrape_trafilatura(url: str) -> tuple[str, str]:
-    """Free, fast, no JS rendering. Works for static blogs and articles."""
     import asyncio
     import trafilatura
 
@@ -146,8 +171,39 @@ async def _scrape_trafilatura(url: str) -> tuple[str, str]:
     return await asyncio.to_thread(_fetch_and_extract)
 
 
+# ---------------------------------------------------------------------------
+# Tier 2: Jina Reader (free, JS-capable)
+# ---------------------------------------------------------------------------
+
+
+async def _scrape_jina(url: str) -> tuple[str, str]:
+    jina_url = f"https://r.jina.ai/{url}"
+    headers = {"Accept": "application/json"}
+
+    api_key = os.getenv("JINA_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        resp = await client.get(jina_url, headers=headers)
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Jina Reader error {resp.status_code}: {resp.text[:200]}")
+
+    data = resp.json()
+    inner = data.get("data", data)
+    content = inner.get("content", "") or ""
+    title = inner.get("title", "") or ""
+
+    return content, title
+
+
+# ---------------------------------------------------------------------------
+# Tier 3: Firecrawl (paid credits, headless browser)
+# ---------------------------------------------------------------------------
+
+
 async def _scrape_firecrawl(url: str) -> tuple[str, str]:
-    """Firecrawl API — full browser rendering, handles JS + paywalls."""
     api_key = os.getenv("FIRECRAWL_API_KEY")
     if not api_key:
         raise RuntimeError("FIRECRAWL_API_KEY not set — cannot use firecrawl fallback")

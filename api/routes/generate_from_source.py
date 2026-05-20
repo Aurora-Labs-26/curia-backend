@@ -66,6 +66,22 @@ async def generate_from_source(
         except ValueError as exc:
             raise HTTPException(422, str(exc))
 
+    existing_job = await db_fetchrow(
+        """
+        SELECT id
+        FROM jobs
+        WHERE type = 'generate_from_source'
+          AND status IN ('queued', 'running')
+          AND user_id = $user_id
+          AND payload->>'source_id' = $source_id
+        ORDER BY created_at ASC
+        LIMIT 1
+        """,
+        {"user_id": user_id, "source_id": str(req.source_id)},
+    )
+    if existing_job:
+        return GenerateFromSourceResponse(job_id=uuid.UUID(str(existing_job["id"])))
+
     job_id = await enqueue(
         type="generate_from_source",
         payload={

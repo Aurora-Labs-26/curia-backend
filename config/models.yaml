@@ -67,10 +67,14 @@ providers:
 
   # ── Embedding providers ────────────────────────────────────────────────────
   #
-  # openai_embed:
-  #   type: openai
-  #   api_key_env: OPENAI_API_KEY
-  #   base_url: https://api.openai.com/v1
+  openai_llm:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+
+  openai_embed:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
   #
   # cohere_embed:
   #   type: cohere
@@ -132,6 +136,22 @@ models:
   sonnet-4-6:
     provider: anthropic
     model_id: claude-sonnet-4-6
+    kind: llm
+    defaults:
+      max_tokens: 8192
+      temperature: 0.9
+
+  gpt-4o-mini:
+    provider: openai_llm
+    model_id: gpt-4o-mini
+    kind: llm
+    defaults:
+      max_tokens: 4096
+      temperature: 0.7
+
+  gpt-4o:
+    provider: openai_llm
+    model_id: gpt-4o
     kind: llm
     defaults:
       max_tokens: 8192
@@ -216,11 +236,11 @@ models:
 
   # ── Additional embedding model aliases ─────────────────────────────────────
   #
-  # text-embedding-3-small:
-  #   provider: openai_embed
-  #   model_id: text-embedding-3-small
-  #   kind: embedding
-  #   dimension: 1536
+  text-embedding-3-small:
+    provider: openai_embed
+    model_id: text-embedding-3-small
+    kind: embedding
+    dimension: 1536
   #
   # text-embedding-3-large:
   #   provider: openai_embed
@@ -321,7 +341,7 @@ bindings:
     outline:    haiku-4-5
     transcript: sonnet-4-6
 
-    embedding:  voyage-3
+    embedding:  text-embedding-3-small
 
     # Future-reserved — these are noted now so the YAML is forward-compatible
     judge:              sonnet-4-6
@@ -356,13 +376,13 @@ bindings:
   speaker:
     kenji:
       model: smallest-lightning
-      voice_id: emily
+      voice_id: james
     arjun:
       model: smallest-lightning
       voice_id: george
     emeka:
       model: smallest-lightning
-      voice_id: james
+      voice_id: emily
 
   # ── Example: switching providers ──────────────────────────────────────────
   # Uncomment provider + model alias above, then override bindings here.

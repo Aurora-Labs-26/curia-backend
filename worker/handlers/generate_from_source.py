@@ -86,14 +86,15 @@ async def _create_episode_and_enqueue(
 
     episode_id = str(_uuid.uuid4())
     idea_id = str(idea_row.get("id")) if idea_row.get("id") else None
+    source_ids = idea_row.get("source_ids") or []
     await db_execute(
         """
         INSERT INTO episode
             (id, user_id, show_name, show_idea_id, editorial_direction,
-             length_minutes, speaker_override, status)
+             length_minutes, speaker_override, source_ids, status)
         VALUES
             ($id::uuid, $user_id, $show, $idea_id::uuid, $direction,
-             $length_minutes, $speaker_override, 'queued')
+             $length_minutes, $speaker_override, $source_ids, 'queued')
         """,
         {
             "id": episode_id,
@@ -103,6 +104,7 @@ async def _create_episode_and_enqueue(
             "direction": editorial_direction,
             "length_minutes": length_minutes,
             "speaker_override": speaker,
+            "source_ids": source_ids,
         },
     )
     if idea_id:
@@ -179,7 +181,7 @@ async def _run_standalone(
         },
     )
 
-    idea_row = {"id": idea_id, "angle": angle, "format": fmt}
+    idea_row = {"id": idea_id, "angle": angle, "format": fmt, "source_ids": [source_uuid]}
     await _create_episode_and_enqueue(
         user_id=user_id,
         idea_row=idea_row,

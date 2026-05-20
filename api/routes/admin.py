@@ -111,7 +111,7 @@ async def get_user_kb(
 )
 async def get_user_rubric(
     target_user_id: str,
-    task: str = Path(..., regex="^(transcript|outline)$"),
+    task: str = Path(..., pattern="^(transcript|outline)$"),
     qa: CurrentUser = Depends(qa_required),
 ) -> RubricResponse:
     """

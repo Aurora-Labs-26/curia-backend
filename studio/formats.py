@@ -183,6 +183,25 @@ def resolve_format_name(name: str) -> str:
     raise ValueError(f"Unknown format: '{name}'. Valid values: {all_valid}")
 
 
+_SLUG_TO_BACKEND: dict[str, str] = {
+    "slow-burn":    "narrative_drift",
+    "sharp-take":   "clarity_engine",
+    "live-wire":    "momentum_loop",
+    "open-verdict": "exploration_engine",
+}
+
+
+def resolve_format_name(name: str) -> str:
+    """Accept either a frontend slug (e.g. 'sharp-take') or a backend name
+    (e.g. 'clarity_engine') and return the canonical backend name.
+    Raises ValueError for unknown values."""
+    if name in FORMATS:
+        return name
+    if name in _SLUG_TO_BACKEND:
+        return _SLUG_TO_BACKEND[name]
+    raise ValueError(f"Unknown format: '{name}'. Available slugs: {list(_SLUG_TO_BACKEND)} or backend names: {list(FORMATS)}")
+
+
 def get_format(name: str) -> FormatConfig:
     canonical = resolve_format_name(name)
     return FORMATS[canonical]

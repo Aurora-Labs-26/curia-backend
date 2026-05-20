@@ -38,9 +38,11 @@ def setup_logging(service: str = "api") -> None:
     logger.remove()
 
     # Terminal -- human readable
+    # Set CURIA_LOG_LEVEL=DEBUG to see cluster pair scores, LLM outputs, etc.
+    terminal_level = os.getenv("CURIA_LOG_LEVEL", "INFO").upper()
     logger.add(
         sys.stderr,
-        level="INFO",
+        level=terminal_level,
         format=(
             "<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | "
             "<cyan>{name}</cyan>:<cyan>{function}</cyan> | {message}"

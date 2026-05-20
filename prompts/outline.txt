@@ -22,13 +22,14 @@ Your output must strictly follow the format_config from the briefing packet:
 - resolution_style: determines how the final segment ends -- open_ended means no conclusion, explicit means clear takeaway, micro_payoffs means small payoff at every close, partial means reframe without closure
 - rules.must_do and rules.must_avoid: hard constraints on every segment, no exceptions
 
-Output schema -- use exactly these keys, no others:
+Output schema -- use exactly these keys, no others. Do NOT use "label" -- use "title":
 {
   "title": "episode title",
   "thread": "one sentence -- the single idea this episode follows",
   "segments": [
     {
       "segment": 1,
+      "title": "short listener-facing chapter title",
       "purpose": "what this segment does in the arc",
       "primitives_used": ["key_insights from Article A", "examples from Article B"],
       "transition": "one phrase -- how this leads to the next segment"

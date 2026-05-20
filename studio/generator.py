@@ -28,7 +28,7 @@ sys.path.insert(0, str(CURIA_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv(dotenv_path=CURIA_ROOT / ".env")
 
-from shows.profiles import SHOW_PROFILES
+from shows.profiles import SHOW_PROFILES, SPEAKER_PROFILES
 from briefing_builder import build_briefing_packet, briefing_packet_to_str
 from intelligence.selector import select_episode_sources, get_source_insights
 from core.db.connection import db_execute, db_fetchrow, db_query
@@ -37,6 +37,7 @@ from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
 from core.prompts.transcript import generate_transcript as _transcript_module
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
+from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
 from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
 from optimization.rubrics.judge import judge as _rubric_judge
 
@@ -79,14 +80,14 @@ def generate_outline(briefing: str, show_name: str) -> dict:
     try:
         outline = json.loads(raw)
         # Strip unknown keys from segments to avoid downstream issues
-        allowed_segment_keys = {"segment", "purpose", "primitives_used", "transition"}
+        allowed_segment_keys = {"segment", "title", "purpose", "primitives_used", "transition"}
         for seg in outline.get("segments", []):
             for k in list(seg.keys()):
                 if k not in allowed_segment_keys:
                     del seg[k]
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Outline JSON parse failed ({e}), raw response:\n{raw[:300]}")
-        outline = {"title": show_name, "thread": "Follow the material.", "segments": [{"segment": i+1, "purpose": f"Segment {i+1}", "primitives_used": [], "transition": ""} for i in range(8)]}
+        outline = {"title": show_name, "thread": "Follow the material.", "segments": [{"segment": i+1, "title": f"Segment {i+1}", "purpose": f"Segment {i+1}", "primitives_used": [], "transition": ""} for i in range(8)]}
     logger.info(f"Outline: '{outline.get('title', 'untitled')}' — {len(outline.get('segments', []))} segments")
     return outline
 
@@ -125,8 +126,6 @@ def generate_transcript(
     user_kb: UserKB | None = None,
     speaker_override: str | None = None,
 ) -> list[dict]:
-    from studio.shows.profiles import SPEAKER_PROFILES
-
     profile = SHOW_PROFILES[show_name]
     import time as _time
     llm_log = logger.bind(log_type="llm")
@@ -186,12 +185,21 @@ def generate_transcript(
 #   CURIA_STITCH_GAP_MS      silence between transcript lines (default 400)
 #
 # Per show profile (studio/shows/profiles.py):
-#   intro_audio_path         pre-rendered WAV/MP3 prepended to the body
-#   outro_audio_path         appended to the body
+#   intro_audio_path         pre-rendered WAV/MP3 crossfaded into the TTS body
+#   outro_audio_path         crossfaded out from the TTS body
 #   music_audio_path         looped + overlaid under the body at music_gain_db
 #
 # All three are optional; behavior with none set matches the pre-existing
 # "speech only, 400 ms gaps" stitcher.
+#
+# Intro/outro crossfade constants — tune by ear, no code changes needed:
+INTRO_FULL_MS     = 8000   # intro plays at full volume for this long
+INTRO_FADE_MS     = 5000   # intro fades out over this long, overlapping TTS start
+INTRO_GAIN_DB     = 4.0    # dB above episode level (intro punches over voice at open)
+OUTRO_FADE_IN_MS  = 5000   # outro fades in under last N ms of TTS
+OUTRO_FULL_MS     = 3000   # outro plays at full volume after TTS ends
+OUTRO_FADE_OUT_MS = 2000   # outro fades to silence
+OUTRO_GAIN_DB     = 0.0    # dB relative to episode level (matched, sits underneath)
 
 
 def synthesize_line_by_speaker(text: str, speaker: str, output_path: str) -> str:
@@ -200,6 +208,16 @@ def synthesize_line_by_speaker(text: str, speaker: str, output_path: str) -> str
     TTS provider from config/models.yaml. Returns output format ('wav' or 'mp3').
     """
     return _tts_synthesize_for_speaker(text=text, speaker=speaker, output_path=output_path)
+
+
+def synthesize_line_by_speaker_with_timings(
+    text: str, speaker: str, output_path: str
+) -> tuple[str, list[dict]]:
+    """
+    Synthesize one line and return (output_format, word_timings).
+    word_timings may be [] for providers that don't support timestamps.
+    """
+    return _tts_synthesize_with_timings(text=text, speaker=speaker, output_path=output_path)
 
 
 def _load_optional_segment(path: str | None, label: str) -> "AudioSegment | None":
@@ -229,7 +247,164 @@ def _overlay_music(body: "AudioSegment", music: "AudioSegment", gain_db: float) 
     return body.overlay(track)
 
 
-def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: str) -> int:
+def _derive_display_fields(
+    outline: dict, duration_seconds: int, intro_ms: int = 0
+) -> tuple[str, list[dict]]:
+    """Extract description and chapters from the outline dict.
+
+    intro_ms: the number of milliseconds of intro music that precede the first
+    spoken word in the final stitched MP3. Chapter 1 always starts at 0:00
+    (it absorbs the intro visually); all subsequent chapters are shifted right
+    by intro_ms so their scrubber positions match the stitched file.
+    """
+    description = outline.get("thread") or outline.get("central_tension") or ""
+    segments = outline.get("segments") or []
+    duration_minutes = duration_seconds / 60 if duration_seconds else 0
+    segment_count = max(1, len(segments))
+    intro_minutes = intro_ms / 60000  # fractional — do NOT round
+    chapters = []
+    for i, seg in enumerate(segments):
+        # Evenly distribute segments over body duration, then shift by intro offset.
+        # Chapter 1 (i=0) starts at 0:00 regardless — it absorbs the intro music.
+        body_start = duration_minutes * i / segment_count
+        start_minute = body_start if i == 0 else body_start + intro_minutes
+        chapters.append({
+            "id": f"segment-{seg.get('segment', i + 1)}",
+            "title": seg.get("title", ""),
+            "start_minute": start_minute,
+        })
+    return description, chapters
+
+
+def synthesize_and_stitch(
+    transcript: list[dict],
+    show_name: str,
+    output_path: str,
+    speaker_override: str | None = None,
+) -> tuple[str, list[dict]]:
+    """
+    Synthesize + stitch all transcript lines into an MP3.
+    Returns (output_path, tts_timings) where tts_timings is a list of:
+      { line_index, start_ms, end_ms, speaker, text }
+    representing the absolute playback position of each transcript line.
+    The start_ms accounts for any prepended intro audio.
+    """
+    profile = SHOW_PROFILES[show_name]
+    if speaker_override and speaker_override in SPEAKER_PROFILES:
+        allowed_speakers = {speaker_override.lower()}
+    else:
+        allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
+
+    bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
+    gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
+
+    logger.info(
+        f"Synthesizing {len(transcript)} lines "
+        f"(bitrate={bitrate}, gap={gap_ms}ms)..."
+    )
+    clips = []
+    word_timings_per_line: list[list[dict]] = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i, line in enumerate(transcript):
+            raw_speaker = (line.get("speaker") or "").strip().lower()
+            if not raw_speaker:
+                raise ValueError(f"Transcript line {i} has no speaker name")
+            if raw_speaker not in allowed_speakers:
+                raw_speaker = next(iter(allowed_speakers))
+            clip_path = os.path.join(tmpdir, f"line_{i:04d}.wav")
+            logger.info(f"  [{i+1}/{len(transcript)}] {raw_speaker}: {line['text'][:60]}...")
+            fmt, word_timings = synthesize_line_by_speaker_with_timings(
+                line["text"], raw_speaker, clip_path
+            )
+            word_timings_per_line.append(word_timings)
+            if fmt == "mp3":
+                clips.append(AudioSegment.from_mp3(clip_path))
+            else:
+                clips.append(AudioSegment.from_wav(clip_path))
+
+        logger.info("Stitching speech...")
+        gap = AudioSegment.silent(duration=gap_ms)
+        body = AudioSegment.empty()
+        for clip in clips:
+            body += clip + gap
+
+        # Optional intro / outro / music — driven by show profile
+        intro = _load_optional_segment(profile.intro_audio_path, "intro")
+        outro = _load_optional_segment(profile.outro_audio_path, "outro")
+        music = _load_optional_segment(profile.music_audio_path, "music")
+
+        # intro_offset_ms = how far into the final MP3 the first spoken word lands.
+        # With crossfade: speech starts at INTRO_FULL_MS (not at end of full intro clip).
+        intro_offset_ms = 0
+
+        if intro is not None:
+            logger.info(f"  crossfading intro ({len(intro)/1000:.1f}s source)")
+            # Gain-match intro to episode level, then boost by INTRO_GAIN_DB
+            episode_dbfs = body.dBFS
+            intro_gain = (episode_dbfs - intro.dBFS + INTRO_GAIN_DB) if intro.dBFS != float("-inf") else 0
+            intro = intro.apply_gain(intro_gain)
+            # Cut: full section + fade section
+            intro_full_clip = intro[:INTRO_FULL_MS]
+            intro_fade_clip = intro[INTRO_FULL_MS: INTRO_FULL_MS + INTRO_FADE_MS].fade_out(INTRO_FADE_MS)
+            # Assemble: full intro + body, then overlay fade zone over TTS start
+            body = intro_full_clip + body
+            body = body.overlay(intro_fade_clip, position=INTRO_FULL_MS)
+            intro_offset_ms = INTRO_FULL_MS  # speech starts here in the final file
+
+        if outro is not None:
+            logger.info(f"  crossfading outro ({len(outro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            outro_gain = (episode_dbfs - outro.dBFS + OUTRO_GAIN_DB) if outro.dBFS != float("-inf") else 0
+            outro = outro.apply_gain(outro_gain)
+            # Cut outro clip: fade-in + full + fade-out
+            outro_fade_in  = outro[:OUTRO_FADE_IN_MS].fade_in(OUTRO_FADE_IN_MS)
+            outro_full_clip = outro[OUTRO_FADE_IN_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS]
+            outro_fade_out = outro[OUTRO_FADE_IN_MS + OUTRO_FULL_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS + OUTRO_FADE_OUT_MS].fade_out(OUTRO_FADE_OUT_MS)
+            outro_ready = outro_fade_in + outro_full_clip + outro_fade_out
+            # Outro fade-in starts OUTRO_FADE_IN_MS before TTS ends; tail extends after
+            tts_end_pos = len(body)
+            outro_start_pos = tts_end_pos - OUTRO_FADE_IN_MS
+            tail_ms = OUTRO_FULL_MS + OUTRO_FADE_OUT_MS
+            body = body + AudioSegment.silent(duration=tail_ms)
+            body = body.overlay(outro_ready, position=max(0, outro_start_pos))
+
+        if music is not None:
+            logger.info(
+                f"  overlaying music ({len(music)/1000:.1f}s loop) "
+                f"at {profile.music_gain_db:+.1f} dB"
+            )
+            body = _overlay_music(body, music, profile.music_gain_db)
+
+        body.export(output_path, format="mp3", bitrate=bitrate)
+
+    # Build absolute tts_timings from clip durations + gap
+    tts_timings: list[dict] = []
+    cursor_ms = intro_offset_ms
+    for i, (clip, line) in enumerate(zip(clips, transcript)):
+        clip_ms = len(clip)
+        raw_speaker = (line.get("speaker") or "").strip().lower()
+        if raw_speaker not in allowed_speakers:
+            raw_speaker = next(iter(allowed_speakers))
+        tts_timings.append({
+            "line_index": i,
+            "start_ms": cursor_ms,
+            "end_ms": cursor_ms + clip_ms,
+            "speaker": raw_speaker,
+            "text": line.get("text", ""),
+        })
+        cursor_ms += clip_ms + gap_ms
+
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), {len(tts_timings)} timing entries")
+    return output_path, tts_timings
+
+
+def synthesize_and_stitch_v2(
+    transcript: list[dict],
+    show_name: str,
+    output_path: str,
+    speaker_override: str | None = None,
+) -> str:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
     makes far fewer TTS calls, and produces more natural prosody.
@@ -237,7 +412,10 @@ def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: s
     from core.audio.stitcher import prepare_segments
 
     profile = SHOW_PROFILES[show_name]
-    allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
+    if speaker_override and speaker_override in SPEAKER_PROFILES:
+        allowed_speakers = {speaker_override.lower()}
+    else:
+        allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
 
     bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
     gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
@@ -272,12 +450,34 @@ def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: s
         outro = _load_optional_segment(profile.outro_audio_path, "outro")
         music = _load_optional_segment(profile.music_audio_path, "music")
 
+        intro_offset_ms = 0
+
         if intro is not None:
-            logger.info(f"  prepending intro ({len(intro)/1000:.1f}s)")
-            body = intro + body
+            logger.info(f"  crossfading intro ({len(intro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            intro_gain = (episode_dbfs - intro.dBFS + INTRO_GAIN_DB) if intro.dBFS != float("-inf") else 0
+            intro = intro.apply_gain(intro_gain)
+            intro_full_clip = intro[:INTRO_FULL_MS]
+            intro_fade_clip = intro[INTRO_FULL_MS: INTRO_FULL_MS + INTRO_FADE_MS].fade_out(INTRO_FADE_MS)
+            body = intro_full_clip + body
+            body = body.overlay(intro_fade_clip, position=INTRO_FULL_MS)
+            intro_offset_ms = INTRO_FULL_MS
+
         if outro is not None:
-            logger.info(f"  appending outro ({len(outro)/1000:.1f}s)")
-            body = body + outro
+            logger.info(f"  crossfading outro ({len(outro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            outro_gain = (episode_dbfs - outro.dBFS + OUTRO_GAIN_DB) if outro.dBFS != float("-inf") else 0
+            outro = outro.apply_gain(outro_gain)
+            outro_fade_in   = outro[:OUTRO_FADE_IN_MS].fade_in(OUTRO_FADE_IN_MS)
+            outro_full_clip = outro[OUTRO_FADE_IN_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS]
+            outro_fade_out  = outro[OUTRO_FADE_IN_MS + OUTRO_FULL_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS + OUTRO_FADE_OUT_MS].fade_out(OUTRO_FADE_OUT_MS)
+            outro_ready = outro_fade_in + outro_full_clip + outro_fade_out
+            tts_end_pos   = len(body)
+            outro_start_pos = tts_end_pos - OUTRO_FADE_IN_MS
+            tail_ms = OUTRO_FULL_MS + OUTRO_FADE_OUT_MS
+            body = body + AudioSegment.silent(duration=tail_ms)
+            body = body.overlay(outro_ready, position=max(0, outro_start_pos))
+
         if music is not None:
             logger.info(
                 f"  overlaying music ({len(music)/1000:.1f}s loop) "
@@ -287,54 +487,26 @@ def synthesize_and_stitch(transcript: list[dict], show_name: str, output_path: s
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    duration_seconds = len(body) // 1000
-    logger.info(f"Audio exported: {output_path} ({duration_seconds}s)")
-    return duration_seconds
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), intro_offset={intro_offset_ms}ms")
+    return output_path, intro_offset_ms
 
 
 # ---------------------------------------------------------------------------
 # Episode save + post-generation
 # ---------------------------------------------------------------------------
 
-def _derive_display_fields(outline: dict, duration_seconds: int) -> tuple[str, list[dict]]:
-    """
-    Extract description and chapters from the outline dict.
-
-    description — outline['thread'], the one-sentence idea the episode follows.
-    chapters    — one entry per segment: {id, title, start_minute}.
-                  start_minute is computed by dividing duration evenly across segments.
-    """
-    description = outline.get("thread") or outline.get("central_tension") or ""
-
-    segments = outline.get("segments", [])
-    n = len(segments)
-    duration_minutes = duration_seconds / 60 if duration_seconds else 0
-    segment_duration = duration_minutes / n if n > 0 else 0
-
-    chapters = []
-    for i, seg in enumerate(segments):
-        # Use purpose as the chapter title — it's the most human-readable field
-        title = seg.get("purpose") or f"Part {i + 1}"
-        # Truncate long purposes to a reasonable chapter title length
-        if len(title) > 60:
-            title = title[:57].rstrip() + "…"
-        chapters.append({
-            "id":           str(i + 1),
-            "title":        title,
-            "start_minute": round(i * segment_duration, 1),
-        })
-
-    return description, chapters
-
-
 def _coerce_source_uuids(source_ids: list) -> list:
-    """Strip 'source:' prefixes (legacy) and return UUID-coerced list."""
+    """Strip 'source:' prefixes (legacy), deduplicate (preserve order), return UUID list."""
     from uuid import UUID
+    seen: set[str] = set()
     out = []
     for sid in source_ids or []:
         s = str(sid).replace("source:", "")
         try:
-            out.append(UUID(s))
+            u = UUID(s)
+            if s not in seen:
+                seen.add(s)
+                out.append(u)
         except (ValueError, TypeError):
             logger.warning(f"Skipping non-UUID source_id: {sid!r}")
     return out
@@ -592,26 +764,44 @@ async def process_episode(episode_id: str) -> None:
         # 5. Synthesize + stitch
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        duration_seconds = synthesize_and_stitch(transcript, show_name, audio_path)
+        _, tts_timings = synthesize_and_stitch(
+            transcript, show_name, audio_path, speaker_override=speaker_override
+        )
 
         # 6. Persist results onto the existing row
+        # Derive actual duration from the stitched MP3
+        actual_duration_seconds: int | None = None
+        actual_length_minutes: int | None = None
+        try:
+            from pydub import AudioSegment as _AS
+            _audio = _AS.from_mp3(audio_path)
+            actual_duration_seconds = int(_audio.duration_seconds)
+            actual_length_minutes = max(1, round(_audio.duration_seconds / 60))
+        except Exception:
+            pass
+
+        # Pass intro_ms so chapter startMinutes are offset correctly in the stitched file
+        intro_ms = tts_timings[0]["start_ms"] if tts_timings else 0
+        description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0, intro_ms=intro_ms)
+
         source_uuids = _coerce_source_uuids(source_ids)
-        description, chapters = _derive_display_fields(outline, duration_seconds)
         await db_execute(
             """
             UPDATE episode
             SET title = $title,
-                description = $description,
-                chapters = $chapters::jsonb,
                 transcript = $transcript::jsonb,
                 outline = $outline::jsonb,
                 audio_path = $audio_path,
-                duration_seconds = $duration_seconds,
                 source_ids = $source_ids,
                 quality_score = $score,
                 quality_feedback = $feedback,
                 quality_violations = $violations,
                 regenerated = $regenerated,
+                tts_timings = $tts_timings::jsonb,
+                length_minutes = $length_minutes,
+                duration_seconds = $duration_seconds,
+                description = $description,
+                chapters = $chapters::jsonb,
                 status = 'ready',
                 error = NULL
             WHERE id = $id::uuid
@@ -619,17 +809,19 @@ async def process_episode(episode_id: str) -> None:
             {
                 "id": episode_id,
                 "title": title,
-                "description": description,
-                "chapters": json.dumps(chapters),
                 "transcript": json.dumps(transcript),
                 "outline": json.dumps(outline),
                 "audio_path": audio_path,
-                "duration_seconds": duration_seconds,
                 "source_ids": source_uuids,
                 "score": judgment.overall_score,
                 "feedback": judgment.feedback,
                 "violations": judgment.floor_violations,
                 "regenerated": regenerated,
+                "tts_timings": json.dumps(tts_timings),
+                "length_minutes": actual_length_minutes,
+                "duration_seconds": actual_duration_seconds,
+                "description": description,
+                "chapters": json.dumps(chapters),
             },
         )
 
@@ -639,7 +831,10 @@ async def process_episode(episode_id: str) -> None:
                 "UPDATE show_idea SET generated = true WHERE id = $id::uuid",
                 {"id": str(show_idea_id)},
             )
-        await log_covered_topics(user_id, show_name, episode_id, outline, source_ids)
+        try:
+            await log_covered_topics(user_id, show_name, episode_id, outline, source_ids)
+        except Exception as _ct_err:
+            logger.warning(f"covered_topic log skipped for {episode_id}: {_ct_err}")
 
         _ep_elapsed = _ep_time.time() - _ep_start
         logger.info(f"--- Done: episode {episode_id} title='{title}' ---")

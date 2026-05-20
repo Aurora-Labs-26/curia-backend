@@ -4,22 +4,23 @@ POST /episodes — create episode row + enqueue generation job.
 GET /episodes, GET /episodes/:id, GET /episodes/:id/audio.
 """
 
-import os
+import json
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from api.auth import current_user_id
 from api.schemas import (
     CreateEpisodeRequest,
     CreateJobResponse,
     EpisodeDetail,
+    EpisodeSourceObject,
     EpisodeSummary,
     FormatEntry,
 )
-from pydantic import BaseModel, Field as PydanticField
 from core.db.connection import db_execute, db_fetchrow, db_query
 from core.queue import enqueue
 from studio.formats import FORMATS, resolve_format_name
@@ -38,10 +39,6 @@ def _enrich_row(row: dict) -> dict:
 
 @router.get("/formats", response_model=list[FormatEntry])
 async def list_formats() -> list[FormatEntry]:
-    """
-    Return all available episode formats with both backend name and frontend slug.
-    No auth required — clients use this to build format pickers.
-    """
     return [
         FormatEntry(
             name=fmt.name,
@@ -62,12 +59,6 @@ async def create_episode(
     Create a `queued` episode row + enqueue 'generate_episode' job.
     Worker fills in title, outline, transcript, audio_path on completion.
     """
-    try:
-        show_name = resolve_format_name(req.show_name)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-
-    # Validate editorial_direction (angle) if provided
     if req.editorial_direction and req.editorial_direction.strip():
         from core.angle.validator import validate_angle_rules
         angle_check = validate_angle_rules(req.editorial_direction)
@@ -87,7 +78,7 @@ async def create_episode(
         {
             "id": episode_id,
             "user_id": user_id,
-            "show": show_name,
+            "show": req.show_name,
             "idea_id": str(req.show_idea_id) if req.show_idea_id else None,
             "direction": req.editorial_direction or "",
             "length_minutes": req.length_minutes,
@@ -108,42 +99,79 @@ async def list_episodes(
     status: str | None = Query(default=None),
     limit: int = Query(default=50, le=500),
 ) -> list[EpisodeSummary]:
-    base_select = """
-        SELECT
-            e.id, e.show_name, e.title, e.description, e.status, e.created_at, e.error,
-            e.quality_score, e.duration_seconds, e.length_minutes, e.speaker_override,
-            e.source_ids, e.chapters, e.play_progress, e.listened,
-            ARRAY(
-                SELECT regexp_replace(
-                           regexp_replace(s.url, '^https?://', ''),
-                           '/.*$', ''
-                       )
-                FROM source s
-                WHERE s.id::text = ANY(
-                    SELECT unnest(e.source_ids)::text
-                )
-                AND s.url IS NOT NULL
-                LIMIT 3
-            ) AS source_domains
-        FROM episode e
-    """
     if status:
         rows = await db_query(
-            base_select + """
-            WHERE e.user_id = $user_id AND e.status = $status
-            ORDER BY e.created_at DESC LIMIT $limit
+            """
+            SELECT id, show_name, title, description, status, created_at, error,
+                   quality_score, length_minutes, duration_seconds,
+                   speaker_override, source_ids, outline, chapters,
+                   play_progress, listened, last_played_at
+            FROM episode
+            WHERE user_id = $user_id AND status = $status
+            ORDER BY created_at DESC LIMIT $limit
             """,
             {"user_id": user_id, "status": status, "limit": limit},
         )
     else:
         rows = await db_query(
-            base_select + """
-            WHERE e.user_id = $user_id
-            ORDER BY e.created_at DESC LIMIT $limit
+            """
+            SELECT id, show_name, title, description, status, created_at, error,
+                   quality_score, length_minutes, duration_seconds,
+                   speaker_override, source_ids, outline, chapters,
+                   play_progress, listened, last_played_at
+            FROM episode
+            WHERE user_id = $user_id
+            ORDER BY created_at DESC LIMIT $limit
             """,
             {"user_id": user_id, "limit": limit},
         )
-    return [EpisodeSummary(**_enrich_row(dict(r))) for r in rows]
+
+    # Batch-fetch source objects for all episodes in one query
+    from urllib.parse import urlparse
+    seen: set[str] = set()
+    all_source_uuids: list[uuid.UUID] = []
+    for r in rows:
+        for sid in (r.get("source_ids") or []):
+            key = str(sid)
+            if key not in seen:
+                seen.add(key)
+                try:
+                    all_source_uuids.append(uuid.UUID(key))
+                except (ValueError, TypeError):
+                    pass
+
+    source_map: dict[str, EpisodeSourceObject] = {}
+    if all_source_uuids:
+        src_rows = await db_query(
+            """
+            SELECT id, url, title FROM source
+            WHERE id = ANY($ids) AND user_id = $user_id
+            """,
+            {"ids": all_source_uuids, "user_id": user_id},
+        )
+        for s in src_rows:
+            try:
+                domain = urlparse(s["url"]).hostname or s["url"]
+                domain = domain.removeprefix("www.")
+            except Exception:
+                domain = s["url"]
+            source_map[str(s["id"])] = EpisodeSourceObject(
+                id=s["id"], domain=domain, title=s["title"]
+            )
+
+    result = []
+    for r in rows:
+        data = _enrich_row(dict(r))
+        seen_ids: set[str] = set()
+        deduped: list[EpisodeSourceObject] = []
+        for sid in (data.get("source_ids") or []):
+            key = str(sid)
+            if key in source_map and key not in seen_ids:
+                seen_ids.add(key)
+                deduped.append(source_map[key])
+        data["source_objects"] = deduped
+        result.append(EpisodeSummary(**data))
+    return result
 
 
 @router.get("/episodes/{episode_id}", response_model=EpisodeDetail)
@@ -153,10 +181,10 @@ async def get_episode(
     row = await db_fetchrow(
         """
         SELECT id, show_name, title, description, status, created_at, error,
-               transcript, outline, audio_path, duration_seconds, source_ids,
-               chapters, play_progress, listened, editorial_direction,
+               transcript, outline, audio_path, source_ids, editorial_direction,
                quality_score, quality_feedback, quality_violations, regenerated,
-               length_minutes, speaker_override
+               length_minutes, duration_seconds, speaker_override, tts_timings,
+               chapters, play_progress, listened, last_played_at
         FROM episode
         WHERE id = $id::uuid AND user_id = $user_id
         """,
@@ -164,7 +192,92 @@ async def get_episode(
     )
     if not row:
         raise HTTPException(404, "episode not found")
-    return EpisodeDetail(**_enrich_row(dict(row)))
+
+    from urllib.parse import urlparse
+    data = _enrich_row(dict(row))
+    source_ids = data.get("source_ids") or []
+    source_objects: list[EpisodeSourceObject] = []
+    if source_ids:
+        source_uuids: list[uuid.UUID] = []
+        for sid in source_ids:
+            try:
+                source_uuids.append(uuid.UUID(str(sid)))
+            except (ValueError, TypeError):
+                pass
+        if source_uuids:
+            src_rows = await db_query(
+                """
+                SELECT id, url, title FROM source
+                WHERE id = ANY($ids) AND user_id = $user_id
+                """,
+                {"ids": source_uuids, "user_id": user_id},
+            )
+            for s in src_rows:
+                try:
+                    domain = urlparse(s["url"]).hostname or s["url"]
+                    domain = domain.removeprefix("www.")
+                except Exception:
+                    domain = s["url"]
+                source_objects.append(EpisodeSourceObject(
+                    id=s["id"], domain=domain, title=s["title"]
+                ))
+    data["source_objects"] = source_objects
+    return EpisodeDetail(**data)
+
+
+@router.put("/episodes/{episode_id}/progress", status_code=204)
+async def update_episode_progress(
+    episode_id: uuid.UUID,
+    body: dict,
+    user_id: str = Depends(current_user_id),
+) -> None:
+    play_progress = float(body.get("play_progress") or 0)
+    listened = bool(body.get("listened", False))
+    await db_execute(
+        """
+        UPDATE episode
+        SET play_progress = $play_progress,
+            listened = $listened,
+            last_played_at = NOW()
+        WHERE id = $id::uuid AND user_id = $user_id
+        """,
+        {
+            "id": str(episode_id),
+            "user_id": user_id,
+            "play_progress": max(0.0, min(1.0, play_progress)),
+            "listened": listened,
+        },
+    )
+
+
+class FeedbackRequest(BaseModel):
+    rating: str
+    note: str | None = None
+
+
+@router.post("/episodes/{episode_id}/feedback", status_code=204)
+async def submit_episode_feedback(
+    episode_id: uuid.UUID,
+    body: FeedbackRequest,
+    user_id: str = Depends(current_user_id),
+) -> None:
+    row = await db_fetchrow(
+        "SELECT id FROM episode WHERE id = $id::uuid AND user_id = $user_id",
+        {"id": str(episode_id), "user_id": user_id},
+    )
+    if not row:
+        raise HTTPException(404, "episode not found")
+    await db_execute(
+        """
+        UPDATE episode
+        SET feedback = $feedback
+        WHERE id = $id::uuid
+        """,
+        {
+            "id": str(episode_id),
+            "feedback": json.dumps({"rating": body.rating, "note": body.note}),
+        },
+    )
 
 
 @router.get("/episodes/{episode_id}/audio")
@@ -189,6 +302,7 @@ async def get_episode_audio(
         raise HTTPException(410, "audio file missing on disk")
 
     file_size = Path(audio_path).stat().st_size
+    filename = f"{row.get('title') or 'episode'}.mp3"
     range_header = request.headers.get("range")
 
     def _iter_file(path: str, start: int, end: int, chunk: int = 1024 * 64):
@@ -203,12 +317,11 @@ async def get_episode_audio(
                 yield data
 
     if range_header:
-        # Parse "bytes=start-end"
         try:
             range_val = range_header.strip().replace("bytes=", "")
             range_start, range_end = range_val.split("-")
             start = int(range_start)
-            end   = int(range_end) if range_end else file_size - 1
+            end = int(range_end) if range_end else file_size - 1
         except (ValueError, AttributeError):
             raise HTTPException(416, "invalid Range header")
 
@@ -218,10 +331,10 @@ async def get_episode_audio(
 
         content_length = end - start + 1
         headers = {
-            "Content-Range":  f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges":  "bytes",
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
             "Content-Length": str(content_length),
-            "Content-Disposition": f'inline; filename="{row.get("title") or "episode"}.mp3"',
+            "Content-Disposition": f'inline; filename="{filename}"',
         }
         return StreamingResponse(
             _iter_file(audio_path, start, end),
@@ -230,11 +343,10 @@ async def get_episode_audio(
             headers=headers,
         )
 
-    # Full file response
     headers = {
-        "Accept-Ranges":  "bytes",
+        "Accept-Ranges": "bytes",
         "Content-Length": str(file_size),
-        "Content-Disposition": f'inline; filename="{row.get("title") or "episode"}.mp3"',
+        "Content-Disposition": f'inline; filename="{filename}"',
     }
     return StreamingResponse(
         _iter_file(audio_path, 0, file_size - 1),
@@ -242,37 +354,3 @@ async def get_episode_audio(
         media_type="audio/mpeg",
         headers=headers,
     )
-
-
-class UpdateProgressRequest(BaseModel):
-    play_progress: float = PydanticField(..., ge=0.0, le=1.0)
-    listened: bool = False
-
-
-@router.put("/episodes/{episode_id}/progress", status_code=204)
-async def update_episode_progress(
-    episode_id: uuid.UUID,
-    req: UpdateProgressRequest,
-    user_id: str = Depends(current_user_id),
-):
-    """
-    Save playback position. Called by the client periodically during playback
-    and on completion (play_progress=1.0, listened=true).
-    """
-    row = await db_fetchrow(
-        "SELECT id FROM episode WHERE id = $id::uuid AND user_id = $user_id",
-        {"id": str(episode_id), "user_id": user_id},
-    )
-    if not row:
-        raise HTTPException(404, "episode not found")
-    await db_execute(
-        """
-        UPDATE episode
-        SET play_progress = $progress,
-            listened = $listened
-        WHERE id = $id::uuid
-        """,
-        {"id": str(episode_id), "progress": req.play_progress, "listened": req.listened},
-    )
-    from fastapi.responses import Response
-    return Response(status_code=204)

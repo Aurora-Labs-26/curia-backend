@@ -42,9 +42,10 @@ class EpisodeProfile:
 
     # Optional audio assets — paths resolved relative to the repo root (or absolute).
     # When set, synthesize_and_stitch in studio/generator.py will:
-    #   - prepend intro_audio_path before the first transcript line
-    #   - append outro_audio_path after the last transcript line
+    #   - crossfade intro_audio_path into the TTS body start
+    #   - crossfade outro_audio_path out from the TTS body end
     #   - loop + overlay music_audio_path under the entire stitched body at music_gain_db
+    # Crossfade timing constants live in studio/generator.py (INTRO_FULL_MS etc.)
     intro_audio_path: str | None = None
     outro_audio_path: str | None = None
     music_audio_path: str | None = None
@@ -125,11 +126,16 @@ EMEKA_SPEAKER = SpeakerProfile(
 # (or falls back to bindings.task.{outline, transcript}).
 # ---------------------------------------------------------------------------
 
+_AUDIO_INTRO = "assets/audio/intro.mp3"
+_AUDIO_OUTRO = "assets/audio/outro.mp3"
+
 NARRATIVE_DRIFT_PROFILE = EpisodeProfile(
     name="narrative_drift",
     format_name="narrative_drift",
     language="en-US",
     speaker_config=KENJI_SPEAKER,
+    intro_audio_path=_AUDIO_INTRO,
+    outro_audio_path=_AUDIO_OUTRO,
 )
 
 CLARITY_ENGINE_PROFILE = EpisodeProfile(
@@ -137,6 +143,8 @@ CLARITY_ENGINE_PROFILE = EpisodeProfile(
     format_name="clarity_engine",
     language="en-US",
     speaker_config=KENJI_SPEAKER,
+    intro_audio_path=_AUDIO_INTRO,
+    outro_audio_path=_AUDIO_OUTRO,
 )
 
 MOMENTUM_LOOP_PROFILE = EpisodeProfile(
@@ -144,6 +152,8 @@ MOMENTUM_LOOP_PROFILE = EpisodeProfile(
     format_name="momentum_loop",
     language="en-US",
     speaker_config=KENJI_SPEAKER,
+    intro_audio_path=_AUDIO_INTRO,
+    outro_audio_path=_AUDIO_OUTRO,
 )
 
 EXPLORATION_ENGINE_PROFILE = EpisodeProfile(
@@ -151,6 +161,8 @@ EXPLORATION_ENGINE_PROFILE = EpisodeProfile(
     format_name="exploration_engine",
     language="en-US",
     speaker_config=KENJI_SPEAKER,
+    intro_audio_path=_AUDIO_INTRO,
+    outro_audio_path=_AUDIO_OUTRO,
 )
 
 

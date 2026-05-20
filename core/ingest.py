@@ -36,6 +36,37 @@ ARTICLE_CHAR_CAP = 50_000
 
 
 # ---------------------------------------------------------------------------
+# Image extraction
+# ---------------------------------------------------------------------------
+
+
+async def _extract_and_store_images(source_id: str, full_text: str) -> None:
+    try:
+        from core.scraper.images import extract_image_urls, download_and_upload_images
+        images = extract_image_urls(full_text)
+        if not images:
+            return
+        uploaded = await download_and_upload_images(images, source_id)
+        for img in uploaded:
+            await db_execute(
+                """
+                INSERT INTO source_image (source_id, original_url, blob_url, alt_text, content_type, size_bytes)
+                VALUES ($sid::uuid, $orig, $blob, $alt, $ctype, $size)
+                """,
+                {
+                    "sid": source_id,
+                    "orig": img["original_url"],
+                    "blob": img["blob_url"],
+                    "alt": img["alt"],
+                    "ctype": img["content_type"],
+                    "size": img["size_bytes"],
+                },
+            )
+    except Exception as e:
+        logger.warning(f"[ingest] image extraction failed for {source_id}: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Atoms
 # ---------------------------------------------------------------------------
 
@@ -146,12 +177,17 @@ async def embed_primitive(source_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def process_source(source_id: str) -> None:
+async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
     """
     Process a source row that already exists in the DB.
     Reads url + user_id from the row, runs scrape → transform → embed → primitive.
     Status moves through 'scraping' → 'transforming' → 'embedding' → 'ready'.
-    On any exception: status='failed' + error column set, then re-raises.
+
+    On exception: the error column is always recorded, but status is only set to
+    'failed' on the final retry (is_final_attempt). On intermediate attempts the
+    status is left as-is (still 'scraping'/etc.) so the pile shows it as processing
+    rather than flashing "Failed" between auto-retries. Always re-raises so the
+    worker can requeue.
 
     Used by the worker handler. Idempotent-ish (insights are appended; safe to re-run if
     insights table is cleared or duplicates are tolerated).
@@ -176,6 +212,7 @@ async def process_source(source_id: str) -> None:
                 """,
                 {"id": source_id, "title": title, "full_text": full_text},
             )
+            await _extract_and_store_images(source_id, full_text)
         else:
             full_text = row["full_text"]
 
@@ -212,7 +249,16 @@ async def process_source(source_id: str) -> None:
         logger.info(f"Ingestion complete: {source_id}")
 
     except Exception as e:
-        await _set_status(source_id, "failed", error=str(e)[:1000])
+        err = str(e)[:1000]
+        if is_final_attempt:
+            await _set_status(source_id, "failed", error=err)
+        else:
+            # Retry pending — record the error but keep the in-progress status so
+            # the pile doesn't show "Failed" mid-retry.
+            await db_execute(
+                "UPDATE source SET error = $error, updated_at = now() WHERE id = $id::uuid",
+                {"id": source_id, "error": err},
+            )
         raise
 
 
@@ -235,6 +281,36 @@ async def ingest_url(
     return source_id
 
 
+def normalise_url(url: str) -> str:
+    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+    url = url.strip()
+
+    # Rewrite open.substack.com → substack.com so trafilatura can scrape it.
+    # open.substack.com is Substack's share/preview domain (requires login);
+    # the canonical URL on substack.com is publicly readable.
+    parsed_pre = urlparse(url)
+    if parsed_pre.netloc.lower() == "open.substack.com":
+        url = urlunparse(parsed_pre._replace(netloc="substack.com"))
+
+    parsed = urlparse(url)
+    STRIP_PARAMS = {
+        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+        "fbclid", "gclid", "ref", "source", "mc_cid", "mc_eid",
+    }
+    if parsed.netloc.lower().endswith("substack.com"):
+        STRIP_PARAMS = {*STRIP_PARAMS, "r", "publication_id", "post_id", "isFreemail"}
+    qs = {k: v for k, v in parse_qs(parsed.query, keep_blank_values=True).items() if k not in STRIP_PARAMS}
+    path = parsed.path.rstrip("/") or "/"
+    return urlunparse((
+        parsed.scheme.lower(),
+        parsed.netloc.lower(),
+        path,
+        parsed.params,
+        urlencode(qs, doseq=True),
+        "",
+    ))
+
+
 async def get_or_create_source(
     url: str,
     user_id: str = "default",
@@ -244,6 +320,7 @@ async def get_or_create_source(
     Return the source_id for (user_id, url). Inserts a new row if none exists.
     Idempotent — safe for the API's POST /sources to call on every request.
     """
+    url = normalise_url(url)
     existing = await db_fetchrow(
         "SELECT id, status FROM source WHERE user_id = $user_id AND url = $url",
         {"user_id": user_id, "url": url},

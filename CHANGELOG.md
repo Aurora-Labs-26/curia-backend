@@ -102,6 +102,251 @@ Mapping:
 
 ---
 
+## 2026-05-20 · Claude (claude-sonnet-4-6) (6)
+
+### Feature
+FCM push notifications: device token storage + push on episode ready.
+- **`alembic/versions/0022_user_fcm_token.py`** — adds `fcm_token TEXT` column to `users` table
+- **`api/routes/me.py`** — new `PUT /me/fcm-token` endpoint; saves device token for the current user; 204 response
+- **`worker/handlers/generate_episode.py`** — `_notify_episode_ready()`: after episode generates, looks up user's `fcm_token` and fires FCM push ("Your show is ready"); no-ops silently if token is absent; logs warning on send failure without crashing the job
+
+## 2026-05-20 · Claude (claude-sonnet-4-6) (5)
+
+### Feature
+Per-episode feedback: thumbs up/down + optional note, stored as JSONB on the episode row.
+- **`alembic/versions/0021_episode_feedback.py`** — adds `feedback JSONB` column to episode table
+- **`api/routes/episodes.py`** — new `POST /episodes/{id}/feedback` endpoint; upserts `{ rating, note }` JSON into the column; 204 response
+
+## 2026-05-20 · Claude (claude-sonnet-4-6) (4)
+
+### Feature
+Failed sources now auto-clean instead of cluttering the pile forever. Retry is already handled by the job queue (`max_attempts=3`); this adds soft-delete + terminal-failed marking so a failed link shows once (with its reason) then disappears next session.
+- **`alembic/versions/0020_source_hidden.py`** — adds `hidden boolean NOT NULL DEFAULT false` to `source` (soft-delete; rows kept for debugging)
+- **`api/routes/sources.py`** — `GET /sources` (both queries) filters `hidden = false`; new `POST /sources/clear-failed` soft-hides the caller's `failed` sources (called by the client on cold-start)
+- **`core/ingest.py`** — `process_source(source_id, is_final_attempt=True)`: on exception the error is always recorded, but `status='failed'` is only set on the final retry — intermediate attempts keep the in-progress status so the pile doesn't flash "Failed" between auto-retries
+- **`worker/handlers/ingest.py`** — computes `is_final_attempt` from injected attempt context and passes it to `process_source`
+- **`worker/main.py`** — injects `__attempt__`/`__max_attempts__` into the payload before dispatch (ephemeral); adds a throttled (hourly) safety-net that soft-hides `failed` sources older than `CURIA_FAILED_PURGE_DAYS` (default 7) for users who never open the app
+
+## 2026-05-20 · Claude (claude-sonnet-4-6) (3)
+
+### Feature
+- **`scripts/dashboard.py`** — unified real-time pipeline dashboard: persistent header with live counts + active stage spinners, scrolling event log for all components (SOURCE, JOB, CLUSTER, IDEA, EPISODE, LLM); `--llm` flag adds LLM call events, `--llm-output` adds response previews
+
+### Bug Fix
+Episodes synthesized audio successfully but failed on the generator's final write with `column "duration_seconds" of relation "episode" does not exist`. The pulled v2.2 generator writes `duration_seconds`, `description`, and `chapters` to the episode row, but no migration added those columns to this DB (schema drift).
+- **`alembic/versions/0019_episode_audio_fields.py`** — new migration; adds `duration_seconds INTEGER`, `description TEXT`, `chapters JSONB` to the episode table with `IF NOT EXISTS`. Revision id kept ≤32 chars (alembic_version is varchar(32)).
+
+## 2026-05-20 · Claude (claude-sonnet-4-6) (2)
+
+### Feature
+Pipeline observability — verbose cluster logging, LLM log tail, terminal test scripts for share and remix flows.
+- **`intelligence/idea_generator.py`** — `cluster_sources` now logs: sources missing primitive embeddings, all above-threshold pairs with scores and titles, below-threshold pairs at TRACE level, final cluster membership with source titles
+- **`core/logging.py`** — terminal log level now controlled by `CURIA_LOG_LEVEL` env var (default INFO; set DEBUG to see cluster scores and LLM outputs in terminal)
+- **`scripts/tail_llm.py`** — new: pretty-prints `logs/llm.log` live; `--outputs` flag shows full LLM response text; `--all` includes historical entries
+- **`scripts/test_share.py`** — new: ingest a URL + enqueue `generate_from_source` from terminal, with format/speaker/length/angle overrides
+- **`scripts/test_remix.py`** — new: trigger a remix on existing source (by URL or source_id), `--list` shows recent sources
+
+### Bug Fix
+`generate_from_source` jobs failed with `relation "source_similarity" does not exist` — the pulled `idea_generator` reads/writes a `source_similarity` cache table, but migration `0013_source_similarity` is a no-op stub (table was applied directly on the original dev DB, never created elsewhere). No shows were being created from added links as a result.
+- **`alembic/versions/0018_create_source_similarity.py`** — new migration; creates `source_similarity (source_a uuid, source_b uuid, score double precision, PK(source_a, source_b))` with `IF NOT EXISTS` so it is safe on DBs where the table already exists
+
+## 2026-05-20 · Claude (claude-sonnet-4-6)
+
+### Feature
+`last_played_at` column on episode — stamped on every progress update, returned in GET /episodes, powers listening history.
+- **`alembic/versions/0017_episode_last_played_at.py`** — migration adding `last_played_at` (timestamptz, nullable) to episode table
+- **`api/routes/episodes.py`** — UPDATE progress sets `last_played_at = NOW()`; both SELECT queries include the column
+- **`api/schemas.py`** — `EpisodeSummary` exposes `last_played_at: Optional[datetime]`
+
+---
+
+## 2026-05-20 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+Intro/outro crossfade stitching — all timings now describe the final stitched MP3, not the raw TTS body. No frontend changes required.
+- **`studio/generator.py`** — replaced simple intro/outro prepend/append with pydub overlay crossfades (intro: 8s full + 5s fade-out overlapping TTS start; outro: 5s fade-in under TTS end + 3s full + 2s fade-out). Added `INTRO_FULL_MS`, `INTRO_FADE_MS`, `INTRO_GAIN_DB`, `OUTRO_FADE_IN_MS`, `OUTRO_FULL_MS`, `OUTRO_FADE_OUT_MS`, `OUTRO_GAIN_DB` constants. `tts_timings` offset is now `INTRO_FULL_MS` (when speech starts), not total intro clip length. `synthesize_and_stitch_v2` now tracks and returns `intro_offset_ms` (was missing). `_derive_display_fields` accepts `intro_ms` param, removes `round()` on chapter `startMinute`, shifts chapters 2+ by `intro_ms/60000` fractional minutes.
+- **`studio/shows/profiles.py`** — updated docstring to reflect crossfade behaviour (was "prepend/append"). Added `_AUDIO_INTRO` / `_AUDIO_OUTRO` constants pointing to `assets/audio/`; wired into all four show profiles.
+- **`assets/audio/intro.mp3`** — full intro music source file (full-length, backend cuts at stitch time)
+- **`assets/audio/outro.mp3`** — full outro music source file (full-length, backend cuts at stitch time)
+
+## 2026-05-19 · Claude (claude-sonnet-4-6) (2)
+
+### Bug Fix
+`GET /episodes` crashed on every call — `play_progress` and `listened` columns were referenced in SQL but never added via migration, causing the Shows tab to always show empty/error.
+- **`alembic/versions/0016_episode_playback_progress.py`** — adds `play_progress float` and `listened boolean NOT NULL DEFAULT false` to the `episode` table
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6) (6)
+
+### Bug Fix
+- **`studio/formats.py`** — added missing `resolve_format_name()` function; `POST /generate-from-source` was importing it but it didn't exist, causing a 500 on any request that included a `show_name`. Accepts both frontend slugs (`sharp-take`) and backend names (`clarity_engine`).
+
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6) (5)
+
+### Bug Fix
+Share sheet was triggering a `generate_ideas` job automatically as soon as ingest finished, ignoring user customizations set in the share sheet. The ingest handler auto-enqueues `generate_ideas` after every source reaches ready — but the share sheet calls `generateFromSource` explicitly on dismiss and owns the generation step. Fix: add `auto_generate` flag to the ingest job payload; when `false`, the ingest handler skips the auto-enqueue. Share sheet now passes `auto_generate=false` via `POST /sources`.
+- **`api/schemas.py`** — added `auto_generate: bool = True` to `CreateSourceRequest`
+- **`api/routes/sources.py`** — threads `auto_generate` into the ingest job payload
+- **`worker/handlers/ingest.py`** — skips `generate_ideas` enqueue when `auto_generate=false` in payload
+
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6) (4)
+
+### Bug Fix
+`substack.com/pub/<author>/p/<slug>` URLs were returning 404 on HEAD check because that URL form isn't valid — only `<author>.substack.com/p/<slug>` works. The cascade.py `normalize_url` rewrite was correct but the worker hadn't been restarted to pick it up. Failed sources re-queued and confirmed scraping successfully.
+- **`core/errors.py`** — new `PermanentError(ValueError)` exception class for failures where retrying is pointless
+- **`core/queue.py`** — added `fail_permanently()` that immediately marks a job `failed` with `attempts = max_attempts` (no retry)
+- **`core/scraper/cascade.py`** — validation errors, 404/403 HEAD failures, and content extraction failures now raise `PermanentError` instead of `ValueError` so the worker doesn't waste 3 attempts on dead URLs
+- **`worker/main.py`** — added `except PermanentError` branch that calls `fail_permanently()` and logs `JOB_PERMANENT_FAIL`; regular transient errors still use the retry-capable `fail()`
+
+---
+
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6) (3)
+
+### Bug Fix
+`open.substack.com` URLs shared from the Substack app were failing to scrape because that domain requires login. Added rewrite in `normalise_url` to convert `open.substack.com` → `substack.com` before the URL is stored or scraped.
+- **`core/ingest.py`** — `normalise_url` now rewrites `open.substack.com` to `substack.com`
+
+### Bug Fix
+edge-tts synthesis was crashing with "Cannot run the event loop while another loop is running" when called from the async worker. Fixed by running the edge-tts coroutine in a `ThreadPoolExecutor` thread with its own fresh event loop.
+- **`core/llm_config/adapters/tts.py`** — `_synthesize_edge_tts` now uses `ThreadPoolExecutor` to isolate the new event loop from the worker's running loop
+
+---
+
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Bug Fix
+Smallest.ai Lightning was rejecting TTS requests with "Text length exceeds the limit" — the 450-char chunking wasn't handling sentences that themselves exceed the limit, and the actual API limit is ~200 chars. Rewrote `_chunk_text` to guarantee all chunks are under 200 chars with a three-tier strategy: sentence boundaries → word boundaries → hard truncation.
+- **`core/llm_config/adapters/tts.py`** — reduced `SMALLEST_MAX_CHARS` to 200; rewrote `_chunk_text` with word-level fallback and hard truncation for individual oversized words
+
+### Feature
+Job priority queue — ingest and idea-generation jobs now jump ahead of long-running episode synthesis jobs so sharing a link is never blocked by a running episode job.
+- **`alembic/versions/0016_job_priority.py`** — new migration adding `priority INTEGER NOT NULL DEFAULT 10` column to `jobs`
+- **`core/queue.py`** — added `_JOB_PRIORITY` map (ingest=1, generate_ideas=2, generate_from_source=3, generate_episode=10); `enqueue` now sets priority from the map; `dequeue` orders by `priority ASC, created_at ASC`
+
+---
+
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Bug Fix
+`duration_seconds`, `description`, and `chapters` were null on all generated episodes because `_derive_display_fields` was lost in the v2.2 rebuild. Restored the helper and wired it into the final UPDATE in `process_episode`.
+- **`studio/generator.py`** — added `_derive_display_fields(outline, duration_seconds)` helper; updated `process_episode` final UPDATE to write `duration_seconds`, `description`, and `chapters`
+
+---
+
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+Restore auto-generation pipeline lost in v2.2 rebuild — ported from commit 83d01e0 (v2.1). Ingest now auto-triggers idea generation; idea generator now diffs clusters and auto-creates episodes; generate-from-source handler and route restored.
+- **`worker/handlers/ingest.py`** — after source reaches ready, auto-enqueues `generate_ideas` (deduped: skips if already queued/running)
+- **`intelligence/idea_generator.py`** — restored `diff_clusters` node (skips clusters already in show_idea), `auto_generate` node (creates episode rows + enqueues jobs), `auto_generated_count` state field, full graph wiring
+- **`worker/handlers/generate_from_source.py`** — restored handler for share/customize flow
+- **`api/routes/generate_from_source.py`** — restored `POST /generate-from-source` route
+- **`worker/handlers/__init__.py`** — registered `generate_from_source` handler
+- **`api/main.py`** — registered `generate_from_source` router
+
+---
+
+## 2026-05-19 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Config
+Switch all model bindings from Anthropic to OpenAI: `gpt-4o-mini` replaces `haiku-4-5` (transformations, outline, idea evaluation), `gpt-4o` replaces `sonnet-4-6` (transcript, judge). Embedding switched from Voyage (no key, zero stubs) to OpenAI `text-embedding-3-small` (1536-dim). Backfilled all 64 existing `source_embedding` rows with real vectors.
+- **`.env`** — added `OPENAI_API_KEY`
+- **`config/models.yaml`** — added `openai_llm` provider; added `gpt-4o-mini` and `gpt-4o` model aliases; added `openai_embed` provider and `text-embedding-3-small` alias; updated all task/environment/show bindings
+
+---
+
+## 2026-05-19 · Claude (claude-sonnet-4-6)
+
+### Feature
+Cascading scraper with URL validation, HEAD check, paywall detection, and Twitter/X routing — replaces the inline trafilatura-only block in `scrape_url`; adds URL normalisation to deduplicate sources with tracking params; filters idea generator to only cluster `ready` sources.
+- **`core/scraper/__init__.py`** — new package marker
+- **`core/scraper/validator.py`** — regex-based URL validation (video, social, shopping, adult, search, messaging, file, private IP); paywall domain set; Twitter detection helpers
+- **`core/scraper/cascade.py`** — cascading scraper: validate → HEAD check → trafilatura → firecrawl → fail, with paywall/Twitter-specific error messages
+- **`core/ingest.py`** — `scrape_url` replaced with thin delegation to `core.scraper.cascade.scrape`; `normalise_url` added to strip UTM/tracking params; `get_or_create_source` calls `normalise_url` as first step
+- **`intelligence/idea_generator.py`** — `load_archive` query now filters `status = 'ready'` so incomplete sources are excluded from clustering
+- **`.env.example`** — documented `FIRECRAWL_API_KEY` as optional fallback scraper key
+
+### Test
+- **`tests/test_url_validator.py`** — full test suite: URL validator, HEAD check, paywall detection, Twitter detection, cascading scraper behaviour
+
+---
+
+## 2026-05-19 · Claude (claude-sonnet-4-6) (4)
+
+### Bug Fix
+Remixed episodes stored duplicate `source_ids` because the selector returns sources from multiple show_ideas and the ids were concatenated without deduplication. Affected episode cleaned up directly in DB.
+- **`studio/generator.py`** — `_coerce_source_uuids` now deduplicates (preserves order) before returning, fixing all future episode writes
+- **`api/routes/episodes.py`** — list endpoint `source_objects` builder now deduplicates by UUID, fixing display for any existing episodes with duplicate source_ids in the DB
+
+## 2026-05-19 · Claude (claude-sonnet-4-6) (3)
+
+### Bug Fix
+Progress and listened state were never persisted — `PUT /episodes/{id}/progress` endpoint was missing entirely. Frontend was silently swallowing 404s. Also `play_progress` and `listened` were not selected in the list query so state was always `"new"` on reload.
+- **`api/routes/episodes.py`** — added `PUT /episodes/{episode_id}/progress` endpoint; added `play_progress` and `listened` to both list queries
+- **`api/schemas.py`** — added `play_progress: Optional[float]` and `listened: bool` to `EpisodeSummary`
+
+## 2026-05-19 · Claude (claude-sonnet-4-6) (2)
+
+### Feature
+Option B transcript sync — per-line absolute timestamps stored alongside each episode so the frontend can highlight the current transcript line during playback (Spotify-standard approach).
+- **`alembic/versions/0015_episode_tts_timings.py`** — new migration adding `tts_timings JSONB` column to `episode`
+- **`alembic/versions/0013_source_similarity.py`** — stub migration re-establishing the broken Alembic chain (file was missing, data was already applied)
+- **`core/llm_config/adapters/tts.py`** — added `_synthesize_smallest_with_timings`, `_async_smallest_with_timings`, `synthesize_with_timings`, and `synthesize_async_with_timings`; requests word-level timestamps from Smallest AI (`"timestamps": True`), returns them alongside audio
+- **`core/tts.py`** — added `synthesize_for_speaker_with_timings` returning `(output_format, word_timings)`
+- **`studio/generator.py`** — `synthesize_and_stitch` now returns `(output_path, tts_timings)`; computes absolute `start_ms`/`end_ms` per line from pydub clip durations + gap; `process_episode` stores `tts_timings` JSONB in UPDATE
+- **`api/schemas.py`** — added `tts_timings: Optional[Any]` to `EpisodeDetail`
+- **`api/routes/episodes.py`** — `GET /episodes/{id}` now selects `tts_timings`
+
+### Bug Fix
+`length_minutes` was never written back after generation — worker reads it as an input override but never saves the actual audio duration, leaving it NULL for all episodes and causing chapter timestamps to fall back to show-format defaults.
+- **`studio/generator.py`** — after stitching, reads MP3 duration via pydub and saves `actual_length_minutes` in the final UPDATE
+
+## 2026-05-18 · Claude (claude-sonnet-4-6) (3)
+
+### Bug Fix
+LLM was outputting `"label"` instead of `"title"` for segment chapter names despite the schema specifying `"title"`. Frontend handles existing episodes via `label ?? title` fallback; prompt patched to prevent recurrence.
+- **`prompts/outline.txt`** — added explicit "Do NOT use 'label' -- use 'title'" instruction to output schema
+
+## 2026-05-18 · Claude (claude-sonnet-4-6) (2)
+
+### Bug Fix
+Chapters were all showing startMinute=0 because `GET /episodes` list query was not returning `outline`, so the frontend had nothing to derive chapter timestamps from.
+- **`api/routes/episodes.py`** — added `outline` to both list queries (with and without status filter)
+- **`api/schemas.py`** — added `outline: Optional[Any] = None` to `EpisodeSummary` so it serialises through
+
+## 2026-05-18 · Claude (claude-sonnet-4-6)
+
+### Config
+- **`config/models.yaml`** — remapped Smallest AI voices: kenji→james, arjun→george, emeka→emily
+
+### Bug Fix
+`speaker_override` was correctly reaching transcript generation but was ignored by audio synthesis — all episodes were always synthesized with the default show speaker (kenji/emily) regardless of what the user selected.
+- **`studio/generator.py`** — added `speaker_override` param to `synthesize_and_stitch` and `synthesize_and_stitch_v2`; when set and valid, overrides `allowed_speakers` so the correct Smallest AI voice is used. Passed through from `process_episode` call site.
+
+---
+
+## 2026-05-18 · Claude (claude-sonnet-4-6)
+
+### Bug Fix
+- **`api/routes/sources.py`** — `GET /sources/{id}/episodes` was passing `str(source_id)` with `::uuid` cast to `ANY(source_ids)`, silently returning zero rows. Now passes `uuid.UUID` object directly.
+
+### Bug Fix
+Source JOIN was silently returning zero rows because asyncpg requires `uuid.UUID` objects for `uuid[]` array binding — passing strings with `::uuid[]` cast doesn't work. Fixed in both list and detail endpoints.
+- **`api/routes/episodes.py`** — pass `list[uuid.UUID]` (not strings) to `ANY($ids)`, drop the `::uuid[]` cast; dedup source IDs before querying
+
+### Feature
+Source objects on episode list — `GET /episodes` now batch-fetches source domain + title for all episodes in one query.
+- **`api/schemas.py`** — added `source_ids` and `source_objects` fields to `EpisodeSummary`
+- **`api/routes/episodes.py`** — list endpoint now selects `source_ids`, batch-JOINs `source` table, stitches `source_objects` onto each episode row
+
+### Feature
+Source objects on episode detail — domain + title now returned alongside source IDs.
+- **`api/schemas.py`** — added `EpisodeSourceObject` model (id, domain, title); added `source_objects` field to `EpisodeDetail`
+- **`api/routes/episodes.py`** — `GET /episodes/{id}` now JOINs the `source` table on `source_ids`, builds `source_objects` list with domain parsed from URL and title; falls back gracefully when no sources
+
+### Feature
+- **`api/routes/sources.py`** — added `GET /sources/{source_id}/episodes` endpoint; returns all episodes whose `source_ids` array contains the given source, scoped to the authenticated user
+
+---
+
 ## 2026-05-16 · Bhabani + Claude (claude-sonnet-4-6)
 
 ### Docs

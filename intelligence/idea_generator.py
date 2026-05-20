@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from loguru import logger
 
-from core.db.connection import db_execute, db_query
+from core.db.connection import db_execute, db_fetchrow, db_query
 from core.embeddings import get_embedding
 from core.kb import UserKB, load_kb
 from core.prompts.idea_evaluation import (
@@ -130,7 +130,12 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
             orig_sid = sid_to_original.get(bare, bare)
             source_embeddings[orig_sid] = list(emb) if hasattr(emb, "__iter__") else emb
 
+    no_embedding = [s["id"] for s in sources if s["id"] not in source_embeddings]
     logger.info(f"[cluster_sources] Got primitive embeddings for {len(source_embeddings)} sources")
+    if no_embedding:
+        id_to_title = {s["id"]: s.get("title", "?") for s in sources}
+        for sid in no_embedding:
+            logger.debug(f"[cluster_sources] NO_EMBEDDING: {id_to_title.get(sid, sid)[:80]}")
 
     # Cosine similarity
     def cosine(a, b):
@@ -191,6 +196,27 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
 
     logger.info(f"[cluster_sources] {len(new_scores)} new pairs computed, {len(scores)//2 - len(new_scores)} from cache")
 
+    # Log all above-threshold pairs so you can see what's connecting
+    id_to_title = {s["id"]: s.get("title", "?") for s in sources}
+    above = sorted(
+        [(a, b, sc) for (a, b), sc in scores.items() if a < b and sc >= SIMILARITY_THRESHOLD],
+        key=lambda x: -x[2],
+    )
+    if above:
+        logger.debug(f"[cluster_sources] {len(above)} pairs above threshold ({SIMILARITY_THRESHOLD}):")
+        for a, b, sc in above:
+            logger.debug(f"  {sc:.3f}  '{id_to_title.get(a, a)[:50]}'  ↔  '{id_to_title.get(b, b)[:50]}'")
+    else:
+        logger.debug(f"[cluster_sources] No pairs above threshold ({SIMILARITY_THRESHOLD}) — all sources will be standalone")
+
+    # Log below-threshold pairs at trace level (high volume — only useful for deep debugging)
+    below = sorted(
+        [(a, b, sc) for (a, b), sc in scores.items() if a < b and sc < SIMILARITY_THRESHOLD],
+        key=lambda x: -x[2],
+    )
+    for a, b, sc in below:
+        logger.trace(f"  {sc:.3f}  BELOW '{id_to_title.get(a, a)[:50]}'  ↔  '{id_to_title.get(b, b)[:50]}'")
+
     def is_clique(members):
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
@@ -227,7 +253,13 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
         if sid not in in_clique:
             clusters.append([sid])
 
-    logger.info(f"[cluster_sources] {len(clusters)} clusters formed")
+    # Log final cluster membership
+    for i, cluster in enumerate(clusters):
+        members = ", ".join(f"'{id_to_title.get(sid, sid)[:40]}'" for sid in cluster)
+        kind = "cluster" if len(cluster) > 1 else "standalone"
+        logger.info(f"[cluster_sources] [{kind}] {members}")
+
+    logger.info(f"[cluster_sources] {len(clusters)} clusters formed ({len([c for c in clusters if len(c) > 1])} multi-source, {len([c for c in clusters if len(c) == 1])} standalone)")
     return {**state, "clusters": clusters}
 
 
@@ -431,29 +463,30 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
     ideas = state["filtered_ideas"]
     user_id = state["user_id"]
 
-    # Validate angles before saving
-    from core.angle.validator import validate_angle
-    sources = state.get("sources", [])
-    source_summaries = []
-    for src in sources:
-        insights = src.get("insights", {})
-        summary = insights.get("summary", "")
-        if summary:
-            source_summaries.append(summary)
+    logger.info(f"[save_ideas] Saving {len(ideas)} ideas")
 
-    validated_ideas = []
+    from core.angle.validator import validate_angle
+
+    saved_ideas = []
     for idea in ideas:
         angle = idea.get("angle", "")
-        result = await validate_angle(angle, source_summaries=source_summaries or None)
-        if result.valid:
-            validated_ideas.append(idea)
-        else:
-            logger.info(f"[save_ideas] DROP (angle invalid): {angle[:80]} — {result.reason}")
+        if angle:
+            idea_source_ids = idea.get("source_ids", []) or []
+            source_summaries = []
+            for src_id in idea_source_ids:
+                sid_str = str(src_id).replace("source:", "")
+                row = await db_fetchrow(
+                    "SELECT content FROM source_insight WHERE source_id = $id::uuid AND insight_type = 'summary'",
+                    {"id": sid_str},
+                )
+                if row and row.get("content"):
+                    source_summaries.append(row["content"])
 
-    ideas = validated_ideas
-    logger.info(f"[save_ideas] Saving {len(ideas)} ideas (after angle validation)")
+            result = await validate_angle(angle, source_summaries=source_summaries or None)
+            if not result.valid:
+                logger.info(f"[save_ideas] DROP (angle invalid): {angle[:80]} — {result.reason}")
+                continue
 
-    for idea in ideas:
         # Coerce source_ids to UUIDs (uuid[] column)
         from uuid import UUID
         raw_ids = idea.get("source_ids", []) or []
@@ -503,7 +536,6 @@ async def auto_generate(state: IdeaGenState) -> IdeaGenState:
         FROM show_idea
         WHERE user_id = $user_id
           AND generated = false
-          AND created_at > now() - interval '60 seconds'
         """,
         {"user_id": user_id},
     )
@@ -523,10 +555,10 @@ async def auto_generate(state: IdeaGenState) -> IdeaGenState:
                 """
                 INSERT INTO episode
                     (id, user_id, show_name, show_idea_id, editorial_direction,
-                     length_minutes, speaker_override, status)
+                     length_minutes, speaker_override, source_ids, status)
                 VALUES
                     ($id::uuid, $user_id, $show, $idea_id::uuid, $direction,
-                     NULL, NULL, 'queued')
+                     NULL, NULL, $source_ids, 'queued')
                 """,
                 {
                     "id": episode_id,
@@ -534,6 +566,7 @@ async def auto_generate(state: IdeaGenState) -> IdeaGenState:
                     "show": fmt,
                     "idea_id": str(idea["id"]),
                     "direction": idea.get("angle", ""),
+                    "source_ids": idea.get("source_ids") or [],
                 },
             )
             await db_execute(
