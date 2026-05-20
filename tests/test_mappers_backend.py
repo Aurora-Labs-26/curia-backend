@@ -28,15 +28,9 @@ def test_format_configs_have_required_fields():
         assert len(fmt.rules.must_avoid) > 0, f"{name} has no must_avoid rules"
 
 
-def test_formats_have_display_names():
-    for name, fmt in FORMATS.items():
-        assert fmt.frontend_name, f"{name} missing frontend_name"
-        assert fmt.display_name, f"{name} missing display_name"
-
-
-def test_frontend_slugs_are_unique():
-    slugs = [fmt.frontend_name for fmt in FORMATS.values()]
-    assert len(slugs) == len(set(slugs)), "duplicate frontend_name in FORMATS"
+def test_format_names_match_keys():
+    for key, fmt in FORMATS.items():
+        assert fmt.name == key, f"key '{key}' != fmt.name '{fmt.name}'"
 
 
 def test_resolve_format_name_accepts_backend_names():
@@ -59,9 +53,10 @@ def test_get_format_raises_on_unknown():
         get_format("not_a_format")
 
 
-def test_get_format_accepts_frontend_slug():
-    fmt = get_format("slow-burn")
-    assert fmt.name == "narrative_drift"
+def test_get_format_returns_correct_config():
+    for name in FORMATS:
+        fmt = get_format(name)
+        assert fmt.name == name
 
 
 def test_show_profiles_match_formats():
