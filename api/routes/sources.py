@@ -95,7 +95,7 @@ async def list_sources(
         rows = await db_query(
             """
             SELECT s.id, s.title, s.url, s.status, s.created_at, s.error,
-                   (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id) AS covered_in
+                   (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id AND s.status = $status
             ORDER BY s.created_at DESC LIMIT $limit
@@ -106,7 +106,7 @@ async def list_sources(
         rows = await db_query(
             """
             SELECT s.id, s.title, s.url, s.status, s.created_at, s.error,
-                   (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id) AS covered_in
+                   (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id
             ORDER BY s.created_at DESC LIMIT $limit
@@ -151,7 +151,9 @@ async def list_episodes_for_source(
         SELECT id, show_name, title, status, created_at, error, quality_score,
                length_minutes, speaker_override, source_ids
         FROM episode
-        WHERE user_id = $user_id AND source_ids @> ARRAY[$source_id]::uuid[]
+        WHERE user_id = $user_id
+          AND source_ids @> ARRAY[$source_id]::uuid[]
+          AND status = 'ready'
         ORDER BY created_at DESC
         """,
         {"user_id": user_id, "source_id": source_id},
