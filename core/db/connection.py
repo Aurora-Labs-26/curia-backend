@@ -103,6 +103,7 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
+        logger.info(f"Connecting to Postgres → {_safe_url(DATABASE_URL)}")
         import ssl as _ssl
         ssl_ctx = None
         is_local = "localhost" in DATABASE_URL or "127.0.0.1" in DATABASE_URL
@@ -113,10 +114,12 @@ async def get_pool() -> asyncpg.Pool:
             ssl_ctx.verify_mode = _ssl.CERT_NONE
         _pool = await asyncpg.create_pool(
             DATABASE_URL,
-            min_size=2,
+            min_size=0,
             max_size=10,
             init=_init_connection,
             ssl=ssl_ctx,
+            timeout=10,
+            command_timeout=10,
         )
         logger.info(f"Postgres pool created → {_safe_url(DATABASE_URL)}")
     return _pool

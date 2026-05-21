@@ -43,7 +43,6 @@ from optimization.guidelines import (
     invalidate_cache as invalidate_guidelines_cache,
     list_tasks as list_guideline_tasks,
 )
-from optimization.rubrics import generate_judge_prompt
 from optimization.rubrics.generator import generate_judge_prompt_async
 
 router = APIRouter(prefix="/admin", tags=["admin"])

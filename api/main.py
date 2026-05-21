@@ -42,15 +42,21 @@ async def lifespan(app: FastAPI):
     # Logging setup — must happen before anything else
     from core.logging import setup_logging
     from core.prompt_watcher import init_prompt_hashes
-    from core.prompts.loader import PROMPTS_DIR
+    from pathlib import Path
+    PROMPTS_DIR = Path(os.getenv(
+        "CURIA_PROMPTS_DIR",
+        str(Path(__file__).resolve().parent.parent / "prompts"),
+    ))
 
     setup_logging(service="api")
     init_prompt_hashes(PROMPTS_DIR)
 
-    # Startup — warm the asyncpg pool early so first request is fast.
-    # Non-fatal: if DB is slow to start, the pool will be created on first request.
+    logger.info(f"[api] DATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}")
+    logger.info(f"[api] PORT={os.getenv('PORT', 'not set')}")
+
     try:
         await get_pool()
+        logger.info("[api] DB pool ready")
     except Exception as e:
         logger.warning(f"[api] pool warmup failed ({e}); will retry on first request")
 

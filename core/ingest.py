@@ -25,10 +25,6 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from .db.connection import db_execute, db_fetchrow, db_query
-from .prompts.transformations import (
-    TRANSFORMATION_NAMES,
-    transformations as _transformations,
-)
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
 
@@ -78,6 +74,7 @@ async def scrape_url(url: str) -> tuple[str, str]:
 
 
 def run_transformation(full_text: str, transformation_name: str) -> str:
+    from .prompts.transformations import transformations as _transformations
     return _transformations.run_one(
         article=full_text[:ARTICLE_CHAR_CAP],
         transformation_name=transformation_name,
@@ -217,6 +214,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
             full_text = row["full_text"]
 
         # 2. Run transformations in parallel
+        from .prompts.transformations import TRANSFORMATION_NAMES
         await _set_status(source_id, "transforming")
         loop = asyncio.get_event_loop()
         tasks = [
