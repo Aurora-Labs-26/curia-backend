@@ -47,9 +47,12 @@ async def lifespan(app: FastAPI):
     setup_logging(service="api")
     init_prompt_hashes(PROMPTS_DIR)
 
-    # Startup — warm the asyncpg pool early so first request is fast and any
-    # connection problem surfaces at boot, not on first request.
-    await get_pool()
+    # Startup — warm the asyncpg pool early so first request is fast.
+    # Non-fatal: if DB is slow to start, the pool will be created on first request.
+    try:
+        await get_pool()
+    except Exception as e:
+        logger.warning(f"[api] pool warmup failed ({e}); will retry on first request")
 
     from core.firebase import init_firebase
     init_firebase()
