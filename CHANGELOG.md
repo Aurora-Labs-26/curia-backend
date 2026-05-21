@@ -7,6 +7,10 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-05-21 · Claude (claude-opus-4-6)
 
 ### Bug Fix
+Twitter/X URLs now go through the full scraping cascade (trafilatura → Jina → Firecrawl) instead of skipping straight to Firecrawl.
+- **`core/scraper/cascade.py`** — removed Twitter/X short-circuit; all URLs use the same tier 1→2→3 pipeline
+
+### Bug Fix
 Break DSPy import chains and add pool timeouts so the API boots on Railway within the health-check window.
 - **`api/main.py`** — inline PROMPTS_DIR path instead of importing from core.prompts.loader (which triggered DSPy/LiteLLM loading); add startup debug logging for DATABASE_URL and PORT
 - **`api/routes/admin.py`** — remove unused `from optimization.rubrics import generate_judge_prompt` (triggered judge.py → import dspy at module level)
