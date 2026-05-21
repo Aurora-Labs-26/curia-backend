@@ -4,6 +4,15 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-21 · Claude (claude-opus-4-6)
+
+### Bug Fix
+Break DSPy import chains and add pool timeouts so the API boots on Railway within the health-check window.
+- **`api/main.py`** — inline PROMPTS_DIR path instead of importing from core.prompts.loader (which triggered DSPy/LiteLLM loading); add startup debug logging for DATABASE_URL and PORT
+- **`api/routes/admin.py`** — remove unused `from optimization.rubrics import generate_judge_prompt` (triggered judge.py → import dspy at module level)
+- **`core/db/connection.py`** — set min_size=0, timeout=10s, command_timeout=10s on asyncpg pool; add connection logging
+- **`core/ingest.py`** — defer transformation imports to function level so API startup doesn't load DSPy (only the worker needs it)
+
 ## 2026-05-20 · Claude (claude-sonnet-4-6) (6)
 
 ### Feature
