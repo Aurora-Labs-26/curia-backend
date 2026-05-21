@@ -768,6 +768,20 @@ async def process_episode(episode_id: str) -> None:
             transcript, show_name, audio_path, speaker_override=speaker_override
         )
 
+        # 5b. Upload to cloud storage if configured (R2/S3)
+        audio_url: str | None = None
+        try:
+            from core.storage import get_storage_backend, upload_file
+            if get_storage_backend() == "s3":
+                audio_url = await upload_file(
+                    file_path=audio_path,
+                    key=f"audio/{episode_id}.mp3",
+                    content_type="audio/mpeg",
+                )
+                logger.info(f"  audio uploaded → {audio_url}")
+        except Exception as e:
+            logger.warning(f"  cloud upload failed ({e}); audio_url will be None")
+
         # 6. Persist results onto the existing row
         # Derive actual duration from the stitched MP3
         actual_duration_seconds: int | None = None
@@ -792,6 +806,7 @@ async def process_episode(episode_id: str) -> None:
                 transcript = $transcript::jsonb,
                 outline = $outline::jsonb,
                 audio_path = $audio_path,
+                audio_url = $audio_url,
                 source_ids = $source_ids,
                 quality_score = $score,
                 quality_feedback = $feedback,
@@ -812,6 +827,7 @@ async def process_episode(episode_id: str) -> None:
                 "transcript": json.dumps(transcript),
                 "outline": json.dumps(outline),
                 "audio_path": audio_path,
+                "audio_url": audio_url,
                 "source_ids": source_uuids,
                 "score": judgment.overall_score,
                 "feedback": judgment.feedback,

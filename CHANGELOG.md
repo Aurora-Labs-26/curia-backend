@@ -6,9 +6,13 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-05-21 · Claude (claude-opus-4-6)
 
-### Bug Fix
-Twitter/X URLs now go through the full scraping cascade (trafilatura → Jina → Firecrawl) instead of skipping straight to Firecrawl.
-- **`core/scraper/cascade.py`** — removed Twitter/X short-circuit; all URLs use the same tier 1→2→3 pipeline
+### Feature
+Cloud audio storage via Cloudflare R2 (S3-compatible). Episode MP3s are uploaded to R2 after generation so they survive container restarts on Railway.
+- **`core/storage/blob.py`** — added `upload_file()` for streaming file uploads, `_upload_s3_file()` backend, `CURIA_S3_PUBLIC_URL` env var for R2 public bucket URLs
+- **`core/storage/__init__.py`** — export `upload_file`
+- **`studio/generator.py`** — after stitching, uploads MP3 to R2 if `CURIA_STORAGE_BACKEND=s3`; stores public URL in `episode.audio_url`
+- **`api/routes/episodes.py`** — audio endpoint returns 302 redirect to R2 URL when available, falls back to local disk streaming
+- **`alembic/versions/0024_episode_audio_url.py`** — adds `audio_url TEXT` column to episode table
 
 ### Bug Fix
 Break DSPy import chains and add pool timeouts so the API boots on Railway within the health-check window.

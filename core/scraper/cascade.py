@@ -1,7 +1,7 @@
 """
 core/scraper/cascade.py
 Cascading scraper: validate → HEAD check → trafilatura (free) → Jina (free) → firecrawl (credits) → fail.
-All URLs (including Twitter/X) go through the full pipeline.
+Twitter/X goes straight to firecrawl (only thing that works).
 Each tier catches its own errors and falls through to the next.
 """
 
@@ -86,6 +86,12 @@ async def scrape(url: str) -> tuple[str, str]:
 
     hostname = (urlparse(url).hostname or "").lower()
     is_paywall_domain = is_likely_paywalled(hostname)
+    is_twitter = is_twitter_url(url)
+
+    # Twitter/X: only firecrawl works (headless browser needed)
+    if is_twitter:
+        logger.info(f"[scraper] Twitter/X URL — going straight to firecrawl")
+        return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
     # Tier 1: trafilatura (free, local, no network dependency)
     try:

@@ -261,7 +261,7 @@ async def get_episode_audio(
 ):
     row = await db_fetchrow(
         """
-        SELECT audio_path, status, title FROM episode
+        SELECT audio_path, audio_url, status, title FROM episode
         WHERE id = $id::uuid AND user_id = $user_id
         """,
         {"id": str(episode_id), "user_id": user_id},
@@ -270,6 +270,12 @@ async def get_episode_audio(
         raise HTTPException(404, "episode not found")
     if row["status"] != "ready":
         raise HTTPException(409, f"episode not ready (status={row['status']})")
+
+    from fastapi.responses import RedirectResponse
+    audio_url = row.get("audio_url")
+    if audio_url:
+        return RedirectResponse(audio_url, status_code=302)
+
     audio_path = row.get("audio_path")
     if not audio_path or not Path(audio_path).exists():
         raise HTTPException(410, "audio file missing on disk")

@@ -237,3 +237,36 @@ class TestLocalUpload:
         finally:
             os.environ.pop("CURIA_STORAGE_BACKEND", None)
             os.environ.pop("CURIA_STORAGE_LOCAL_DIR", None)
+
+    @pytest.mark.asyncio
+    async def test_upload_file_local(self, tmp_path):
+        import os
+        os.environ["CURIA_STORAGE_BACKEND"] = "local"
+        os.environ["CURIA_STORAGE_LOCAL_DIR"] = str(tmp_path / "blobs")
+        try:
+            src = tmp_path / "episode.mp3"
+            src.write_bytes(b"\xff\xfb\x90\x00" * 100)
+            from core.storage.blob import upload_file
+            url = await upload_file(
+                file_path=str(src),
+                key="audio/test-ep.mp3",
+                content_type="audio/mpeg",
+            )
+            assert (tmp_path / "blobs" / "audio" / "test-ep.mp3").exists()
+            assert "test-ep.mp3" in url
+        finally:
+            os.environ.pop("CURIA_STORAGE_BACKEND", None)
+            os.environ.pop("CURIA_STORAGE_LOCAL_DIR", None)
+
+
+class TestPublicUrl:
+    def test_s3_public_url_override(self):
+        import os
+        os.environ["CURIA_STORAGE_BACKEND"] = "s3"
+        os.environ["CURIA_S3_PUBLIC_URL"] = "https://pub-abc123.r2.dev"
+        try:
+            url = get_blob_url("audio/episode-1.mp3")
+            assert url == "https://pub-abc123.r2.dev/audio/episode-1.mp3"
+        finally:
+            os.environ.pop("CURIA_STORAGE_BACKEND", None)
+            os.environ.pop("CURIA_S3_PUBLIC_URL", None)

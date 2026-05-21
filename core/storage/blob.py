@@ -33,9 +33,25 @@ async def upload_blob(
     return await _upload_local(data, key)
 
 
+async def upload_file(
+    file_path: str,
+    key: str,
+    content_type: str = "application/octet-stream",
+) -> str:
+    """Upload a file from disk to blob storage. Returns the public URL."""
+    backend = get_storage_backend()
+    if backend == "s3":
+        return await _upload_s3_file(file_path, key, content_type)
+    data = Path(file_path).read_bytes()
+    return await _upload_local(data, key)
+
+
 def get_blob_url(key: str) -> str:
     backend = get_storage_backend()
     if backend == "s3":
+        public_url = os.getenv("CURIA_S3_PUBLIC_URL")
+        if public_url:
+            return f"{public_url.rstrip('/')}/{key}"
         bucket = os.getenv("CURIA_S3_BUCKET", "curia-assets")
         region = os.getenv("CURIA_S3_REGION", "us-east-1")
         endpoint = os.getenv("CURIA_S3_ENDPOINT")
@@ -86,6 +102,45 @@ async def _upload_s3(data: bytes, key: str, content_type: str) -> str:
     await asyncio.to_thread(_put)
     url = get_blob_url(key)
     logger.info(f"[storage] uploaded {len(data)} bytes → s3://{bucket}/{key}")
+    return url
+
+
+async def _upload_s3_file(file_path: str, key: str, content_type: str) -> str:
+    """Upload a file from disk to S3-compatible storage (avoids loading entire file into memory)."""
+    try:
+        import boto3
+    except ImportError:
+        raise RuntimeError("boto3 is required for S3 storage — pip install boto3")
+
+    bucket = os.getenv("CURIA_S3_BUCKET", "curia-assets")
+    region = os.getenv("CURIA_S3_REGION", "us-east-1")
+    endpoint = os.getenv("CURIA_S3_ENDPOINT")
+
+    kwargs: dict = {"region_name": region}
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+
+    access_key = os.getenv("CURIA_S3_ACCESS_KEY") or os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("CURIA_S3_SECRET_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY")
+    if access_key and secret_key:
+        kwargs["aws_access_key_id"] = access_key
+        kwargs["aws_secret_access_key"] = secret_key
+
+    import asyncio
+
+    def _put():
+        client = boto3.client("s3", **kwargs)
+        client.upload_file(
+            file_path,
+            bucket,
+            key,
+            ExtraArgs={"ContentType": content_type},
+        )
+
+    await asyncio.to_thread(_put)
+    url = get_blob_url(key)
+    file_size = Path(file_path).stat().st_size
+    logger.info(f"[storage] uploaded file {file_size} bytes → s3://{bucket}/{key}")
     return url
 
 
