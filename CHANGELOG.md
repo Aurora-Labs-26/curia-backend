@@ -6,6 +6,11 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-05-21 · Claude (claude-opus-4-6)
 
+### Bug Fix
+R2 uploads were silently failing because `_upload_s3` and `_upload_s3_file` were missing SigV4 config (R2 rejects SigV2). Audio endpoint changed from 302 redirect to JSON `{url}` response to prevent mobile player from forwarding Authorization header to the presigned URL.
+- **`core/storage/blob.py`** — added `Config(signature_version="s3v4")` to `_upload_s3()` and `_upload_s3_file()` (was only in `generate_presigned_url`)
+- **`api/routes/episodes.py`** — return `JSONResponse({"url": presigned})` instead of `RedirectResponse(302)` to avoid auth header conflict on mobile
+
 ### Feature
 Cloud audio storage via Cloudflare R2 (S3-compatible) with presigned URLs. Episode MP3s are uploaded to R2 after generation so they survive container restarts on Railway. Private bucket — audio served via time-limited presigned download URLs (1hr expiry).
 - **`core/storage/blob.py`** — added `upload_file()` for streaming file uploads, `_upload_s3_file()` backend, `generate_presigned_url()` for temporary signed download links; removed `CURIA_S3_PUBLIC_URL` (no longer needed)

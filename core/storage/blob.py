@@ -111,7 +111,10 @@ async def _upload_s3(data: bytes, key: str, content_type: str) -> str:
     region = os.getenv("CURIA_S3_REGION", "us-east-1")
     endpoint = os.getenv("CURIA_S3_ENDPOINT")
 
-    kwargs: dict = {"region_name": region}
+    kwargs: dict = {
+        "region_name": region,
+        "config": Config(signature_version="s3v4"),
+    }
     if endpoint:
         kwargs["endpoint_url"] = endpoint
 
@@ -142,6 +145,7 @@ async def _upload_s3_file(file_path: str, key: str, content_type: str) -> str:
     """Upload a file from disk to S3-compatible storage (avoids loading entire file into memory)."""
     try:
         import boto3
+        from botocore.config import Config
     except ImportError:
         raise RuntimeError("boto3 is required for S3 storage — pip install boto3")
 
@@ -149,7 +153,10 @@ async def _upload_s3_file(file_path: str, key: str, content_type: str) -> str:
     region = os.getenv("CURIA_S3_REGION", "us-east-1")
     endpoint = os.getenv("CURIA_S3_ENDPOINT")
 
-    kwargs: dict = {"region_name": region}
+    kwargs: dict = {
+        "region_name": region,
+        "config": Config(signature_version="s3v4"),
+    }
     if endpoint:
         kwargs["endpoint_url"] = endpoint
 
