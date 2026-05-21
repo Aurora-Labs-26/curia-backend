@@ -97,7 +97,7 @@ async def list_sources(
             SELECT s.id, s.title, s.url, s.status, s.created_at, s.error,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
-            WHERE s.user_id = $user_id AND s.status = $status
+            WHERE s.user_id = $user_id AND s.status = $status AND s.hidden = false
             ORDER BY s.created_at DESC LIMIT $limit
             """,
             {"user_id": user_id, "status": status, "limit": limit},
@@ -108,12 +108,31 @@ async def list_sources(
             SELECT s.id, s.title, s.url, s.status, s.created_at, s.error,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
-            WHERE s.user_id = $user_id
+            WHERE s.user_id = $user_id AND s.hidden = false
             ORDER BY s.created_at DESC LIMIT $limit
             """,
             {"user_id": user_id, "limit": limit},
         )
     return [SourceSummary(**r) for r in rows]
+
+
+@router.post("/sources/clear-failed", status_code=200)
+async def clear_failed_sources(user_id: str = Depends(current_user_id)) -> dict:
+    """
+    Soft-hide all of the user's failed sources. Called by the client on app
+    cold-start so last session's failures disappear from the pile. Rows are
+    kept in the DB (hidden = true) for debugging/analytics, not deleted.
+    """
+    rows = await db_query(
+        """
+        UPDATE source SET hidden = true, updated_at = now()
+        WHERE user_id = $user_id AND status = 'failed' AND hidden = false
+        RETURNING id
+        """,
+        {"user_id": user_id},
+    )
+    logger.info(f"[clear_failed] soft-hid {len(rows)} failed sources for user {user_id}")
+    return {"cleared": len(rows)}
 
 
 @router.get("/sources/{source_id}", response_model=SourceDetail)
