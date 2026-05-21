@@ -274,7 +274,10 @@ async def get_episode_audio(
     from fastapi.responses import RedirectResponse
     audio_url = row.get("audio_url")
     if audio_url:
-        return RedirectResponse(audio_url, status_code=302)
+        from core.storage.blob import generate_presigned_url
+        presigned = generate_presigned_url(audio_url, expires_in=3600)
+        if presigned:
+            return RedirectResponse(presigned, status_code=302)
 
     audio_path = row.get("audio_path")
     if not audio_path or not Path(audio_path).exists():

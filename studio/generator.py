@@ -773,12 +773,14 @@ async def process_episode(episode_id: str) -> None:
         try:
             from core.storage import get_storage_backend, upload_file
             if get_storage_backend() == "s3":
-                audio_url = await upload_file(
+                blob_key = f"audio/{episode_id}.mp3"
+                await upload_file(
                     file_path=audio_path,
-                    key=f"audio/{episode_id}.mp3",
+                    key=blob_key,
                     content_type="audio/mpeg",
                 )
-                logger.info(f"  audio uploaded → {audio_url}")
+                audio_url = blob_key
+                logger.info(f"  audio uploaded to R2 → {blob_key}")
         except Exception as e:
             logger.warning(f"  cloud upload failed ({e}); audio_url will be None")
 

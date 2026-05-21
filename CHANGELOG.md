@@ -7,12 +7,13 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-05-21 · Claude (claude-opus-4-6)
 
 ### Feature
-Cloud audio storage via Cloudflare R2 (S3-compatible). Episode MP3s are uploaded to R2 after generation so they survive container restarts on Railway.
-- **`core/storage/blob.py`** — added `upload_file()` for streaming file uploads, `_upload_s3_file()` backend, `CURIA_S3_PUBLIC_URL` env var for R2 public bucket URLs
-- **`core/storage/__init__.py`** — export `upload_file`
-- **`studio/generator.py`** — after stitching, uploads MP3 to R2 if `CURIA_STORAGE_BACKEND=s3`; stores public URL in `episode.audio_url`
-- **`api/routes/episodes.py`** — audio endpoint returns 302 redirect to R2 URL when available, falls back to local disk streaming
+Cloud audio storage via Cloudflare R2 (S3-compatible) with presigned URLs. Episode MP3s are uploaded to R2 after generation so they survive container restarts on Railway. Private bucket — audio served via time-limited presigned download URLs (1hr expiry).
+- **`core/storage/blob.py`** — added `upload_file()` for streaming file uploads, `_upload_s3_file()` backend, `generate_presigned_url()` for temporary signed download links; removed `CURIA_S3_PUBLIC_URL` (no longer needed)
+- **`core/storage/__init__.py`** — export `upload_file`, `generate_presigned_url`
+- **`studio/generator.py`** — after stitching, uploads MP3 to R2 if `CURIA_STORAGE_BACKEND=s3`; stores blob key (not URL) in `episode.audio_url`
+- **`api/routes/episodes.py`** — audio endpoint generates presigned URL from stored key and returns 302 redirect; falls back to local disk streaming
 - **`alembic/versions/0024_episode_audio_url.py`** — adds `audio_url TEXT` column to episode table
+- **`tests/test_scraper_cascade.py`** — replaced `TestPublicUrl` with `TestPresignedUrl` (3 tests: local returns None, missing boto3 returns None, S3 calls boto3 correctly)
 
 ### Bug Fix
 Break DSPy import chains and add pool timeouts so the API boots on Railway within the health-check window.

@@ -259,14 +259,52 @@ class TestLocalUpload:
             os.environ.pop("CURIA_STORAGE_LOCAL_DIR", None)
 
 
-class TestPublicUrl:
-    def test_s3_public_url_override(self):
+class TestPresignedUrl:
+    def test_returns_none_for_local_backend(self):
+        import os
+        os.environ.pop("CURIA_STORAGE_BACKEND", None)
+        from core.storage.blob import generate_presigned_url
+        assert generate_presigned_url("audio/ep.mp3") is None
+
+    def test_returns_none_when_boto3_missing(self):
         import os
         os.environ["CURIA_STORAGE_BACKEND"] = "s3"
-        os.environ["CURIA_S3_PUBLIC_URL"] = "https://pub-abc123.r2.dev"
         try:
-            url = get_blob_url("audio/episode-1.mp3")
-            assert url == "https://pub-abc123.r2.dev/audio/episode-1.mp3"
+            with patch.dict("sys.modules", {"boto3": None}):
+                from importlib import reload
+                import core.storage.blob as blob_mod
+                reload(blob_mod)
+                result = blob_mod.generate_presigned_url("audio/ep.mp3")
+            assert result is None
         finally:
             os.environ.pop("CURIA_STORAGE_BACKEND", None)
-            os.environ.pop("CURIA_S3_PUBLIC_URL", None)
+
+    def test_calls_boto3_generate_presigned_url(self):
+        import os
+        os.environ["CURIA_STORAGE_BACKEND"] = "s3"
+        os.environ["CURIA_S3_BUCKET"] = "test-bucket"
+        os.environ["CURIA_S3_ENDPOINT"] = "https://fake.r2.dev"
+        os.environ["CURIA_S3_ACCESS_KEY"] = "AK"
+        os.environ["CURIA_S3_SECRET_KEY"] = "SK"
+        try:
+            mock_client = MagicMock()
+            mock_client.generate_presigned_url.return_value = "https://signed-url"
+            mock_boto3 = MagicMock()
+            mock_boto3.client.return_value = mock_client
+
+            with patch.dict("sys.modules", {"boto3": mock_boto3}):
+                from core.storage.blob import generate_presigned_url
+                url = generate_presigned_url("audio/ep.mp3", expires_in=600)
+
+            assert url == "https://signed-url"
+            mock_client.generate_presigned_url.assert_called_once_with(
+                "get_object",
+                Params={"Bucket": "test-bucket", "Key": "audio/ep.mp3"},
+                ExpiresIn=600,
+            )
+        finally:
+            os.environ.pop("CURIA_STORAGE_BACKEND", None)
+            os.environ.pop("CURIA_S3_BUCKET", None)
+            os.environ.pop("CURIA_S3_ENDPOINT", None)
+            os.environ.pop("CURIA_S3_ACCESS_KEY", None)
+            os.environ.pop("CURIA_S3_SECRET_KEY", None)

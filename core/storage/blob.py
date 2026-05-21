@@ -49,9 +49,6 @@ async def upload_file(
 def get_blob_url(key: str) -> str:
     backend = get_storage_backend()
     if backend == "s3":
-        public_url = os.getenv("CURIA_S3_PUBLIC_URL")
-        if public_url:
-            return f"{public_url.rstrip('/')}/{key}"
         bucket = os.getenv("CURIA_S3_BUCKET", "curia-assets")
         region = os.getenv("CURIA_S3_REGION", "us-east-1")
         endpoint = os.getenv("CURIA_S3_ENDPOINT")
@@ -60,6 +57,38 @@ def get_blob_url(key: str) -> str:
         return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
     base = os.getenv("CURIA_STORAGE_LOCAL_DIR", "data/blobs")
     return f"file://{Path(base).resolve()}/{key}"
+
+
+def generate_presigned_url(key: str, expires_in: int = 3600) -> str | None:
+    """Generate a presigned download URL for a private S3/R2 object. Returns None if not using S3."""
+    if get_storage_backend() != "s3":
+        return None
+
+    try:
+        import boto3
+    except ImportError:
+        return None
+
+    bucket = os.getenv("CURIA_S3_BUCKET", "curia-assets")
+    region = os.getenv("CURIA_S3_REGION", "us-east-1")
+    endpoint = os.getenv("CURIA_S3_ENDPOINT")
+
+    kwargs: dict = {"region_name": region}
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+
+    access_key = os.getenv("CURIA_S3_ACCESS_KEY") or os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("CURIA_S3_SECRET_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY")
+    if access_key and secret_key:
+        kwargs["aws_access_key_id"] = access_key
+        kwargs["aws_secret_access_key"] = secret_key
+
+    client = boto3.client("s3", **kwargs)
+    return client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expires_in,
+    )
 
 
 # ---------------------------------------------------------------------------
