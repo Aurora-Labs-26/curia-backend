@@ -104,9 +104,10 @@ async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
         import ssl as _ssl
-        env = os.getenv("CURIA_ENV", "dev")
         ssl_ctx = None
-        if env != "dev" and "localhost" not in DATABASE_URL and "127.0.0.1" not in DATABASE_URL:
+        is_local = "localhost" in DATABASE_URL or "127.0.0.1" in DATABASE_URL
+        is_internal = ".railway.internal" in DATABASE_URL
+        if not is_local and not is_internal:
             ssl_ctx = _ssl.create_default_context()
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = _ssl.CERT_NONE
