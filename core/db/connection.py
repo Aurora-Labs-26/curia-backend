@@ -103,11 +103,19 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
+        import ssl as _ssl
+        env = os.getenv("CURIA_ENV", "dev")
+        ssl_ctx = None
+        if env != "dev" and "localhost" not in DATABASE_URL and "127.0.0.1" not in DATABASE_URL:
+            ssl_ctx = _ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = _ssl.CERT_NONE
         _pool = await asyncpg.create_pool(
             DATABASE_URL,
             min_size=2,
             max_size=10,
             init=_init_connection,
+            ssl=ssl_ctx,
         )
         logger.info(f"Postgres pool created → {_safe_url(DATABASE_URL)}")
     return _pool
