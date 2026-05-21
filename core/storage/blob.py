@@ -66,6 +66,7 @@ def generate_presigned_url(key: str, expires_in: int = 3600) -> str | None:
 
     try:
         import boto3
+        from botocore.config import Config
     except ImportError:
         return None
 
@@ -73,7 +74,10 @@ def generate_presigned_url(key: str, expires_in: int = 3600) -> str | None:
     region = os.getenv("CURIA_S3_REGION", "us-east-1")
     endpoint = os.getenv("CURIA_S3_ENDPOINT")
 
-    kwargs: dict = {"region_name": region}
+    kwargs: dict = {
+        "region_name": region,
+        "config": Config(signature_version="s3v4"),
+    }
     if endpoint:
         kwargs["endpoint_url"] = endpoint
 
