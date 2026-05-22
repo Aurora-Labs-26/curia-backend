@@ -4,6 +4,48 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-23 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Eval UI: 4-step flow with Source step (scrape + 7 transformations) + live pipeline step log.
+- **`studio/eval_server.py`** — step 0 "Source" added: shows article title/URL, raw content preview, and all 7 insight cards (summary, key_insights, human_stakes, core_tensions, counterpoints, examples, metadata); source step has verdict/edit/comment like outline/transcript
+- **`studio/eval_server.py`** — `GET /api/episodes/{id}` now fetches source data (full_text + insights) via `source_ids[0]`; returns `episode.source` object
+- **`studio/eval_server.py`** — `_run_pipeline` INSERT includes `source_ids = ARRAY[$source_id::uuid]` to link episode to ingested source
+- **`studio/eval_server.py`** — live step log: `_run_pipeline` tracks 4 named steps (Looking up account → Registering source → Scraping & ingesting → Generating episode) each with done/running/error status; `_pollJob` renders step list in sidebar with ✓/↻/✗ icons
+
+## 2026-05-23 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Railway deployment config for eval server.
+- **`railway.toml`** — Railway service config; builds from Dockerfile, starts `python studio/eval_server.py`, healthcheck at `/eval`
+- **`studio/eval_server.py`** — feedback storage switched from ephemeral CSV to PostgreSQL `eval_feedback` table (auto-created on first submit); CSV export endpoint at `GET /eval/export.csv`; `PORT`/`HOST` env vars for Railway
+
+### Bug Fix
+Eval UI: outline segments and transcript rendering fixed for actual DB schema.
+- **`studio/eval_server.py`** — `buildOutline`: render `seg.title/purpose/primitives_used` instead of `seg.focus/key_point`
+- **`studio/eval_server.py`** — `buildTranscript`: continuous `pre-wrap` text block, no per-line speaker labels; `editOriginal` plain text only
+- **`studio/eval_server.py`** — `buildFinal`: same continuous text block, removed per-line speaker divs
+
+## 2026-05-23 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Human eval web UI with URL ingest input and golden dataset feedback collection.
+- **`studio/eval_server.py`** — FastAPI server on port 8001; `/eval` HTML UI with URL input (paste link → ingest + generate episode via `_run_pipeline`, polls `/api/jobs/{id}` every 2s, auto-selects episode when done); 3-step eval flow (Outline → Transcript → Final Transcript); per-step Good/Bad verdict buttons, inline edit mode, comment/note field; Submit saves all feedback to `data/eval_feedback.csv`
+
+---
+
+## 2026-05-22 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Thumbnail URL extraction and storage for pile grid UI.
+- **`core/scraper/cascade.py`** — `scrape()` return type extended to `tuple[str, str, str | None]`; trafilatura path extracts `meta.image`, firecrawl path extracts `ogImage`/`image` from metadata
+- **`core/ingest.py`** — stores `thumbnail_url` from scrape result into source row
+- **`api/schemas.py`** — `thumbnail_url: Optional[str]` added to `SourceSummary`
+- **`api/routes/sources.py`** — `GET /sources` queries now include `s.thumbnail_url`
+- **`alembic/versions/0025_source_thumbnail_url.py`** — migration adding `thumbnail_url TEXT` to source table
+
+---
+
 ## 2026-05-22 · Claude (claude-sonnet-4-6)
 
 ### Feature
