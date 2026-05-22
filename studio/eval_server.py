@@ -326,44 +326,47 @@ HTML = r"""<!DOCTYPE html>
     letter-spacing: 0.09em; color: #bbb; margin-bottom: 10px;
   }
 
-  /* Edit textarea */
-  .edit-textarea {
-    display: none; width: 100%; min-height: 340px;
-    background: #fff; border: 1px solid #d0d0d0; border-radius: 8px;
-    color: #111; font-size: 13px; font-family: inherit;
-    line-height: 1.75; padding: 14px 16px; resize: vertical; outline: none;
+  /* Per-field eval cards */
+  .eval-card {
+    background: #fff; border: 1px solid #ebebeb; border-radius: 10px;
+    margin-bottom: 10px; overflow: hidden;
   }
-  .edit-textarea:focus { border-color: #111; }
-
-  /* Action bar */
-  #action-bar {
-    padding: 16px 28px 14px; border-top: 1px solid #ebebeb;
-    flex-shrink: 0; background: #fff;
+  .eval-card-hdr {
+    padding: 9px 14px 8px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid #f5f5f5;
   }
-  .verdict-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
-
-  .btn {
-    padding: 7px 16px; border-radius: 7px; border: 1.5px solid #e0e0e0;
-    background: #fff; color: #555; font-size: 12px; cursor: pointer;
-    transition: all 0.1s; font-weight: 500;
-  }
-  .btn:hover { border-color: #bbb; color: #111; }
-  .btn-good.selected { background: #f0fdf4; border-color: #16a34a; color: #16a34a; font-weight: 600; }
-  .btn-bad.selected  { background: #fef2f2; border-color: #dc2626; color: #dc2626; font-weight: 600; }
-  .btn-edit.active   { background: #f5f3ff; border-color: #7c3aed; color: #7c3aed; }
-
-  .comment-row { display: flex; gap: 12px; align-items: flex-start; }
-  .comment-label {
+  .eval-card-label {
     font-size: 10px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.08em; color: #bbb; padding-top: 9px; flex-shrink: 0;
+    letter-spacing: 0.09em; color: #bbb; flex: 1; white-space: nowrap;
   }
-  .comment-input {
-    flex: 1; background: #f7f7f5; border: 1px solid #e8e8e8; border-radius: 7px;
-    color: #333; font-size: 12px; padding: 8px 12px; resize: none; outline: none;
-    height: 56px; font-family: inherit; line-height: 1.6;
+  .eval-card-actions { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .eval-card-body { padding: 14px 16px; }
+
+  .btn-f {
+    padding: 4px 10px; border-radius: 5px; border: 1px solid #e4e4e4;
+    background: #fff; color: #888; font-size: 11px; cursor: pointer; font-weight: 500;
+    white-space: nowrap;
   }
-  .comment-input:focus { border-color: #ccc; background: #fff; }
-  .comment-input::placeholder { color: #d0d0d0; }
+  .btn-f:hover { border-color: #bbb; color: #111; }
+  .btn-f-good.sel { background: #f0fdf4; border-color: #16a34a; color: #16a34a; font-weight: 600; }
+  .btn-f-bad.sel  { background: #fef2f2; border-color: #dc2626; color: #dc2626; font-weight: 600; }
+
+  .field-edit-ta {
+    display: none; width: calc(100% - 28px); min-height: 140px;
+    margin: 2px 14px 10px; background: #fafafa; border: 1px solid #e0e0e0;
+    border-radius: 7px; color: #111; font-size: 12px; font-family: inherit;
+    line-height: 1.75; padding: 10px 12px; resize: vertical; outline: none;
+  }
+  .field-edit-ta:focus { border-color: #111; background: #fff; }
+
+  .field-note {
+    display: block; width: calc(100% - 28px); margin: 0 14px 12px;
+    background: #f7f7f5; border: 1px solid #ebebeb; border-radius: 6px;
+    color: #555; font-size: 11px; font-family: inherit;
+    padding: 7px 10px; resize: none; height: 40px; outline: none; line-height: 1.5;
+  }
+  .field-note:focus { border-color: #ccc; background: #fff; }
+  .field-note::placeholder { color: #d0d0d0; }
 
   /* Nav bar */
   #nav-bar {
@@ -477,20 +480,6 @@ HTML = r"""<!DOCTYPE html>
 
       <div id="stage-scroll"></div>
 
-      <div id="action-bar">
-        <div class="verdict-row">
-          <button class="btn btn-good" id="btn-good" onclick="setVerdict('good')">✓ Good</button>
-          <button class="btn btn-bad"  id="btn-bad"  onclick="setVerdict('bad')">✗ Bad</button>
-          <button class="btn btn-edit" id="btn-edit" onclick="toggleEdit()">Edit</button>
-          <button class="btn btn-edit" id="btn-save-edit" style="display:none" onclick="saveEdit()">Save Edit</button>
-          <button class="btn"          id="btn-cancel-edit" style="display:none" onclick="cancelEdit()">Cancel</button>
-        </div>
-        <div class="comment-row">
-          <span class="comment-label">Note</span>
-          <textarea class="comment-input" id="comment-input" placeholder="Add a note or comment…"></textarea>
-        </div>
-      </div>
-
       <div id="nav-bar">
         <button class="btn-nav" id="btn-prev" onclick="prevStep()" disabled>← Prev</button>
         <button class="btn-nav" id="btn-next" onclick="nextStep()">Next →</button>
@@ -506,10 +495,8 @@ HTML = r"""<!DOCTYPE html>
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let episodes = [];
-let episode  = null;   // full episode object
-let step     = 0;      // 0=outline  1=transcript  2=final
-let editMode = false;
-let editOriginal = '';
+let episode  = null;
+let step     = 0;
 
 const STEPS       = ['source', 'outline', 'transcript', 'final'];
 const STEP_LABELS = ['Source', 'Outline', 'Transcript', 'Final'];
@@ -517,12 +504,13 @@ const STEP_LABELS = ['Source', 'Outline', 'Transcript', 'Final'];
 let feedback = resetFeedback();
 
 function resetFeedback() {
-  return {
-    source:     { verdict: '', edited: '', comment: '' },
-    outline:    { verdict: '', edited: '', comment: '' },
-    transcript: { verdict: '', edited: '', comment: '' },
-    final:      { comment: '' },
-  };
+  return { fields: {}, finalNote: '' };
+}
+
+// Get or init a per-field feedback slot
+function _fb(key) {
+  if (!feedback.fields[key]) feedback.fields[key] = { verdict: '', edited: '', comment: '', original: '' };
+  return feedback.fields[key];
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -603,27 +591,7 @@ function renderStep() {
   updateStepper();
 
   const isFinal = (step === 3);
-  const stage   = STEPS[step];
 
-  // Reset edit UI
-  editMode = false;
-  document.getElementById('btn-edit').classList.remove('active');
-  document.getElementById('btn-edit').style.display        = '';
-  document.getElementById('btn-save-edit').style.display   = 'none';
-  document.getElementById('btn-cancel-edit').style.display = 'none';
-
-  // Action bar visible only on steps 0 and 1
-  document.getElementById('action-bar').style.display = isFinal ? 'none' : '';
-
-  // Restore verdict + comment for this step
-  if (!isFinal) {
-    const fb = feedback[stage];
-    document.getElementById('btn-good').classList.toggle('selected', fb.verdict === 'good');
-    document.getElementById('btn-bad').classList.toggle('selected',  fb.verdict === 'bad');
-    document.getElementById('comment-input').value = fb.comment;
-  }
-
-  // Nav / submit
   document.getElementById('btn-prev').disabled = (step === 0);
   if (isFinal) {
     document.getElementById('btn-next').style.display   = 'none';
@@ -633,7 +601,6 @@ function renderStep() {
     document.getElementById('btn-submit').style.display = 'none';
   }
 
-  // Content
   const area = document.getElementById('stage-scroll');
   area.innerHTML = '';
   area.scrollTop = 0;
@@ -655,6 +622,102 @@ function updateStepper() {
   }
 }
 
+// ── Per-field card builder ────────────────────────────────────────────────────
+
+function _makeCard(key, label, contentEl, originalText) {
+  const fb = _fb(key);
+  fb.original = originalText || '';
+
+  const card = document.createElement('div');
+  card.className = 'eval-card';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.className = 'eval-card-hdr';
+  const lbl = document.createElement('span');
+  lbl.className = 'eval-card-label';
+  lbl.textContent = label;
+  hdr.appendChild(lbl);
+
+  const acts = document.createElement('div');
+  acts.className = 'eval-card-actions';
+
+  const btnG = document.createElement('button');
+  btnG.className = 'btn-f btn-f-good' + (fb.verdict === 'good' ? ' sel' : '');
+  btnG.textContent = '✓ Good';
+
+  const btnB = document.createElement('button');
+  btnB.className = 'btn-f btn-f-bad' + (fb.verdict === 'bad' ? ' sel' : '');
+  btnB.textContent = '✗ Bad';
+
+  const btnE = document.createElement('button');
+  btnE.className = 'btn-f';
+  btnE.textContent = 'Edit';
+
+  const btnS = document.createElement('button');
+  btnS.className = 'btn-f';
+  btnS.textContent = 'Save';
+  btnS.style.display = 'none';
+
+  const btnC = document.createElement('button');
+  btnC.className = 'btn-f';
+  btnC.textContent = 'Cancel';
+  btnC.style.display = 'none';
+
+  btnG.onclick = () => {
+    fb.verdict = (fb.verdict === 'good') ? '' : 'good';
+    btnG.classList.toggle('sel', fb.verdict === 'good');
+    btnB.classList.toggle('sel', fb.verdict === 'bad');
+  };
+  btnB.onclick = () => {
+    fb.verdict = (fb.verdict === 'bad') ? '' : 'bad';
+    btnG.classList.toggle('sel', fb.verdict === 'good');
+    btnB.classList.toggle('sel', fb.verdict === 'bad');
+  };
+
+  [btnG, btnB, btnE, btnS, btnC].forEach(b => acts.appendChild(b));
+  hdr.appendChild(acts);
+  card.appendChild(hdr);
+
+  // Body (display)
+  const body = document.createElement('div');
+  body.className = 'eval-card-body';
+  body.appendChild(contentEl);
+  card.appendChild(body);
+
+  // Edit textarea
+  const ta = document.createElement('textarea');
+  ta.className = 'field-edit-ta';
+  ta.value = fb.edited || originalText || '';
+  card.appendChild(ta);
+
+  btnE.onclick = () => {
+    body.style.display = 'none'; ta.style.display = 'block'; ta.focus();
+    btnE.style.display = 'none'; btnS.style.display = ''; btnC.style.display = '';
+  };
+  btnS.onclick = () => {
+    fb.edited = ta.value;
+    if (!fb.verdict) { fb.verdict = 'bad'; btnB.classList.add('sel'); btnG.classList.remove('sel'); }
+    body.style.display = ''; ta.style.display = 'none';
+    btnE.style.display = ''; btnS.style.display = 'none'; btnC.style.display = 'none';
+  };
+  btnC.onclick = () => {
+    ta.value = fb.edited || originalText || '';
+    body.style.display = ''; ta.style.display = 'none';
+    btnE.style.display = ''; btnS.style.display = 'none'; btnC.style.display = 'none';
+  };
+
+  // Note
+  const note = document.createElement('textarea');
+  note.className = 'field-note';
+  note.placeholder = 'Note…';
+  note.value = fb.comment || '';
+  note.oninput = () => { fb.comment = note.value; };
+  card.appendChild(note);
+
+  return card;
+}
+
 // ── Stage builders ────────────────────────────────────────────────────────────
 
 const INSIGHT_ORDER = ['summary', 'key_insights', 'human_stakes', 'core_tensions', 'counterpoints', 'examples', 'metadata'];
@@ -667,231 +730,130 @@ const INSIGHT_LABELS = {
 function buildSource(container) {
   const src = episode.source;
 
-  if (!src) {
-    const card = document.createElement('div');
-    card.className = 'stage-card';
-    card.innerHTML = '<div style="color:#ccc;font-size:12px">No source data available. Episode may have been created before source tracking was added.</div>';
-    container.appendChild(card);
-    editOriginal = '';
-    const ta = document.createElement('textarea');
-    ta.className = 'edit-textarea'; ta.id = 'edit-textarea'; ta.value = '';
-    container.appendChild(ta);
-    return;
-  }
-
-  // Article info card
+  // Article info header (no verdict)
   const infoCard = document.createElement('div');
   infoCard.className = 'stage-card';
-  infoCard.id = 'stage-display';
-  infoCard.style.marginBottom = '12px';
+  infoCard.style.marginBottom = '16px';
+  if (!src) {
+    infoCard.innerHTML = '<div style="color:#ccc;font-size:12px">No source data. Episode predates source tracking.</div>';
+    container.appendChild(infoCard);
+    return;
+  }
   infoCard.innerHTML = `
     <div class="section-label">Article</div>
     <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px;line-height:1.4">${esc(src.title || 'Untitled')}</div>
-    <a href="${esc(src.url || '')}" target="_blank" style="font-size:11px;color:#6b7280;word-break:break-all;text-decoration:none">${esc(src.url || '')}</a>
-    ${src.full_text ? `
-      <div style="margin-top:14px">
-        <div class="section-label" style="margin-bottom:6px">Raw Content (preview)</div>
-        <div style="font-size:12px;line-height:1.75;color:#666;white-space:pre-wrap;max-height:100px;overflow:hidden">${esc((src.full_text || '').slice(0, 500))}${(src.full_text||'').length > 500 ? '…' : ''}</div>
-      </div>` : ''}`;
+    <a href="${esc(src.url||'')}" target="_blank" style="font-size:11px;color:#6b7280;word-break:break-all;text-decoration:none">${esc(src.url||'')}</a>
+    ${src.full_text ? `<div style="margin-top:12px"><div class="section-label" style="margin-bottom:5px">Raw (preview)</div>
+      <div style="font-size:11px;line-height:1.7;color:#999;white-space:pre-wrap;max-height:80px;overflow:hidden">${esc((src.full_text||'').slice(0,400))}${(src.full_text||'').length>400?'…':''}</div></div>` : ''}`;
   container.appendChild(infoCard);
 
-  // Insight cards
   const insights = src.insights || {};
   for (const key of INSIGHT_ORDER) {
     const val = insights[key];
     if (!val) continue;
-    const card = document.createElement('div');
-    card.className = 'stage-card insight-card';
-    card.style.marginBottom = '10px';
-    card.innerHTML = `
-      <div class="section-label" style="margin-bottom:8px">${esc(INSIGHT_LABELS[key] || key)}</div>
-      <div style="font-size:12px;line-height:1.8;color:#333;white-space:pre-wrap">${esc(val)}</div>`;
-    container.appendChild(card);
+    const el = document.createElement('div');
+    el.style.cssText = 'font-size:12px;line-height:1.8;color:#333;white-space:pre-wrap';
+    el.textContent = val;
+    container.appendChild(_makeCard('source.' + key, INSIGHT_LABELS[key] || key, el, val));
   }
-
-  // editOriginal = summary for quick edit
-  editOriginal = insights.summary || Object.values(insights).filter(Boolean).join('\n\n') || '';
-
-  const ta = document.createElement('textarea');
-  ta.className = 'edit-textarea'; ta.id = 'edit-textarea';
-  ta.value = feedback.source.edited || editOriginal;
-  container.appendChild(ta);
 }
 
 function buildOutline(container) {
   const outline = episode.outline;
 
-  // Display card
-  const card = document.createElement('div');
-  card.className = 'stage-card';
-  card.id        = 'stage-display';
-
-  if (outline && typeof outline === 'object') {
-    let html = '';
-    if (outline.title)
-      html += `<div class="outline-title">${esc(outline.title)}</div>`;
-    if (outline.thread || outline.central_tension)
-      html += `<div class="outline-thread">${esc(outline.thread || outline.central_tension)}</div>`;
-    (outline.segments || []).forEach((seg, i) => {
-      const prims = Array.isArray(seg.primitives_used) ? seg.primitives_used : [];
-      html += `<div class="outline-seg">
-        <div class="outline-seg-num">Segment ${esc(String(seg.segment || i+1))}</div>
-        <div class="outline-seg-focus">${esc(seg.title || seg.focus || '')}</div>
-        ${(seg.purpose || seg.key_point) ? `<div class="outline-seg-key">${esc(seg.purpose || seg.key_point)}</div>` : ''}
-        ${prims.length ? `<div class="outline-seg-prims">${prims.map(p => '· ' + p).join('<br>')}</div>` : ''}
-      </div>`;
-    });
-    card.innerHTML = html || '<div style="color:#ccc">No outline data</div>';
-  } else {
-    card.innerHTML = `<pre style="font-size:12px;line-height:1.75;color:#555;white-space:pre-wrap">${esc(String(outline || ''))}</pre>`;
+  if (!outline || typeof outline !== 'object') {
+    const el = document.createElement('pre');
+    el.style.cssText = 'font-size:12px;line-height:1.75;color:#555;white-space:pre-wrap';
+    el.textContent = String(outline || '');
+    container.appendChild(_makeCard('outline.text', 'Outline', el, String(outline||'')));
+    return;
   }
 
-  editOriginal = typeof outline === 'object'
-    ? JSON.stringify(outline, null, 2)
-    : String(outline || '');
+  // Overview card (title + thread)
+  const overviewEl = document.createElement('div');
+  let overviewText = '';
+  if (outline.title) {
+    const t = document.createElement('div');
+    t.className = 'outline-title'; t.textContent = outline.title;
+    overviewEl.appendChild(t); overviewText += outline.title;
+  }
+  if (outline.thread || outline.central_tension) {
+    const th = document.createElement('div');
+    th.className = 'outline-thread'; th.textContent = outline.thread || outline.central_tension;
+    overviewEl.appendChild(th); overviewText += '\n\n' + (outline.thread || outline.central_tension);
+  }
+  if (overviewText) container.appendChild(_makeCard('outline.overview', 'Overview', overviewEl, overviewText));
 
-  container.appendChild(card);
-
-  // Edit textarea (hidden until toggled)
-  const ta = document.createElement('textarea');
-  ta.className = 'edit-textarea';
-  ta.id        = 'edit-textarea';
-  ta.value     = feedback.outline.edited || editOriginal;
-  container.appendChild(ta);
+  // Per-segment cards
+  (outline.segments || []).forEach((seg, i) => {
+    const prims = Array.isArray(seg.primitives_used) ? seg.primitives_used : [];
+    const segEl = document.createElement('div');
+    segEl.innerHTML = `
+      <div class="outline-seg-num">Segment ${esc(String(seg.segment || i+1))}</div>
+      <div class="outline-seg-focus">${esc(seg.title || seg.focus || '')}</div>
+      ${(seg.purpose||seg.key_point)?`<div class="outline-seg-key">${esc(seg.purpose||seg.key_point)}</div>`:''}
+      ${prims.length?`<div class="outline-seg-prims">${prims.map(p=>'· '+esc(p)).join('<br>')}</div>`:''}`;
+    const segText = [seg.title||seg.focus, seg.purpose||seg.key_point, ...prims].filter(Boolean).join('\n');
+    container.appendChild(_makeCard('outline.seg.' + i, 'Segment ' + (seg.segment||i+1), segEl, segText));
+  });
 }
 
 function buildTranscript(container) {
   const lines = Array.isArray(episode.transcript) ? episode.transcript : [];
+  const fullText = lines.map(l => l.text || '').join('\n\n');
 
-  const card = document.createElement('div');
-  card.className = 'stage-card';
-  card.id        = 'stage-display';
-
+  const el = document.createElement('div');
   if (!lines.length) {
-    card.innerHTML = '<div style="color:#ccc">No transcript available</div>';
+    el.innerHTML = '<div style="color:#ccc">No transcript available</div>';
   } else {
-    const fullText = lines.map(l => l.text || '').join('\n\n');
     const para = document.createElement('div');
     para.style.cssText = 'font-size:13px;line-height:1.9;color:#333;white-space:pre-wrap';
     para.textContent = fullText;
-    card.appendChild(para);
+    el.appendChild(para);
   }
-
-  editOriginal = lines.map(l => l.text || '').join('\n\n');
-
-  container.appendChild(card);
-
-  const ta = document.createElement('textarea');
-  ta.className = 'edit-textarea';
-  ta.id        = 'edit-textarea';
-  ta.value     = feedback.transcript.edited || editOriginal;
-  container.appendChild(ta);
+  container.appendChild(_makeCard('transcript', 'Transcript', el, fullText));
 }
 
 function buildFinal(container) {
   const lines   = Array.isArray(episode.transcript) ? episode.transcript : [];
   const outline = episode.outline;
 
-  // Title section
   if (outline && typeof outline === 'object' && outline.title) {
     const hdr = document.createElement('div');
     hdr.style.marginBottom = '20px';
     hdr.innerHTML = `
       <div class="final-section-label">Episode</div>
       <div class="final-title">${esc(outline.title)}</div>
-      ${(outline.thread || outline.central_tension)
-        ? `<div class="final-thread">${esc(outline.thread || outline.central_tension)}</div>`
-        : ''}`;
+      ${(outline.thread||outline.central_tension)?`<div class="final-thread">${esc(outline.thread||outline.central_tension)}</div>`:''}`;
     container.appendChild(hdr);
   }
 
-  // Full transcript
   const card = document.createElement('div');
   card.className = 'stage-card';
   if (!lines.length) {
     card.innerHTML = '<div style="color:#ccc">No transcript available</div>';
   } else {
-    const fullText = lines.map(l => l.text || '').join('\n\n');
     const para = document.createElement('div');
     para.style.cssText = 'font-size:13px;line-height:1.9;color:#333;white-space:pre-wrap';
-    para.textContent = fullText;
+    para.textContent = lines.map(l => l.text || '').join('\n\n');
     card.appendChild(para);
   }
   container.appendChild(card);
 
-  // Global note
   const noteBox = document.createElement('div');
   noteBox.className = 'final-note-area';
   noteBox.innerHTML = `
     <div class="final-section-label">Global Note</div>
-    <textarea id="final-note" placeholder="Overall thoughts on this episode…">${esc(feedback.final.comment)}</textarea>`;
+    <textarea id="final-note" placeholder="Overall thoughts on this episode…">${esc(feedback.finalNote||'')}</textarea>`;
   container.appendChild(noteBox);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 
-function setVerdict(v) {
-  if (step === 3) return;
-  const stage = STEPS[step];
-  feedback[stage].verdict = (feedback[stage].verdict === v) ? '' : v;
-  document.getElementById('btn-good').classList.toggle('selected', feedback[stage].verdict === 'good');
-  document.getElementById('btn-bad').classList.toggle('selected',  feedback[stage].verdict === 'bad');
-}
-
-function toggleEdit() {
-  editMode = !editMode;
-  _applyEditMode();
-}
-
-function _applyEditMode() {
-  const display   = document.getElementById('stage-display');
-  const ta        = document.getElementById('edit-textarea');
-  const btnEdit   = document.getElementById('btn-edit');
-  const btnSave   = document.getElementById('btn-save-edit');
-  const btnCancel = document.getElementById('btn-cancel-edit');
-
-  if (editMode) {
-    if (display) display.style.display = 'none';
-    ta.style.display                   = 'block';
-    ta.focus();
-    btnEdit.classList.add('active');
-    btnEdit.style.display   = 'none';
-    btnSave.style.display   = '';
-    btnCancel.style.display = '';
-  } else {
-    if (display) display.style.display = '';
-    ta.style.display                   = 'none';
-    btnEdit.classList.remove('active');
-    btnEdit.style.display   = '';
-    btnSave.style.display   = 'none';
-    btnCancel.style.display = 'none';
-  }
-}
-
-function saveEdit() {
-  const stage = STEPS[step];
-  const ta    = document.getElementById('edit-textarea');
-  feedback[stage].edited  = ta.value;
-  if (!feedback[stage].verdict) feedback[stage].verdict = 'bad';
-  editMode = false;
-  _applyEditMode();
-  // Sync verdict buttons
-  document.getElementById('btn-good').classList.toggle('selected', feedback[stage].verdict === 'good');
-  document.getElementById('btn-bad').classList.toggle('selected',  feedback[stage].verdict === 'bad');
-}
-
-function cancelEdit() {
-  editMode = false;
-  _applyEditMode();
-}
-
 function _saveCurrentStep() {
   if (step === 3) {
     const el = document.getElementById('final-note');
-    if (el) feedback.final.comment = el.value;
-  } else {
-    const stage = STEPS[step];
-    feedback[stage].comment = document.getElementById('comment-input').value;
+    if (el) feedback.finalNote = el.value;
   }
 }
 
@@ -910,72 +872,29 @@ function nextStep() {
 async function submitFeedback() {
   _saveCurrentStep();
 
-  const outline  = episode.outline;
-  const lines    = Array.isArray(episode.transcript) ? episode.transcript : [];
-  const stages   = [];
+  const stages = Object.entries(feedback.fields).map(([key, fb]) => ({
+    stage:    key,
+    original: fb.original || '',
+    edited:   fb.edited   || '',
+    verdict:  fb.verdict  || '',
+    comment:  fb.comment  || '',
+  }));
 
-  // Source row
-  if (episode.source) {
-    const ins = episode.source.insights || {};
-    const sourceOrig = INSIGHT_ORDER
-      .filter(k => ins[k])
-      .map(k => `[${INSIGHT_LABELS[k]}]\n${ins[k]}`)
-      .join('\n\n');
-    stages.push({
-      stage:   'source',
-      original: sourceOrig,
-      edited:   feedback.source.edited,
-      verdict:  feedback.source.verdict,
-      comment:  feedback.source.comment,
-    });
+  if (feedback.finalNote && feedback.finalNote.trim()) {
+    stages.push({ stage: 'final_note', original: '', edited: '', verdict: '', comment: feedback.finalNote });
   }
 
-  // Outline row
-  const outlineOrig = typeof outline === 'object'
-    ? JSON.stringify(outline, null, 2)
-    : String(outline || '');
-  stages.push({
-    stage:   'outline',
-    original: outlineOrig,
-    edited:   feedback.outline.edited,
-    verdict:  feedback.outline.verdict,
-    comment:  feedback.outline.comment,
-  });
-
-  // Transcript row
-  const transcriptOrig = lines.map(l => `[${l.speaker || '?'}] ${l.text || ''}`).join('\n\n');
-  stages.push({
-    stage:    'transcript',
-    original:  transcriptOrig,
-    edited:    feedback.transcript.edited,
-    verdict:   feedback.transcript.verdict,
-    comment:   feedback.transcript.comment,
-  });
-
-  // Global note row (only if non-empty)
-  if (feedback.final.comment.trim()) {
-    stages.push({
-      stage:   'final_note',
-      original: '',
-      edited:   '',
-      verdict:  '',
-      comment:  feedback.final.comment,
-    });
-  }
+  if (!stages.length) { toast('No feedback to submit yet.', true); return; }
 
   const res  = await fetch('/api/eval/submit', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({
-      episode_id:    episode.id,
-      episode_title: episode.title || '',
-      stages,
-    }),
+    body:    JSON.stringify({ episode_id: episode.id, episode_title: episode.title || '', stages }),
   });
   const data = await res.json();
 
   if (data.ok) {
-    toast(`Saved — ${data.rows_saved} row${data.rows_saved !== 1 ? 's' : ''} written to eval_feedback.csv`, false);
+    toast(`Saved — ${data.rows_saved} row${data.rows_saved !== 1 ? 's' : ''}`, false);
     feedback = resetFeedback();
     loadStats();
   } else {

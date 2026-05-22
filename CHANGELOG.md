@@ -7,6 +7,12 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-05-23 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Feature
+Eval UI: per-field feedback — each insight, outline segment, and transcript gets its own inline Good/Bad + Edit + Note controls instead of one verdict per step.
+- **`studio/eval_server.py`** — removed global action bar; `_makeCard()` helper builds inline verdict buttons, edit mode, and note textarea per card; `feedback.fields` flat dict keyed by field name (`source.summary`, `outline.seg.0`, `transcript`, etc.); submit serializes all fields as separate DB rows
+
+## 2026-05-23 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
 Eval UI: 4-step flow with Source step (scrape + 7 transformations) + live pipeline step log.
 - **`studio/eval_server.py`** — step 0 "Source" added: shows article title/URL, raw content preview, and all 7 insight cards (summary, key_insights, human_stakes, core_tensions, counterpoints, examples, metadata); source step has verdict/edit/comment like outline/transcript
 - **`studio/eval_server.py`** — `GET /api/episodes/{id}` now fetches source data (full_text + insights) via `source_ids[0]`; returns `episode.source` object
