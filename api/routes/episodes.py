@@ -5,12 +5,11 @@ GET /episodes, GET /episodes/:id, GET /episodes/:id/audio.
 """
 
 import json
-import os
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.auth import current_user_id
@@ -242,13 +241,28 @@ async def submit_episode_feedback(
     )
 
 
+async def _audio_user_id(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    token: str | None = Query(default=None),
+) -> str:
+    """Like current_user_id but also accepts ?token= for native audio players that
+    cannot set custom headers (e.g. expo-av / ExoPlayer on Android)."""
+    from api.auth import _resolve_token
+    auth_header = authorization or (f"Bearer {token}" if token else None)
+    user = await _resolve_token(auth_header)
+    return user.id
+
+
 @router.get("/episodes/{episode_id}/audio")
 async def get_episode_audio(
-    episode_id: uuid.UUID, user_id: str = Depends(current_user_id)
+    episode_id: uuid.UUID,
+    request: Request,
+    user_id: str = Depends(_audio_user_id),
 ):
     row = await db_fetchrow(
         """
-        SELECT audio_path, status, title FROM episode
+        SELECT audio_path, audio_url, status, title FROM episode
         WHERE id = $id::uuid AND user_id = $user_id
         """,
         {"id": str(episode_id), "user_id": user_id},
@@ -257,12 +271,68 @@ async def get_episode_audio(
         raise HTTPException(404, "episode not found")
     if row["status"] != "ready":
         raise HTTPException(409, f"episode not ready (status={row['status']})")
+
+    # R2 path — return a presigned URL as JSON so the client can stream directly
+    audio_url = row.get("audio_url")
+    if audio_url:
+        from core.storage.blob import generate_presigned_url
+        from fastapi.responses import JSONResponse
+        presigned = generate_presigned_url(audio_url, expires_in=3600)
+        if presigned:
+            return JSONResponse({"url": presigned})
+
+    # Local path — stream file with range support
     audio_path = row.get("audio_path")
     if not audio_path or not Path(audio_path).exists():
         raise HTTPException(410, "audio file missing on disk")
+
+    file_size = Path(audio_path).stat().st_size
     filename = f"{row.get('title') or 'episode'}.mp3"
-    return FileResponse(
-        path=audio_path,
+    range_header = request.headers.get("range")
+
+    def _iter_file(path: str, start: int, end: int, chunk: int = 1024 * 64):
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                data = f.read(min(chunk, remaining))
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+
+    if range_header:
+        try:
+            range_val = range_header.strip().replace("bytes=", "")
+            range_start, range_end = range_val.split("-")
+            start = int(range_start)
+            end = int(range_end) if range_end else file_size - 1
+        except (ValueError, AttributeError):
+            raise HTTPException(416, "invalid Range header")
+
+        end = min(end, file_size - 1)
+        if start > end or start < 0:
+            raise HTTPException(416, "range not satisfiable")
+
+        return StreamingResponse(
+            _iter_file(audio_path, start, end),
+            status_code=206,
+            media_type="audio/mpeg",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(end - start + 1),
+                "Content-Disposition": f'inline; filename="{filename}"',
+            },
+        )
+
+    return StreamingResponse(
+        _iter_file(audio_path, 0, file_size - 1),
+        status_code=200,
         media_type="audio/mpeg",
-        filename=filename,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
     )

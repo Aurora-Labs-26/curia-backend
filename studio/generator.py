@@ -780,6 +780,18 @@ async def process_episode(episode_id: str) -> None:
         except Exception:
             pass
 
+        # Upload to R2/S3 if configured; fall back to local disk path
+        audio_url: str | None = None
+        from core.storage.blob import get_storage_backend, upload_file
+        if get_storage_backend() == "s3":
+            try:
+                r2_key = f"audio/{episode_id}.mp3"
+                await upload_file(audio_path, r2_key, content_type="audio/mpeg")
+                audio_url = r2_key
+                logger.info(f"[process_episode] audio uploaded to R2: {r2_key}")
+            except Exception as upload_err:
+                logger.error(f"[process_episode] R2 upload failed, keeping local path: {upload_err}")
+
         # Pass intro_ms so chapter startMinutes are offset correctly in the stitched file
         intro_ms = tts_timings[0]["start_ms"] if tts_timings else 0
         description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0, intro_ms=intro_ms)
@@ -792,6 +804,7 @@ async def process_episode(episode_id: str) -> None:
                 transcript = $transcript::jsonb,
                 outline = $outline::jsonb,
                 audio_path = $audio_path,
+                audio_url = $audio_url,
                 source_ids = $source_ids,
                 quality_score = $score,
                 quality_feedback = $feedback,
@@ -812,6 +825,7 @@ async def process_episode(episode_id: str) -> None:
                 "transcript": json.dumps(transcript),
                 "outline": json.dumps(outline),
                 "audio_path": audio_path,
+                "audio_url": audio_url,
                 "source_ids": source_uuids,
                 "score": judgment.overall_score,
                 "feedback": judgment.feedback,

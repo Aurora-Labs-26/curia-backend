@@ -4,6 +4,27 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-22 · Claude (claude-sonnet-4-6)
+
+### Feature
+Cloudflare R2 audio storage — Railway has no persistent disk so generated MP3s are now uploaded to R2 after synthesis. Falls back to local disk when `CURIA_STORAGE_BACKEND` is not `s3`.
+- **`core/storage/__init__.py`** — new package init
+- **`core/storage/blob.py`** — S3-compatible storage abstraction (from Arihant's commit 7b5b06e); `upload_file` streams from disk; `generate_presigned_url` uses SigV4 required by R2; local fallback writes to `data/blobs/`
+- **`studio/generator.py`** — after synthesis, calls `upload_file` if backend is `s3`; stores R2 key as `audio_url` on episode row; local `audio_path` kept as fallback
+- **`pyproject.toml`** — added `boto3>=1.34`
+- **`.env`** — documented `CURIA_S3_*` env var stubs
+
+### Feature
+Audio endpoint + `?token=` auth for Android native player.
+- **`api/routes/episodes.py`** — `_audio_user_id` dependency accepts `?token=` query param (expo-av/ExoPlayer drops custom headers); R2 path returns `{"url": presigned}`; local path streams with range support; `audio_url` included in SELECT
+
+### Bug Fix
+Alembic migration chain broken — migration files 0023/0024 were lost in a revert.
+- **`alembic/versions/0023_episode_source_ids.py`** — stub migration recreated to restore chain
+- **`alembic/versions/0024_episode_audio_url.py`** — stub migration recreated to restore chain
+
+---
+
 ## 2026-05-20 · Claude (claude-sonnet-4-6) (6)
 
 ### Feature
