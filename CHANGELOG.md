@@ -4,6 +4,16 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-24 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Waitlist email capture — public `POST /waitlist` endpoint storing submissions to Railway Postgres.
+- **`alembic/versions/0026_waitlist.py`** — new `waitlist` table (id, email unique, created_at, source)
+- **`api/routes/waitlist.py`** — POST /waitlist; idempotent on duplicate email
+- **`api/main.py`** — registered waitlist router
+
+---
+
 ## 2026-05-23 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Feature
