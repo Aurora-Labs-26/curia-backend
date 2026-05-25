@@ -24,8 +24,7 @@ def init_firebase() -> None:
 
     # Priority 1: inline JSON via env var (preferred for cloud deployments like Railway)
     sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
-    logger.info(f"[firebase] FIREBASE_SERVICE_ACCOUNT_JSON present: {bool(sa_json)}, length: {len(sa_json) if sa_json else 0}")
-    if sa_json:
+if sa_json:
         try:
             sa_dict = json.loads(sa_json)
             cred = credentials.Certificate(sa_dict)
