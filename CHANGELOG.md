@@ -4,6 +4,15 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-25 · Arihant + Claude (claude-opus-4-6)
+
+### Bug Fix
+Eval server feedback not saving — two issues preventing writes to `eval_feedback` table.
+- **`studio/eval_server.py`** — pass `datetime` object (not ISO string) for `TIMESTAMPTZ` column; asyncpg binary protocol rejects strings
+- **`studio/eval_server.py`** — default HOST to `0.0.0.0` so Railway can route traffic to the container
+
+---
+
 ## 2026-05-24 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Feature

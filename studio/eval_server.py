@@ -76,7 +76,7 @@ async def _append_rows(rows: list[dict]):
                (timestamp, episode_id, episode_title, stage, original, edited, verdict, comment)
                VALUES ($ts, $episode_id, $episode_title, $stage, $original, $edited, $verdict, $comment)""",
             {
-                "ts":            row.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                "ts":            row.get("timestamp", datetime.now(timezone.utc)),
                 "episode_id":    row.get("episode_id", ""),
                 "episode_title": row.get("episode_title", ""),
                 "stage":         row.get("stage", ""),
@@ -1078,7 +1078,7 @@ async def submit_feedback(request: Request):
         episode_id    = body.get("episode_id", "")
         episode_title = body.get("episode_title", "")
         stages        = body.get("stages", [])
-        ts            = datetime.now(timezone.utc).isoformat()
+        ts            = datetime.now(timezone.utc)
 
         rows = [
             {
@@ -1153,5 +1153,5 @@ async def get_job(job_id: str):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8001"))
-    host = os.getenv("HOST", "127.0.0.1")
+    host = os.getenv("HOST", "0.0.0.0")
     uvicorn.run(app, host=host, port=port, log_level="warning")
