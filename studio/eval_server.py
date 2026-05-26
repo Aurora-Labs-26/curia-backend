@@ -26,10 +26,10 @@ import uvicorn
 
 app = FastAPI()
 
-# In-memory job store (local dev tool, no persistence needed)
 _jobs: dict[str, dict] = {}
 
 _TABLE_READY = False
+_JOBS_TABLE_READY = False
 
 FEEDBACK_FIELDS = [
     "timestamp", "episode_id", "episode_title",
@@ -92,10 +92,92 @@ async def _count_rated() -> int:
     try:
         await _ensure_table()
         from core.db.connection import db_fetchrow
-        row = await db_fetchrow("SELECT COUNT(*) AS cnt FROM eval_feedback", {})
+        row = await db_fetchrow("SELECT COUNT(DISTINCT episode_id) AS cnt FROM eval_feedback", {})
         return int(row["cnt"]) if row else 0
     except Exception:
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Eval jobs — persist to DB so state survives restarts
+# ---------------------------------------------------------------------------
+
+async def _ensure_jobs_table():
+    global _JOBS_TABLE_READY
+    if _JOBS_TABLE_READY:
+        return
+    from core.db.connection import db_execute
+    await db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS eval_job (
+            id          TEXT PRIMARY KEY,
+            status      TEXT NOT NULL DEFAULT 'pending',
+            message     TEXT,
+            episode_id  TEXT,
+            steps       JSONB DEFAULT '[]'::jsonb,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        {},
+    )
+    await db_execute(
+        """
+        UPDATE eval_job SET status = 'error', message = 'Server restarted while job was running',
+               updated_at = NOW()
+        WHERE status IN ('pending', 'running')
+        """,
+        {},
+    )
+    _JOBS_TABLE_READY = True
+
+
+async def _save_job(job_id: str, data: dict):
+    await _ensure_jobs_table()
+    from core.db.connection import db_execute
+    _jobs[job_id] = data
+    await db_execute(
+        """
+        INSERT INTO eval_job (id, status, message, episode_id, steps, updated_at)
+        VALUES ($id, $status, $message, $episode_id, $steps::jsonb, NOW())
+        ON CONFLICT (id) DO UPDATE
+        SET status = $status, message = $message, episode_id = $episode_id,
+            steps = $steps::jsonb, updated_at = NOW()
+        """,
+        {
+            "id": job_id,
+            "status": data.get("status", "pending"),
+            "message": data.get("message", ""),
+            "episode_id": data.get("episode_id", ""),
+            "steps": _json.dumps(data.get("steps", [])),
+        },
+    )
+
+
+async def _load_job(job_id: str) -> dict | None:
+    if job_id in _jobs:
+        return _jobs[job_id]
+    await _ensure_jobs_table()
+    from core.db.connection import db_fetchrow
+    row = await db_fetchrow(
+        "SELECT status, message, episode_id, steps FROM eval_job WHERE id = $id",
+        {"id": job_id},
+    )
+    if not row:
+        return None
+    data = {
+        "status": row["status"],
+        "message": row.get("message") or "",
+    }
+    if row.get("episode_id"):
+        data["episode_id"] = row["episode_id"]
+    steps = row.get("steps")
+    if steps:
+        if isinstance(steps, str):
+            steps = _json.loads(steps)
+        data["steps"] = steps
+    _jobs[job_id] = data
+    return data
 
 
 async def _run_pipeline(job_id: str, url: str, show_name: str):
@@ -105,42 +187,42 @@ async def _run_pipeline(job_id: str, url: str, show_name: str):
 
     steps: list[dict] = []
 
-    def _step_start(text: str):
+    async def _step_start(text: str):
         steps.append({"text": text, "status": "running"})
-        _jobs[job_id] = {"status": "running", "steps": list(steps)}
+        await _save_job(job_id, {"status": "running", "steps": list(steps)})
 
-    def _step_done():
+    async def _step_done():
         if steps:
             steps[-1]["status"] = "done"
-        _jobs[job_id] = {"status": "running", "steps": list(steps)}
+        await _save_job(job_id, {"status": "running", "steps": list(steps)})
 
     try:
-        _step_start("Looking up account")
+        await _step_start("Looking up account")
         user_row = await db_fetchrow("SELECT id FROM users LIMIT 1", {})
         if not user_row:
             steps[-1]["status"] = "error"
-            _jobs[job_id] = {
+            await _save_job(job_id, {
                 "status": "error",
                 "message": "No users in DB. Run scripts/create_user.py first.",
                 "steps": list(steps),
-            }
+            })
             return
         user_id = str(user_row["id"])
-        _step_done()
+        await _step_done()
 
-        _step_start("Registering source")
+        await _step_start("Registering source")
         source_id = await get_or_create_source(url=url, user_id=user_id)
-        _step_done()
+        await _step_done()
 
-        _step_start("Scraping & ingesting")
+        await _step_start("Scraping & ingesting")
         src = await db_fetchrow(
             "SELECT status FROM source WHERE id = $id::uuid", {"id": source_id}
         )
         if not src or src["status"] != "ready":
             await process_source(source_id=source_id)
-        _step_done()
+        await _step_done()
 
-        _step_start("Generating episode")
+        await _step_start("Generating episode")
         episode_id = str(uuid4())
         await db_execute(
             """INSERT INTO episode (id, user_id, show_name, status, source_ids)
@@ -148,14 +230,14 @@ async def _run_pipeline(job_id: str, url: str, show_name: str):
             {"id": episode_id, "user_id": user_id, "show": show_name, "src_id": source_id},
         )
         await process_episode(episode_id=episode_id)
-        _step_done()
+        await _step_done()
 
-        _jobs[job_id] = {"status": "done", "episode_id": episode_id, "message": "Done!", "steps": list(steps)}
+        await _save_job(job_id, {"status": "done", "episode_id": episode_id, "message": "Done!", "steps": list(steps)})
 
     except Exception as e:
         if steps:
             steps[-1]["status"] = "error"
-        _jobs[job_id] = {"status": "error", "message": str(e), "steps": list(steps)}
+        await _save_job(job_id, {"status": "error", "message": str(e), "steps": list(steps)})
 
 
 HTML = r"""<!DOCTYPE html>
@@ -254,6 +336,10 @@ HTML = r"""<!DOCTYPE html>
   .ep-show {
     background: #f5f5f5; border-radius: 3px; padding: 1px 5px; color: #888;
   }
+  .ep-rated {
+    background: #f0fdf4; color: #16a34a; border-radius: 3px;
+    padding: 1px 5px; font-size: 9px; font-weight: 600; margin-left: auto;
+  }
 
   /* ── Content ── */
   #content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -317,7 +403,7 @@ HTML = r"""<!DOCTYPE html>
   /* Stage card (transcript, final transcript content) */
   .stage-card {
     background: #fff; border: 1px solid #ebebeb; border-radius: 10px;
-    padding: 20px 22px;
+    padding: 20px 22px; max-height: 480px; overflow-y: auto;
   }
 
   /* Final step section label */
@@ -340,7 +426,7 @@ HTML = r"""<!DOCTYPE html>
     letter-spacing: 0.09em; color: #bbb; flex: 1; white-space: nowrap;
   }
   .eval-card-actions { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
-  .eval-card-body { padding: 14px 16px; }
+  .eval-card-body { padding: 14px 16px; max-height: 320px; overflow-y: auto; }
 
   .btn-f {
     padding: 4px 10px; border-radius: 5px; border: 1px solid #e4e4e4;
@@ -497,6 +583,7 @@ HTML = r"""<!DOCTYPE html>
 let episodes = [];
 let episode  = null;
 let step     = 0;
+let ratedIds = new Set();
 
 const STEPS       = ['source', 'outline', 'transcript', 'final'];
 const STEP_LABELS = ['Source', 'Outline', 'Transcript', 'Final'];
@@ -520,15 +607,23 @@ async function boot() {
 }
 
 async function loadEpisodes() {
-  const res = await fetch('/api/episodes');
-  episodes  = await res.json();
+  try {
+    const res = await fetch('/api/episodes');
+    if (!res.ok) return;
+    episodes = await res.json();
+  } catch (e) { episodes = []; }
   renderList();
 }
 
 async function loadStats() {
-  const res  = await fetch('/api/eval/stats');
-  const data = await res.json();
-  document.getElementById('stats').textContent = data.total_rated + ' rated';
+  try {
+    const res  = await fetch('/api/eval/stats');
+    if (!res.ok) return;
+    const data = await res.json();
+    document.getElementById('stats').textContent = data.total_rated + ' rated';
+    ratedIds = new Set(data.rated_ids || []);
+    renderList();
+  } catch (e) {}
 }
 
 // ── Episode list ──────────────────────────────────────────────────────────────
@@ -548,33 +643,46 @@ function renderList() {
       ? new Date(ep.created_at).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
       : '';
     const score = ep.quality_score != null ? (ep.quality_score * 100).toFixed(0) + '%' : '—';
+    const rated = ratedIds.has(ep.id) ? '<span class="ep-rated">Rated</span>' : '';
     div.innerHTML = `
       <div class="ep-title">${esc(ep.title || 'Untitled')}</div>
       <div class="ep-meta">
         <span class="ep-show">${esc(ep.show_name || '')}</span>
         <span>${esc(ts)}</span>
         <span>Q: ${score}</span>
+        ${rated}
       </div>`;
     list.appendChild(div);
   }
 }
 
 async function selectEpisode(id) {
-  const res = await fetch('/api/episodes/' + id);
-  episode   = await res.json();
-  step      = 0;
-  feedback  = resetFeedback();
-  editMode  = false;
+  _saveCurrentStep();
 
-  // Highlight sidebar
+  // Highlight sidebar immediately
   document.querySelectorAll('.ep-item').forEach(el => el.classList.remove('active'));
   const idx = episodes.findIndex(e => e.id === id);
   if (idx >= 0) document.querySelectorAll('.ep-item')[idx].classList.add('active');
 
-  // Show eval area
+  // Show loading state
   document.getElementById('empty-state').style.display = 'none';
   const ea = document.getElementById('eval-area');
   ea.style.display = 'flex';
+  document.getElementById('stage-scroll').innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:center;height:200px;color:#ccc;font-size:12px">Loading…</div>';
+
+  try {
+    const res = await fetch('/api/episodes/' + id);
+    if (!res.ok) { toast('Failed to load episode', true); return; }
+    episode = await res.json();
+    if (episode.error) { toast(episode.error, true); return; }
+  } catch (e) {
+    toast('Network error loading episode', true);
+    return;
+  }
+
+  step     = 0;
+  feedback = resetFeedback();
 
   // Title bar
   document.getElementById('ep-title-text').textContent = episode.title || 'Untitled';
@@ -728,33 +836,42 @@ const INSIGHT_LABELS = {
 };
 
 function buildSource(container) {
-  const src = episode.source;
+  const sources = episode.sources || (episode.source ? [episode.source] : []);
 
-  // Article info header (no verdict)
-  const infoCard = document.createElement('div');
-  infoCard.className = 'stage-card';
-  infoCard.style.marginBottom = '16px';
-  if (!src) {
-    infoCard.innerHTML = '<div style="color:#ccc;font-size:12px">No source data. Episode predates source tracking.</div>';
-    container.appendChild(infoCard);
+  if (!sources.length) {
+    const empty = document.createElement('div');
+    empty.className = 'stage-card';
+    empty.style.marginBottom = '16px';
+    empty.innerHTML = '<div style="color:#ccc;font-size:12px">No source data. Episode predates source tracking.</div>';
+    container.appendChild(empty);
     return;
   }
-  infoCard.innerHTML = `
-    <div class="section-label">Article</div>
-    <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px;line-height:1.4">${esc(src.title || 'Untitled')}</div>
-    <a href="${esc(src.url||'')}" target="_blank" style="font-size:11px;color:#6b7280;word-break:break-all;text-decoration:none">${esc(src.url||'')}</a>
-    ${src.full_text ? `<div style="margin-top:12px"><div class="section-label" style="margin-bottom:5px">Raw (preview)</div>
-      <div style="font-size:11px;line-height:1.7;color:#999;white-space:pre-wrap;max-height:80px;overflow:hidden">${esc((src.full_text||'').slice(0,400))}${(src.full_text||'').length>400?'…':''}</div></div>` : ''}`;
-  container.appendChild(infoCard);
 
-  const insights = src.insights || {};
-  for (const key of INSIGHT_ORDER) {
-    const val = insights[key];
-    if (!val) continue;
-    const el = document.createElement('div');
-    el.style.cssText = 'font-size:12px;line-height:1.8;color:#333;white-space:pre-wrap';
-    el.textContent = val;
-    container.appendChild(_makeCard('source.' + key, INSIGHT_LABELS[key] || key, el, val));
+  for (let si = 0; si < sources.length; si++) {
+    const src = sources[si];
+    const srcLabel = sources.length > 1 ? ` (${si + 1}/${sources.length})` : '';
+
+    const infoCard = document.createElement('div');
+    infoCard.className = 'stage-card';
+    infoCard.style.marginBottom = '16px';
+    infoCard.innerHTML = `
+      <div class="section-label">Article${esc(srcLabel)}</div>
+      <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px;line-height:1.4">${esc(src.title || 'Untitled')}</div>
+      <a href="${esc(src.url||'')}" target="_blank" style="font-size:11px;color:#6b7280;word-break:break-all;text-decoration:none">${esc(src.url||'')}</a>
+      ${src.full_text ? `<div style="margin-top:12px"><div class="section-label" style="margin-bottom:5px">Raw (full text)</div>
+        <div style="font-size:11px;line-height:1.7;color:#999;white-space:pre-wrap;max-height:320px;overflow-y:auto">${esc(src.full_text)}</div></div>` : ''}`;
+    container.appendChild(infoCard);
+
+    const insights = src.insights || {};
+    for (const key of INSIGHT_ORDER) {
+      const val = insights[key];
+      if (!val) continue;
+      const el = document.createElement('div');
+      el.style.cssText = 'font-size:12px;line-height:1.8;color:#333;white-space:pre-wrap';
+      el.textContent = val;
+      const cardKey = sources.length > 1 ? `source.${si}.${key}` : `source.${key}`;
+      container.appendChild(_makeCard(cardKey, INSIGHT_LABELS[key] || key, el, val));
+    }
   }
 }
 
@@ -886,19 +1003,25 @@ async function submitFeedback() {
 
   if (!stages.length) { toast('No feedback to submit yet.', true); return; }
 
-  const res  = await fetch('/api/eval/submit', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ episode_id: episode.id, episode_title: episode.title || '', stages }),
-  });
-  const data = await res.json();
+  try {
+    const res  = await fetch('/api/eval/submit', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ episode_id: episode.id, episode_title: episode.title || '', stages }),
+    });
+    const data = await res.json();
 
-  if (data.ok) {
-    toast(`Saved — ${data.rows_saved} row${data.rows_saved !== 1 ? 's' : ''}`, false);
-    feedback = resetFeedback();
-    loadStats();
-  } else {
-    toast('Error: ' + (data.error || 'unknown'), true);
+    if (data.ok) {
+      toast(`Saved — ${data.rows_saved} row${data.rows_saved !== 1 ? 's' : ''}`, false);
+      ratedIds.add(episode.id);
+      renderList();
+      feedback = resetFeedback();
+      loadStats();
+    } else {
+      toast('Error: ' + (data.error || 'unknown'), true);
+    }
+  } catch (e) {
+    toast('Network error submitting feedback', true);
   }
 }
 
@@ -962,6 +1085,7 @@ function _pollJob(jobId) {
       if (!data.steps || !data.steps.length) setJobStatus('done', '✓ Done!');
       document.getElementById('btn-run').disabled = false;
       document.getElementById('url-input').value = '';
+      setTimeout(() => { document.getElementById('job-status').style.display = 'none'; }, 5000);
       await loadEpisodes();
       if (data.episode_id) selectEpisode(data.episode_id);
     } else {
@@ -1049,10 +1173,11 @@ async def get_episode(episode_id: str):
                 except Exception:
                     pass
 
-        # Attach source data for step 0
+        # Attach all sources for step 0
         source_ids = data.get("source_ids") or []
-        if source_ids:
-            src_id = source_ids[0] if isinstance(source_ids[0], str) else str(source_ids[0])
+        sources_data = []
+        for src_id_raw in source_ids:
+            src_id = str(src_id_raw) if not isinstance(src_id_raw, str) else src_id_raw
             src_row = await db_fetchrow(
                 "SELECT id, title, url, full_text FROM source WHERE id = $id::uuid",
                 {"id": src_id},
@@ -1064,7 +1189,8 @@ async def get_episode(episode_id: str):
                     {"sid": src_id},
                 )
                 src_data["insights"] = {r["insight_type"]: r["content"] for r in (insight_rows or [])}
-                data["source"] = src_data
+                sources_data.append(src_data)
+        data["sources"] = sources_data
 
         return JSONResponse(content=data)
     except Exception as e:
@@ -1079,6 +1205,14 @@ async def submit_feedback(request: Request):
         episode_title = body.get("episode_title", "")
         stages        = body.get("stages", [])
         ts            = datetime.now(timezone.utc)
+
+        # Dedup: replace previous feedback for this episode
+        await _ensure_table()
+        from core.db.connection import db_execute as _db_exec
+        await _db_exec(
+            "DELETE FROM eval_feedback WHERE episode_id = $episode_id",
+            {"episode_id": episode_id},
+        )
 
         rows = [
             {
@@ -1101,7 +1235,16 @@ async def submit_feedback(request: Request):
 
 @app.get("/api/eval/stats")
 async def eval_stats():
-    return JSONResponse(content={"total_rated": await _count_rated()})
+    total = await _count_rated()
+    rated_ids: list[str] = []
+    try:
+        await _ensure_table()
+        from core.db.connection import db_query
+        rows = await db_query("SELECT DISTINCT episode_id FROM eval_feedback", {})
+        rated_ids = [r["episode_id"] for r in (rows or [])]
+    except Exception:
+        pass
+    return JSONResponse(content={"total_rated": total, "rated_ids": rated_ids})
 
 
 @app.get("/eval/export.csv")
@@ -1138,14 +1281,14 @@ async def start_ingest(request: Request):
     if not url:
         return JSONResponse(content={"error": "url required"}, status_code=400)
     job_id = str(uuid4())
-    _jobs[job_id] = {"status": "pending", "message": "Queued"}
+    await _save_job(job_id, {"status": "pending", "message": "Queued"})
     asyncio.create_task(_run_pipeline(job_id, url, show_name))
     return JSONResponse(content={"job_id": job_id})
 
 
 @app.get("/api/jobs/{job_id}")
 async def get_job(job_id: str):
-    job = _jobs.get(job_id)
+    job = await _load_job(job_id)
     if not job:
         return JSONResponse(content={"error": "Not found"}, status_code=404)
     return JSONResponse(content=job)

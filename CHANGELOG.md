@@ -4,6 +4,28 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-26 · Arihant + Claude (claude-opus-4-6)
+
+### Bug Fix
+Eval server — 5 bugs fixed + minor issues + rated indicator.
+- **`studio/eval_server.py`** — `_count_rated()` now uses `COUNT(DISTINCT episode_id)` instead of `COUNT(*)` (was counting rows not episodes)
+- **`studio/eval_server.py`** — `get_episode` attaches all sources instead of only the first; frontend `buildSource` iterates the array
+- **`studio/eval_server.py`** — removed undeclared `editMode` variable (implicit global, dead code)
+- **`studio/eval_server.py`** — `selectEpisode` now calls `_saveCurrentStep()` before resetting feedback (final note was lost on episode switch)
+- **`studio/eval_server.py`** — added try/catch error handling to all frontend fetch calls (`loadEpisodes`, `selectEpisode`, `submitFeedback`)
+
+### Feature
+- **`studio/eval_server.py`** — sidebar rated indicator: `/api/eval/stats` now returns `rated_ids`; sidebar shows green "Rated" badge on evaluated episodes; badge updates immediately on submit
+- **`studio/eval_server.py`** — loading state shown in content area while fetching episode detail
+- **`studio/eval_server.py`** — job status panel auto-clears 5s after pipeline completes
+- **`studio/eval_server.py`** — full source text shown without truncation (removed `.slice(0,1200)` limit)
+
+### Feature (earlier)
+Eval server improvements — feedback dedup, persistent job state, scrollable text bodies.
+- **`studio/eval_server.py`** — feedback submit now deletes previous rows for the same episode before inserting (dedup); eval pipeline job state persisted to new `eval_job` table (survives container restarts, marks stale running jobs as error on boot); added `overflow-y: auto` and `max-height` to `.eval-card-body`, `.stage-card`, and raw article preview so all text bodies scroll
+
+---
+
 ## 2026-05-25 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
