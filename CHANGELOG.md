@@ -76,7 +76,6 @@ Daily brief API endpoints for app and internal brief service.
 - **`api/main.py`** — registered internal router
 
 ---
-
 ## 2026-05-26 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
@@ -141,7 +140,6 @@ Daily brief transcript generation pipeline + test UI.
 - **`core/firebase.py`** — added `FIREBASE_SERVICE_ACCOUNT_JSON` env var support (priority over file path). Paste the service account JSON string directly into Railway; no file mount needed. Falls back to `GOOGLE_APPLICATION_CREDENTIALS` then `FIREBASE_PROJECT_ID` as before.
 
 ---
-
 ## 2026-05-22 · Claude (claude-sonnet-4-6)
 
 ### Feature
