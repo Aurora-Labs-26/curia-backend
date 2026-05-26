@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from core.errors import PermanentError
-from core.queue import ack, default_worker_id, dequeue, fail, fail_permanently
+from core.queue import ack, default_worker_id, dequeue, fail, fail_permanently, reap_stale
 from worker.handlers import HANDLERS
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -31,11 +31,17 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 # Polling interval when the queue is empty. Trades latency for DB load.
 EMPTY_QUEUE_SLEEP_SECONDS = float(os.getenv("CURIA_WORKER_POLL_SECONDS", "2"))
 
+# Hard timeout for any single job handler. Kills the handler if it exceeds this.
+HANDLER_TIMEOUT_SECONDS = int(os.getenv("CURIA_HANDLER_TIMEOUT_SECONDS", "600"))
+
 # Safety-net: soft-hide failed sources older than this, regardless of whether the
 # user ever opened the app (the client clears on cold-start, this is the backstop).
 FAILED_PURGE_DAYS = int(os.getenv("CURIA_FAILED_PURGE_DAYS", "7"))
 PURGE_INTERVAL_SECONDS = 3600  # run the purge at most hourly
 _last_purge_at: float = 0.0
+
+REAP_INTERVAL_SECONDS = 300  # reap stale jobs at most every 5 minutes
+_last_reap_at: float = 0.0
 
 
 _shutdown = asyncio.Event()
@@ -63,6 +69,21 @@ async def _maybe_purge_failed_sources() -> None:
             logger.info(f"[worker] safety-net purge: soft-hid {len(rows)} stale failed sources")
     except Exception as e:
         logger.warning(f"[worker] safety-net purge failed: {e}")
+
+
+async def _maybe_reap_stale() -> None:
+    """Throttled: requeue jobs stuck in 'running' longer than 30 minutes."""
+    global _last_reap_at
+    now = time.time()
+    if now - _last_reap_at < REAP_INTERVAL_SECONDS:
+        return
+    _last_reap_at = now
+    try:
+        reaped = await reap_stale(stale_after_minutes=30)
+        if reaped:
+            logger.info(f"[worker] reaped {reaped} stale jobs")
+    except Exception as e:
+        logger.warning(f"[worker] reap_stale failed: {e}")
 
 
 def _install_signal_handlers() -> None:
@@ -95,15 +116,22 @@ async def _process_one(worker_id: str) -> bool:
 
     try:
         logger.info(f"[worker] running type={job.type} id={job.id} attempt={job.attempts}/{job.max_attempts}")
-        # Expose retry context to handlers (ephemeral — not persisted to the job row)
         if isinstance(job.payload, dict):
             job.payload["__attempt__"] = job.attempts
             job.payload["__max_attempts__"] = job.max_attempts
-        await handler(job.payload)
+        await asyncio.wait_for(handler(job.payload), timeout=HANDLER_TIMEOUT_SECONDS)
         await ack(job.id)
         elapsed = time.time() - start
         logger.info(f"[worker] acked id={job.id}")
         worker_logger.info(f"JOB_SUCCESS | type={job.type} id={job.id} duration={elapsed:.2f}s")
+    except asyncio.TimeoutError:
+        elapsed = time.time() - start
+        logger.error(f"[worker] id={job.id} type={job.type} timed out after {HANDLER_TIMEOUT_SECONDS}s")
+        worker_logger.error(
+            f"JOB_TIMEOUT | type={job.type} id={job.id} "
+            f"duration={elapsed:.2f}s timeout={HANDLER_TIMEOUT_SECONDS}s"
+        )
+        await fail(job.id, f"handler timed out after {HANDLER_TIMEOUT_SECONDS}s")
     except PermanentError as exc:
         elapsed = time.time() - start
         tb = traceback.format_exc()
@@ -148,6 +176,9 @@ async def main() -> None:
 
         # Check for prompt file changes each poll cycle
         check_prompt_changes(PROMPTS_DIR)
+
+        # Requeue jobs stuck in 'running' (throttled internally)
+        await _maybe_reap_stale()
 
         # Backstop cleanup of stale failed sources (throttled internally)
         await _maybe_purge_failed_sources()

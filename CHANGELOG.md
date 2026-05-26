@@ -4,11 +4,31 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-26 · Arihant + Claude (claude-opus-4-6)
+
+### Bug Fix
+Worker reliability — sync DSPy/TTS calls blocked the event loop, preventing SIGTERM handling during Railway deploys. Stale job reaper existed but was never called; its SQL also returned 0 always.
+- **`studio/generator.py`** — wrapped `generate_outline()`, `generate_transcript()`, and `synthesize_and_stitch()` in `run_in_executor` so they no longer block the async event loop
+- **`core/queue.py`** — fixed `reap_stale()`: changed `fetchrow` with broken RETURNING clause to `fetch` + `RETURNING id`, now correctly counts and logs reaped jobs
+- **`worker/main.py`** — added 10-minute handler timeout via `asyncio.wait_for`; added `_maybe_reap_stale()` called every 5 minutes to recover stuck jobs; imported `reap_stale` from queue
+
+### Bug Fix
+Episode length stuck at ~7 min regardless of format — transcript prompt had no length calibration. `target_length_minutes` was in the briefing packet but neither prompt converted it to a line count.
+- **`studio/formats.py`** — added `LINES_PER_MINUTE` constant (4.3) and `target_lines`/`target_lines_per_segment` properties to `FormatConfig`; included both in `format_config_to_dict`
+- **`studio/briefing_builder.py`** — `episode_constraints` now includes `target_lines` and `target_lines_per_segment`, dynamically recalculated when length is overridden
+- **`prompts/transcript.txt`** — added LENGTH section as hard constraint (#1 priority): produce exactly `target_lines` entries (±10%), distribute evenly across segments
+- **`core/prompts/transcript.py`** — updated fallback docstring to match prompt file
+- **`prompts/outline.txt`** — added `target_lines_per_segment` to format_config instructions so outline allocates enough material per segment
+- **`core/prompts/outline.py`** — updated fallback docstring to match prompt file
+- **`optimization/guidelines/transcript.py`** — replaced "6 to 80 lines" with format-driven `target_lines` constraint
+
+---
+
 ## 2026-05-25 · Bhabani + Claude (claude-sonnet-4-6)
 
 ### Feature
 - **`prompts/transcript.txt`** — added mandatory INTRO and OUTRO blocks to the transcript prompt. The intro (3–5 lines) warms the listener in before any content, references their pile, and builds anticipation. The outro (3–4 lines) closes the show warmly, includes the compounding-value line (more you save/listen, better it gets), and signs off genuinely.
-- **`studio/generator.py`** — `_format_listener_hints()` now injects the listener's first name (from `kb.identity.name`) into the speaker definition so the host uses it once in the intro greeting. No-ops silently if name is not set. The intro (3–5 lines) warms the listener in before any content, references their pile, and builds anticipation. The outro (3–4 lines) closes the show warmly, includes the compounding-value line (more you save/listen, better it gets), and signs off genuinely. Removed the old "Never introduce the show" constraint which was preventing any host presence at the open.
+- **`studio/generator.py`** — `_format_listener_hints()` now injects the listener's first name (from `kb.identity.name`) into the speaker definition so the host uses it once in the intro greeting. No-ops silently if name is not set. Removed the old "Never introduce the show" constraint which was preventing any host presence at the open.
 
 ## 2026-05-22 · Claude (claude-sonnet-4-6)
 

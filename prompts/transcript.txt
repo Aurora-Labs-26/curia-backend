@@ -55,16 +55,24 @@ The more you save, the more we have to work with -- and the more interesting the
 So keep adding to your pile, keep listening, and we'll keep making it worth your while.
 See you next time."
 
+LENGTH (hard constraint):
+- Read episode_constraints.target_lines from the briefing packet. This is the total number of JSON entries you must produce (including intro and outro lines).
+- Read episode_constraints.target_lines_per_segment. Each outline segment should produce approximately this many lines.
+- Tolerance: ±10% of target_lines. Going under or over by more than 10% is a failure.
+- Each line averages ~35 words. This is how episode duration is controlled — do not ignore it.
+
 EXECUTION:
 - Follow the outline segment by segment, with the intro before segment 1 and the outro after the final segment
 - Each JSON entry is one spoken unit: usually 1-2 sentences, occasionally a single fragment
 - Draw from the primitives_used declared in each segment for the body
 - The intro and outro do not draw from primitives -- they are pure host voice
+- Distribute body lines evenly across segments — roughly target_lines_per_segment each
 
 PRIORITY:
-1. Follow the episode outline and format_config rules first
-2. Keep meaning clear and easy to follow on first listen
-3. Apply speaker speech patterns last, subtly and occasionally
+1. Hit the target_lines count from episode_constraints (hard constraint)
+2. Follow the episode outline and format_config rules
+3. Keep meaning clear and easy to follow on first listen
+4. Apply speaker speech patterns last, subtly and occasionally
 
 Output:
 [
