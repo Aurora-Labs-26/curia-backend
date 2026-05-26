@@ -12,7 +12,7 @@ import json
 from typing import Optional
 
 from core.kb import UserKB
-from studio.formats import get_format, format_config_to_dict
+from studio.formats import get_format, format_config_to_dict, LINES_PER_MINUTE
 
 PRIMITIVE_FIELDS = ["key_insights", "human_stakes", "core_tensions", "counterpoints", "examples"]
 
@@ -106,12 +106,19 @@ def build_briefing_packet(
     if length_override is None:
         length_override = _kb_length_override(user_kb)
 
+    target_minutes = length_override or fmt.default_length_minutes
+    segment_count = segment_count_override or fmt.default_segment_count
+    target_lines = round(target_minutes * LINES_PER_MINUTE)
+    target_lines_per_segment = max(2, round(target_lines / segment_count))
+
     packet = {
         "format": format_name,
         "format_config": format_config_to_dict(fmt),
         "episode_constraints": {
-            "target_length_minutes": length_override or fmt.default_length_minutes,
-            "segment_count": segment_count_override or fmt.default_segment_count,
+            "target_length_minutes": target_minutes,
+            "segment_count": segment_count,
+            "target_lines": target_lines,
+            "target_lines_per_segment": target_lines_per_segment,
         },
         "editorial_direction": editorial_direction or "Follow the most interesting thread in the material.",
         "source_primitives": build_source_primitives(sources, insights),

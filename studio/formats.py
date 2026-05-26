@@ -13,6 +13,9 @@ class FormatRules:
     must_avoid: list[str]
 
 
+LINES_PER_MINUTE = 4.3  # ~35 words/line at ~150 wpm TTS rate
+
+
 @dataclass
 class FormatConfig:
     name: str
@@ -24,6 +27,14 @@ class FormatConfig:
     rules: FormatRules
     default_segment_count: int
     default_length_minutes: int
+
+    @property
+    def target_lines(self) -> int:
+        return round(self.default_length_minutes * LINES_PER_MINUTE)
+
+    @property
+    def target_lines_per_segment(self) -> int:
+        return max(2, round(self.target_lines / self.default_segment_count))
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +188,8 @@ def format_config_to_dict(fmt: FormatConfig) -> dict:
         "energy_curve": fmt.energy_curve,
         "structure_pattern": fmt.structure_pattern,
         "voice_style": fmt.voice_style,
+        "target_lines": fmt.target_lines,
+        "target_lines_per_segment": fmt.target_lines_per_segment,
         "rules": {
             "must_do": fmt.rules.must_do,
             "must_avoid": fmt.rules.must_avoid,

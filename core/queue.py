@@ -235,12 +235,9 @@ async def reap_stale(stale_after_minutes: int = 30) -> int:
     """
     Recover jobs whose worker died mid-execution. Anything 'running' for longer
     than `stale_after_minutes` gets requeued. Returns the number reaped.
-
-    Run via cron / a background task in long-deployments. Fine to call manually
-    during local dev.
     """
     async with get_db() as conn:
-        row = await conn.fetchrow(
+        rows = await conn.fetch(
             """
             UPDATE jobs
             SET status = 'queued',
@@ -250,8 +247,11 @@ async def reap_stale(stale_after_minutes: int = 30) -> int:
                 updated_at = now()
             WHERE status = 'running'
               AND locked_at < now() - ($1 || ' minutes')::interval
-            RETURNING (SELECT COUNT(*) AS c FROM jobs WHERE FALSE)
+            RETURNING id
             """,
             str(stale_after_minutes),
         )
-    return 0 if not row else int(row.get("c") or 0)
+    reaped = len(rows)
+    if reaped:
+        logger.warning(f"[queue] reaped {reaped} stale jobs: {[r['id'] for r in rows]}")
+    return reaped
