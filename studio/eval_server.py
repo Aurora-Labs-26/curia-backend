@@ -936,9 +936,9 @@ function renderStep() {
   document.getElementById('btn-prev').disabled = (step === 0);
   if (isFinal) {
     document.getElementById('btn-next').style.display   = 'none';
-    document.getElementById('btn-submit').style.display = '';
+    document.getElementById('btn-submit').style.display = 'inline-block';
   } else {
-    document.getElementById('btn-next').style.display   = '';
+    document.getElementById('btn-next').style.display   = 'inline-block';
     document.getElementById('btn-submit').style.display = 'none';
   }
 
