@@ -235,10 +235,17 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
 
         await _step_start("Generating episode")
         episode_id = str(uuid4())
+        show_idea_id = str(uuid4())
         await db_execute(
-            """INSERT INTO episode (id, user_id, show_name, status, source_ids)
-               VALUES ($id::uuid, $user_id, $show, 'queued', ARRAY[$src_id::uuid])""",
-            {"id": episode_id, "user_id": user_id, "show": show_name, "src_id": source_id},
+            """INSERT INTO show_idea (id, user_id, angle, idea_type, format, source_ids, generated)
+               VALUES ($id::uuid, $user_id, '(eval)', 'standalone', $format, ARRAY[$src_id::uuid], false)""",
+            {"id": show_idea_id, "user_id": user_id, "format": show_name, "src_id": source_id},
+        )
+        await db_execute(
+            """INSERT INTO episode (id, user_id, show_name, show_idea_id, status, source_ids)
+               VALUES ($id::uuid, $user_id, $show, $idea_id::uuid, 'queued', ARRAY[$src_id::uuid])""",
+            {"id": episode_id, "user_id": user_id, "show": show_name,
+             "idea_id": show_idea_id, "src_id": source_id},
         )
         await process_episode(episode_id=episode_id)
         await _step_done()
@@ -270,15 +277,26 @@ async def _resume_pipeline(job_id: str, source_ids: list[str]):
                                   "user_id": user_id, "show_name": show_name})
 
         episode_id = str(uuid4())
+        show_idea_id = str(uuid4())
         src_placeholders = ", ".join(f"${f'sid_{i}'}::uuid" for i in range(len(source_ids)))
-        params: dict = {"id": episode_id, "user_id": user_id, "show": show_name}
+        params: dict = {"id": show_idea_id, "user_id": user_id, "format": show_name}
         for i, sid in enumerate(source_ids):
             params[f"sid_{i}"] = sid
 
         await db_execute(
-            f"""INSERT INTO episode (id, user_id, show_name, status, source_ids)
-                VALUES ($id::uuid, $user_id, $show, 'queued', ARRAY[{src_placeholders}])""",
+            f"""INSERT INTO show_idea (id, user_id, angle, idea_type, format, source_ids, generated)
+                VALUES ($id::uuid, $user_id, '(eval cluster)', 'standalone', $format, ARRAY[{src_placeholders}], false)""",
             params,
+        )
+
+        ep_params: dict = {"id": episode_id, "user_id": user_id, "show": show_name, "idea_id": show_idea_id}
+        for i, sid in enumerate(source_ids):
+            ep_params[f"sid_{i}"] = sid
+
+        await db_execute(
+            f"""INSERT INTO episode (id, user_id, show_name, show_idea_id, status, source_ids)
+                VALUES ($id::uuid, $user_id, $show, $idea_id::uuid, 'queued', ARRAY[{src_placeholders}])""",
+            ep_params,
         )
         await process_episode(episode_id=episode_id)
 
