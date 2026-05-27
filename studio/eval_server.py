@@ -1051,7 +1051,9 @@ const INSIGHT_LABELS = {
 };
 
 function buildSource(container) {
-  const sources = episode.sources || (episode.source ? [episode.source] : []);
+  const sources = (mode === 'cluster' && episode.sources)
+    ? episode.sources
+    : (episode.source ? [episode.source] : []);
 
   if (!sources.length) {
     const empty = document.createElement('div');
