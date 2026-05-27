@@ -6,6 +6,12 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-05-26 · Arihant + Claude (claude-opus-4-6)
 
+### Feature
+Eval server cluster mode — toggle between single-source and cluster evaluation.
+- **`intelligence/clustering.py`** (new) — extracted `cosine()` similarity + `find_similar_sources()` from idea_generator; queries `source_primitive_embedding` and caches scores in `source_similarity`
+- **`intelligence/idea_generator.py`** — imports `cosine` from `intelligence.clustering` instead of defining locally
+- **`studio/eval_server.py`** — new Single/Cluster mode toggle in sidebar; cluster mode ingests URL then shows similar sources from DB with similarity scores, threshold slider (0.50–0.95), and checkboxes; user selects sources then generates multi-source episode; new endpoints `POST /api/find-cluster` and `POST /api/generate-from-cluster`; `_run_pipeline` accepts `mode` param and pauses at `awaiting_selection` for cluster mode; `_resume_pipeline` continues with user-selected sources; `get_episode` returns `sources` array for multi-source episodes; `buildSource` renders all sources with numbered labels
+
 ### Bug Fix
 Eval server — 5 bugs fixed + minor issues + rated indicator.
 - **`studio/eval_server.py`** — `_count_rated()` now uses `COUNT(DISTINCT episode_id)` instead of `COUNT(*)` (was counting rows not episodes)

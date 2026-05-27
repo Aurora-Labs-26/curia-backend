@@ -180,7 +180,7 @@ async def _load_job(job_id: str) -> dict | None:
     return data
 
 
-async def _run_pipeline(job_id: str, url: str, show_name: str):
+async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "single"):
     from core.db.connection import db_fetchrow, db_execute
     from core.ingest import process_source, get_or_create_source
     from studio.generator import process_episode
@@ -222,6 +222,17 @@ async def _run_pipeline(job_id: str, url: str, show_name: str):
             await process_source(source_id=source_id)
         await _step_done()
 
+        if mode == "cluster":
+            await _save_job(job_id, {
+                "status": "awaiting_selection",
+                "source_id": source_id,
+                "user_id": user_id,
+                "show_name": show_name,
+                "message": "Select sources for episode",
+                "steps": list(steps),
+            })
+            return
+
         await _step_start("Generating episode")
         episode_id = str(uuid4())
         await db_execute(
@@ -238,6 +249,48 @@ async def _run_pipeline(job_id: str, url: str, show_name: str):
         if steps:
             steps[-1]["status"] = "error"
         await _save_job(job_id, {"status": "error", "message": str(e), "steps": list(steps)})
+
+
+async def _resume_pipeline(job_id: str, source_ids: list[str]):
+    """Resume a cluster-mode job after the user selects sources."""
+    from core.db.connection import db_execute
+    from studio.generator import process_episode
+
+    job = await _load_job(job_id)
+    if not job:
+        return
+
+    user_id = job.get("user_id", "")
+    show_name = job.get("show_name", "clarity_engine")
+    steps = job.get("steps", [])
+
+    try:
+        steps.append({"text": f"Generating episode from {len(source_ids)} source(s)", "status": "running"})
+        await _save_job(job_id, {"status": "running", "steps": list(steps),
+                                  "user_id": user_id, "show_name": show_name})
+
+        episode_id = str(uuid4())
+        src_placeholders = ", ".join(f"${f'sid_{i}'}::uuid" for i in range(len(source_ids)))
+        params: dict = {"id": episode_id, "user_id": user_id, "show": show_name}
+        for i, sid in enumerate(source_ids):
+            params[f"sid_{i}"] = sid
+
+        await db_execute(
+            f"""INSERT INTO episode (id, user_id, show_name, status, source_ids)
+                VALUES ($id::uuid, $user_id, $show, 'queued', ARRAY[{src_placeholders}])""",
+            params,
+        )
+        await process_episode(episode_id=episode_id)
+
+        steps[-1]["status"] = "done"
+        await _save_job(job_id, {"status": "done", "episode_id": episode_id, "message": "Done!",
+                                  "steps": list(steps), "user_id": user_id, "show_name": show_name})
+
+    except Exception as e:
+        if steps:
+            steps[-1]["status"] = "error"
+        await _save_job(job_id, {"status": "error", "message": str(e), "steps": list(steps),
+                                  "user_id": user_id, "show_name": show_name})
 
 
 HTML = r"""<!DOCTYPE html>
@@ -340,6 +393,59 @@ HTML = r"""<!DOCTYPE html>
     background: #f0fdf4; color: #16a34a; border-radius: 3px;
     padding: 1px 5px; font-size: 9px; font-weight: 600; margin-left: auto;
   }
+
+  /* Mode toggle */
+  #mode-toggle { display: flex; gap: 0; margin-bottom: 8px; }
+  .mode-btn {
+    flex: 1; padding: 5px 0; border: 1px solid #e0e0e0; background: #f7f7f5;
+    color: #888; font-size: 11px; font-weight: 500; cursor: pointer;
+    font-family: inherit; text-align: center;
+  }
+  .mode-btn:first-child { border-radius: 6px 0 0 6px; }
+  .mode-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .mode-btn.active { background: #111; color: #fff; border-color: #111; }
+
+  /* Cluster panel */
+  #cluster-panel {
+    display: none; padding: 12px 16px; border-bottom: 1px solid #f0f0f0;
+    flex-shrink: 0; max-height: 360px; overflow-y: auto;
+  }
+  .cluster-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .cluster-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #bbb;
+  }
+  .cluster-threshold {
+    margin-left: auto; display: flex; align-items: center; gap: 6px;
+    font-size: 10px; color: #888;
+  }
+  .cluster-threshold input[type="range"] {
+    width: 80px; height: 3px; accent-color: #111; cursor: pointer;
+  }
+  .cluster-threshold .tv { font-weight: 600; color: #111; min-width: 28px; text-align: right; }
+  .cluster-item {
+    display: flex; align-items: flex-start; gap: 8px; padding: 7px 0;
+    border-bottom: 1px solid #f8f8f8; font-size: 11px;
+  }
+  .cluster-item:last-child { border-bottom: none; }
+  .cluster-item input[type="checkbox"] { margin-top: 2px; accent-color: #111; flex-shrink: 0; }
+  .cluster-item-title { color: #333; line-height: 1.4; flex: 1; }
+  .cluster-item-score {
+    font-weight: 600; font-size: 10px; flex-shrink: 0; min-width: 36px; text-align: right;
+  }
+  .cluster-item-score.high { color: #16a34a; }
+  .cluster-item-score.mid  { color: #ca8a04; }
+  .cluster-item-score.low  { color: #dc2626; }
+  .cluster-item.primary { opacity: 0.6; }
+  .cluster-item.primary input[type="checkbox"] { pointer-events: none; }
+  .cluster-empty { color: #ccc; font-size: 11px; padding: 8px 0; }
+  #btn-gen-cluster {
+    margin-top: 10px; width: 100%; padding: 7px 0; border-radius: 6px;
+    border: 1.5px solid #111; background: #111; color: #fff;
+    font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  #btn-gen-cluster:hover { background: #333; border-color: #333; }
+  #btn-gen-cluster:disabled { opacity: 0.35; cursor: not-allowed; }
 
   /* ── Content ── */
   #content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -516,6 +622,10 @@ HTML = r"""<!DOCTYPE html>
 <div id="main">
   <aside id="sidebar">
     <div id="url-section">
+      <div id="mode-toggle">
+        <button class="mode-btn active" data-mode="single" onclick="setMode('single')">Single</button>
+        <button class="mode-btn" data-mode="cluster" onclick="setMode('cluster')">Cluster</button>
+      </div>
       <input type="url" id="url-input" placeholder="Paste URL to ingest + generate…"
              onkeydown="if(event.key==='Enter') submitUrl()">
       <div id="url-controls">
@@ -529,6 +639,7 @@ HTML = r"""<!DOCTYPE html>
       </div>
     </div>
     <div id="job-status"></div>
+    <div id="cluster-panel"></div>
     <div id="sidebar-header"><div id="sidebar-title">Episodes</div></div>
     <div id="ep-list"><div style="padding:20px;color:#ccc;font-size:12px;text-align:center">Loading…</div></div>
   </aside>
@@ -584,6 +695,10 @@ let episodes = [];
 let episode  = null;
 let step     = 0;
 let ratedIds = new Set();
+let mode     = 'single';
+let _clusterJobId   = null;
+let _clusterSourceId = null;
+let _clusterCandidates = [];
 
 const STEPS       = ['source', 'outline', 'transcript', 'final'];
 const STEP_LABELS = ['Source', 'Outline', 'Transcript', 'Final'];
@@ -624,6 +739,106 @@ async function loadStats() {
     ratedIds = new Set(data.rated_ids || []);
     renderList();
   } catch (e) {}
+}
+
+// ── Mode toggle ──────────────────────────────────────────────────────────────
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+  document.getElementById('cluster-panel').style.display = 'none';
+  _clusterJobId = null;
+  _clusterSourceId = null;
+  _clusterCandidates = [];
+}
+
+// ── Cluster panel ────────────────────────────────────────────────────────────
+
+async function loadCluster(sourceId, jobId) {
+  _clusterSourceId = sourceId;
+  _clusterJobId = jobId;
+  try {
+    const res = await fetch('/api/find-cluster', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ source_id: sourceId, threshold: 0.50 }),
+    });
+    const data = await res.json();
+    _clusterCandidates = data.candidates || [];
+  } catch (e) { _clusterCandidates = []; }
+  renderClusterPanel(0.70);
+}
+
+function renderClusterPanel(threshold) {
+  const panel = document.getElementById('cluster-panel');
+  panel.style.display = '';
+
+  const checked = _clusterCandidates.filter(c => c.score >= threshold);
+  const selectedCount = checked.length + 1;
+
+  let html = `
+    <div class="cluster-header">
+      <span class="cluster-title">Source Cluster</span>
+      <div class="cluster-threshold">
+        <span>Threshold</span>
+        <input type="range" min="0.50" max="0.95" step="0.05" value="${threshold}"
+               oninput="renderClusterPanel(parseFloat(this.value))">
+        <span class="tv">${threshold.toFixed(2)}</span>
+      </div>
+    </div>
+    <div class="cluster-item primary">
+      <input type="checkbox" checked disabled>
+      <span class="cluster-item-title">Primary source (ingested URL)</span>
+      <span class="cluster-item-score high">1.00</span>
+    </div>`;
+
+  if (!_clusterCandidates.length) {
+    html += '<div class="cluster-empty">No similar sources found in the database.</div>';
+  } else {
+    for (const c of _clusterCandidates) {
+      const isChecked = c.score >= threshold;
+      const scoreCls = c.score >= 0.80 ? 'high' : c.score >= 0.65 ? 'mid' : 'low';
+      html += `
+        <div class="cluster-item">
+          <input type="checkbox" ${isChecked ? 'checked' : ''} data-sid="${esc(c.source_id)}"
+                 onchange="updateGenButton()">
+          <span class="cluster-item-title">${esc(c.title)}</span>
+          <span class="cluster-item-score ${scoreCls}">${c.score.toFixed(2)}</span>
+        </div>`;
+    }
+  }
+
+  html += `<button id="btn-gen-cluster" onclick="generateFromCluster()">Generate with ${selectedCount} source${selectedCount !== 1 ? 's' : ''}</button>`;
+  panel.innerHTML = html;
+}
+
+function updateGenButton() {
+  const boxes = document.querySelectorAll('#cluster-panel .cluster-item:not(.primary) input[type="checkbox"]');
+  let count = 1;
+  boxes.forEach(b => { if (b.checked) count++; });
+  const btn = document.getElementById('btn-gen-cluster');
+  if (btn) btn.textContent = `Generate with ${count} source${count !== 1 ? 's' : ''}`;
+}
+
+async function generateFromCluster() {
+  const boxes = document.querySelectorAll('#cluster-panel .cluster-item:not(.primary) input[type="checkbox"]:checked');
+  const sourceIds = [_clusterSourceId];
+  boxes.forEach(b => sourceIds.push(b.dataset.sid));
+
+  const btn = document.getElementById('btn-gen-cluster');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+
+  try {
+    const res = await fetch('/api/generate-from-cluster', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ job_id: _clusterJobId, source_ids: sourceIds }),
+    });
+    const data = await res.json();
+    if (data.error) { toast(data.error, true); if (btn) btn.disabled = false; return; }
+    _pollJob(_clusterJobId);
+  } catch (e) {
+    toast('Network error', true);
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ── Episode list ──────────────────────────────────────────────────────────────
@@ -849,13 +1064,13 @@ function buildSource(container) {
 
   for (let si = 0; si < sources.length; si++) {
     const src = sources[si];
-    const srcLabel = sources.length > 1 ? ` (${si + 1}/${sources.length})` : '';
+    const label = sources.length > 1 ? ` ${si + 1} of ${sources.length}` : '';
 
     const infoCard = document.createElement('div');
     infoCard.className = 'stage-card';
     infoCard.style.marginBottom = '16px';
     infoCard.innerHTML = `
-      <div class="section-label">Article${esc(srcLabel)}</div>
+      <div class="section-label">Article${esc(label)}</div>
       <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px;line-height:1.4">${esc(src.title || 'Untitled')}</div>
       <a href="${esc(src.url||'')}" target="_blank" style="font-size:11px;color:#6b7280;word-break:break-all;text-decoration:none">${esc(src.url||'')}</a>
       ${src.full_text ? `<div style="margin-top:12px"><div class="section-label" style="margin-bottom:5px">Raw (full text)</div>
@@ -863,14 +1078,14 @@ function buildSource(container) {
     container.appendChild(infoCard);
 
     const insights = src.insights || {};
+    const keyPrefix = sources.length > 1 ? `source.${si}.` : 'source.';
     for (const key of INSIGHT_ORDER) {
       const val = insights[key];
       if (!val) continue;
       const el = document.createElement('div');
       el.style.cssText = 'font-size:12px;line-height:1.8;color:#333;white-space:pre-wrap';
       el.textContent = val;
-      const cardKey = sources.length > 1 ? `source.${si}.${key}` : `source.${key}`;
-      container.appendChild(_makeCard(cardKey, INSIGHT_LABELS[key] || key, el, val));
+      container.appendChild(_makeCard(keyPrefix + key, INSIGHT_LABELS[key] || key, el, val));
     }
   }
 }
@@ -1058,7 +1273,7 @@ async function submitUrl() {
   const res  = await fetch('/api/ingest', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ url, show_name: show }),
+    body:    JSON.stringify({ url, show_name: show, mode }),
   });
   const data = await res.json();
   if (data.error) {
@@ -1081,10 +1296,16 @@ function _pollJob(jobId) {
       if (!data.steps || !data.steps.length)
         setJobStatus('running', '<span class="job-spinner">↻</span> ' + esc(data.message || 'Running…'));
       _pollJob(jobId);
+    } else if (data.status === 'awaiting_selection') {
+      if (data.steps && data.steps.length) renderSteps(data.steps, null);
+      setJobStatus('done', '✓ Ingested — select sources below');
+      document.getElementById('btn-run').disabled = false;
+      loadCluster(data.source_id, jobId);
     } else if (data.status === 'done') {
       if (!data.steps || !data.steps.length) setJobStatus('done', '✓ Done!');
       document.getElementById('btn-run').disabled = false;
       document.getElementById('url-input').value = '';
+      document.getElementById('cluster-panel').style.display = 'none';
       setTimeout(() => { document.getElementById('job-status').style.display = 'none'; }, 5000);
       await loadEpisodes();
       if (data.episode_id) selectEpisode(data.episode_id);
@@ -1173,7 +1394,7 @@ async def get_episode(episode_id: str):
                 except Exception:
                     pass
 
-        # Attach all sources for step 0
+        # Attach sources for step 0
         source_ids = data.get("source_ids") or []
         sources_data = []
         for src_id_raw in source_ids:
@@ -1190,7 +1411,10 @@ async def get_episode(episode_id: str):
                 )
                 src_data["insights"] = {r["insight_type"]: r["content"] for r in (insight_rows or [])}
                 sources_data.append(src_data)
-        data["sources"] = sources_data
+        if sources_data:
+            data["source"] = sources_data[0]
+        if len(sources_data) > 1:
+            data["sources"] = sources_data
 
         return JSONResponse(content=data)
     except Exception as e:
@@ -1278,12 +1502,44 @@ async def start_ingest(request: Request):
     body      = await request.json()
     url       = (body.get("url") or "").strip()
     show_name = body.get("show_name") or "clarity_engine"
+    mode      = body.get("mode") or "single"
     if not url:
         return JSONResponse(content={"error": "url required"}, status_code=400)
     job_id = str(uuid4())
     await _save_job(job_id, {"status": "pending", "message": "Queued"})
-    asyncio.create_task(_run_pipeline(job_id, url, show_name))
+    asyncio.create_task(_run_pipeline(job_id, url, show_name, mode=mode))
     return JSONResponse(content={"job_id": job_id})
+
+
+@app.post("/api/find-cluster")
+async def find_cluster(request: Request):
+    body = await request.json()
+    source_id = (body.get("source_id") or "").strip()
+    threshold = float(body.get("threshold", 0.50))
+    if not source_id:
+        return JSONResponse(content={"error": "source_id required"}, status_code=400)
+    try:
+        from intelligence.clustering import find_similar_sources
+        candidates = await find_similar_sources(source_id, threshold=threshold)
+        return JSONResponse(content={"candidates": candidates})
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.post("/api/generate-from-cluster")
+async def generate_from_cluster(request: Request):
+    body = await request.json()
+    job_id = (body.get("job_id") or "").strip()
+    source_ids = body.get("source_ids") or []
+    if not job_id or not source_ids:
+        return JSONResponse(content={"error": "job_id and source_ids required"}, status_code=400)
+    job = await _load_job(job_id)
+    if not job:
+        return JSONResponse(content={"error": "Job not found"}, status_code=404)
+    if job.get("status") != "awaiting_selection":
+        return JSONResponse(content={"error": "Job not awaiting selection"}, status_code=400)
+    asyncio.create_task(_resume_pipeline(job_id, source_ids))
+    return JSONResponse(content={"ok": True})
 
 
 @app.get("/api/jobs/{job_id}")

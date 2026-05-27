@@ -137,14 +137,7 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
         for sid in no_embedding:
             logger.debug(f"[cluster_sources] NO_EMBEDDING: {id_to_title.get(sid, sid)[:80]}")
 
-    # Cosine similarity
-    def cosine(a, b):
-        dot = sum(x * y for x, y in zip(a, b))
-        mag_a = sum(x ** 2 for x in a) ** 0.5
-        mag_b = sum(x ** 2 for x in b) ** 0.5
-        if mag_a == 0 or mag_b == 0:
-            return 0.0
-        return dot / (mag_a * mag_b)
+    from intelligence.clustering import cosine
 
     ids = list(source_embeddings.keys())
 
