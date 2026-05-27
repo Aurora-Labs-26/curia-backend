@@ -1450,30 +1450,44 @@ async def submit_feedback(request: Request):
         stages        = body.get("stages", [])
         ts            = datetime.now(timezone.utc)
 
-        # Dedup: replace previous feedback for this episode
         await _ensure_table()
-        from core.db.connection import db_execute as _db_exec
-        await _db_exec(
-            "DELETE FROM eval_feedback WHERE episode_id = $episode_id",
-            {"episode_id": episode_id},
-        )
+        from core.db.connection import get_db
 
-        rows = [
-            {
-                "timestamp":     ts,
-                "episode_id":    episode_id,
-                "episode_title": episode_title,
-                "stage":         s.get("stage", ""),
-                "original":      s.get("original", ""),
-                "edited":        s.get("edited", ""),
-                "verdict":       s.get("verdict", ""),
-                "comment":       s.get("comment", ""),
-            }
-            for s in stages
-        ]
-        await _append_rows(rows)
-        return JSONResponse(content={"ok": True, "rows_saved": len(rows)})
+        def _sanitize(val: str) -> str:
+            if not val:
+                return ""
+            return val.replace("\x00", "")
+
+        async with get_db() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM eval_feedback WHERE episode_id = $1",
+                    episode_id,
+                )
+                for s in stages:
+                    await conn.execute(
+                        """INSERT INTO eval_feedback
+                           (timestamp, episode_id, episode_title, stage, original, edited, verdict, comment)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                        ts,
+                        episode_id,
+                        episode_title,
+                        s.get("stage", ""),
+                        _sanitize(s.get("original", "")),
+                        _sanitize(s.get("edited", "")),
+                        s.get("verdict", ""),
+                        s.get("comment", ""),
+                    )
+
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM eval_feedback WHERE episode_id = $1",
+                episode_id,
+            )
+
+        return JSONResponse(content={"ok": True, "rows_saved": count})
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
