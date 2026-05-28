@@ -101,9 +101,9 @@ async def embed_chunks(source_id: str, full_text: str) -> None:
 
 async def embed_primitive(source_id: str) -> None:
     """
-    Embed core_tensions || counterpoints as a single primitive vector.
-    This is what idea_generator clusters on; doing it during ingest fixes the
-    long-standing race where you had to run scripts/embed_primitives.py manually.
+    Embed source insights as a single primitive vector for clustering.
+    Prefers core_tensions + counterpoints; falls back to all available
+    insights so technical/factual content still gets clustered.
     """
     from .embeddings import get_embedding, get_embedding_column
 
@@ -113,17 +113,21 @@ async def embed_primitive(source_id: str) -> None:
         SELECT insight_type, content
         FROM source_insight
         WHERE source_id = $sid::uuid
-          AND insight_type IN ('core_tensions', 'counterpoints')
         """,
         {"sid": source_id},
     )
-    parts = []
-    for row in rows:
+    primary = []
+    fallback = []
+    for row in (rows or []):
         c = (row.get("content") or "").strip()
-        if c and c.lower() != "null":
-            parts.append(c)
+        if not c or c.lower() == "null":
+            continue
+        if row["insight_type"] in ("core_tensions", "counterpoints"):
+            primary.append(c)
+        fallback.append(c)
+    parts = primary or fallback
     if not parts:
-        logger.info(f"  primitive_embed skipped (no core_tensions/counterpoints) for {source_id}")
+        logger.info(f"  primitive_embed skipped (no usable insights) for {source_id}")
         return
     combined = "\n".join(parts)
     vector = await get_embedding(combined)

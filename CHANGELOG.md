@@ -4,6 +4,16 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
+
+### Bug Fix
+- **`core/ingest.py`** — `embed_primitive()` only used `core_tensions` + `counterpoints` for clustering embeddings; technical/factual content (docs, guides) that don't produce those insight types were silently skipped and never clustered. Now falls back to all available insights (summary, key_insights, examples, etc.) when primary primitives are empty.
+
+### Test
+- **`tests/test_embed_primitive.py`** — 6 tests for `embed_primitive()` fallback logic: uses primary when available, falls back to all insights, skips on empty/null content, handles None embeddings
+
+---
+
 ## 2026-05-26 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
