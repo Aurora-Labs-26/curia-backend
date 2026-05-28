@@ -4,6 +4,12 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-25 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+- **`prompts/transcript.txt`** — added mandatory INTRO and OUTRO blocks to the transcript prompt. The intro (3–5 lines) warms the listener in before any content, references their pile, and builds anticipation. The outro (3–4 lines) closes the show warmly, includes the compounding-value line (more you save/listen, better it gets), and signs off genuinely.
+- **`studio/generator.py`** — `_format_listener_hints()` now injects the listener's first name (from `kb.identity.name`) into the speaker definition so the host uses it once in the intro greeting. No-ops silently if name is not set. The intro (3–5 lines) warms the listener in before any content, references their pile, and builds anticipation. The outro (3–4 lines) closes the show warmly, includes the compounding-value line (more you save/listen, better it gets), and signs off genuinely. Removed the old "Never introduce the show" constraint which was preventing any host presence at the open.
+
 ## 2026-05-22 · Claude (claude-sonnet-4-6)
 
 ### Feature
