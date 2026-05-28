@@ -218,7 +218,16 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
         await _step_done()
 
         await _step_start("Registering source")
-        source_id = await get_or_create_source(url=url, user_id=user_id)
+        from core.ingest import normalise_url
+        norm_url = normalise_url(url)
+        existing = await db_fetchrow(
+            "SELECT id::text, status FROM source WHERE url = $url AND status = 'ready' LIMIT 1",
+            {"url": norm_url},
+        )
+        if existing:
+            source_id = existing["id"]
+        else:
+            source_id = await get_or_create_source(url=url, user_id=user_id)
         await _step_done()
 
         await _step_start("Scraping & ingesting")

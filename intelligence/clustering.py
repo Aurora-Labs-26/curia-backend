@@ -89,7 +89,7 @@ async def find_similar_sources(
                 "source_id": other_id,
                 "title": row.get("title") or "Untitled",
                 "url": row.get("url") or "",
-                "score": round(score, 3),
+                "score": round(float(score), 3),
             })
 
     results.sort(key=lambda r: -r["score"])
