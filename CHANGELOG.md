@@ -17,6 +17,7 @@ Each entry: **date · who made the change · what changed and why.**
 - **`intelligence/clustering.py`** — `find_similar_sources` crashed on pgvector arrays: `not target_row.get(emb_col)` raises `ValueError` on numpy arrays; fixed to `is None` check
 - **`intelligence/clustering.py`** — `float32` from pgvector/similarity cache not JSON-serializable; wrapped score in `float()` before returning
 - **`studio/eval_server.py`** — cluster mode always re-ingested URLs because `get_or_create_source` filters by `user_id` which didn't match existing sources; now looks up source by URL first (any user), falls back to create only if none exists
+- **`studio/eval_server.py`** — cluster UI fixes: panel now hides when generation starts (was staying visible); `loadCluster` shows toast on error instead of silently swallowing; `get_episode` always returns `sources` array; `buildSource` only shows multi-source in cluster mode with >1 source
 - **`studio/eval_server.py`** — feedback saves were silently failing: DELETE + INSERT used separate connections (each auto-committed independently) so a failed INSERT after a successful DELETE lost all data; rewrote `submit_feedback` to use a single `conn.transaction()` block for atomicity; added `_sanitize()` to strip null bytes from text fields (PostgreSQL TEXT rejects `\x00`); added post-save verification query and server-side traceback logging
 
 ---

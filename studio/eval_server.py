@@ -802,8 +802,16 @@ async function loadCluster(sourceId, jobId) {
       body: JSON.stringify({ source_id: sourceId, threshold: 0.50 }),
     });
     const data = await res.json();
-    _clusterCandidates = data.candidates || [];
-  } catch (e) { _clusterCandidates = []; }
+    if (data.error) {
+      toast('Cluster search failed: ' + data.error, true);
+      _clusterCandidates = [];
+    } else {
+      _clusterCandidates = data.candidates || [];
+    }
+  } catch (e) {
+    toast('Failed to load cluster data', true);
+    _clusterCandidates = [];
+  }
   renderClusterPanel(0.70);
 }
 
@@ -873,6 +881,7 @@ async function generateFromCluster() {
     });
     const data = await res.json();
     if (data.error) { toast(data.error, true); if (btn) btn.disabled = false; return; }
+    document.getElementById('cluster-panel').style.display = 'none';
     _pollJob(_clusterJobId);
   } catch (e) {
     toast('Network error', true);
@@ -1090,7 +1099,7 @@ const INSIGHT_LABELS = {
 };
 
 function buildSource(container) {
-  const sources = (mode === 'cluster' && episode.sources)
+  const sources = (mode === 'cluster' && episode.sources && episode.sources.length > 1)
     ? episode.sources
     : (episode.source ? [episode.source] : []);
 
@@ -1476,7 +1485,6 @@ async def get_episode(episode_id: str):
                 sources_data.append(src_data)
         if sources_data:
             data["source"] = sources_data[0]
-        if len(sources_data) > 1:
             data["sources"] = sources_data
 
         return JSONResponse(content=data)
