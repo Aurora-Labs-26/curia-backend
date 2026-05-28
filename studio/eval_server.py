@@ -227,6 +227,11 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
         )
         if not src or src["status"] != "ready":
             await process_source(source_id=source_id)
+        src_after = await db_fetchrow(
+            "SELECT status FROM source WHERE id = $id::uuid", {"id": source_id}
+        )
+        if not src_after or src_after["status"] != "ready":
+            raise RuntimeError(f"Source failed to ingest (status: {src_after['status'] if src_after else 'missing'}). The URL may be behind a login, blocked, or empty.")
         await _step_done()
 
         if mode == "cluster":
@@ -1308,31 +1313,41 @@ async function submitUrl() {
   document.getElementById('btn-run').disabled = true;
   setJobStatus('running', '<span class="job-spinner">↻</span> Starting pipeline…');
 
-  const res  = await fetch('/api/ingest', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ url, show_name: show, mode }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    setJobStatus('error', '✗ ' + data.error);
+  try {
+    const res  = await fetch('/api/ingest', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ url, show_name: show, mode }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      setJobStatus('error', '✗ ' + esc(data.error));
+      document.getElementById('btn-run').disabled = false;
+      return;
+    }
+    _pollJob(data.job_id);
+  } catch (e) {
+    setJobStatus('error', '✗ ' + esc(e.message || 'Network error'));
     document.getElementById('btn-run').disabled = false;
-    return;
   }
-  _pollJob(data.job_id);
 }
 
 function _pollJob(jobId) {
   clearTimeout(_pollTimer);
   _pollTimer = setTimeout(async () => {
-    const res  = await fetch('/api/jobs/' + jobId);
-    const data = await res.json();
-
-    if (data.steps && data.steps.length) renderSteps(data.steps, data.status === 'error' ? data.message : null);
+    let data;
+    try {
+      const res = await fetch('/api/jobs/' + jobId);
+      data = await res.json();
+    } catch (e) {
+      setJobStatus('error', '✗ Lost connection to server');
+      document.getElementById('btn-run').disabled = false;
+      return;
+    }
 
     if (data.status === 'running' || data.status === 'pending') {
-      if (!data.steps || !data.steps.length)
-        setJobStatus('running', '<span class="job-spinner">↻</span> ' + esc(data.message || 'Running…'));
+      if (data.steps && data.steps.length) renderSteps(data.steps, null);
+      else setJobStatus('running', '<span class="job-spinner">↻</span> ' + esc(data.message || 'Running…'));
       _pollJob(jobId);
     } else if (data.status === 'awaiting_selection') {
       if (data.steps && data.steps.length) renderSteps(data.steps, null);
@@ -1340,7 +1355,8 @@ function _pollJob(jobId) {
       document.getElementById('btn-run').disabled = false;
       loadCluster(data.source_id, jobId);
     } else if (data.status === 'done') {
-      if (!data.steps || !data.steps.length) setJobStatus('done', '✓ Done!');
+      if (data.steps && data.steps.length) renderSteps(data.steps, null);
+      else setJobStatus('done', '✓ Done!');
       document.getElementById('btn-run').disabled = false;
       document.getElementById('url-input').value = '';
       document.getElementById('cluster-panel').style.display = 'none';
@@ -1348,8 +1364,8 @@ function _pollJob(jobId) {
       await loadEpisodes();
       if (data.episode_id) selectEpisode(data.episode_id);
     } else {
-      if (!data.steps || !data.steps.length)
-        setJobStatus('error', '✗ ' + esc(data.message || 'Error'));
+      if (data.steps && data.steps.length) renderSteps(data.steps, data.message || 'Error');
+      else setJobStatus('error', '✗ ' + esc(data.message || 'Error'));
       document.getElementById('btn-run').disabled = false;
     }
   }, 2000);
