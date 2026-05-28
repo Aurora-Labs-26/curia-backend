@@ -33,7 +33,7 @@ _JOBS_TABLE_READY = False
 
 FEEDBACK_FIELDS = [
     "timestamp", "episode_id", "episode_title",
-    "stage", "original", "edited", "verdict", "comment",
+    "stage", "original", "edited", "verdict", "comment", "signature",
 ]
 
 
@@ -59,11 +59,18 @@ async def _ensure_table():
             original   TEXT,
             edited     TEXT,
             verdict    TEXT,
-            comment    TEXT
+            comment    TEXT,
+            signature  TEXT
         )
         """,
         {},
     )
+    try:
+        await db_execute(
+            "ALTER TABLE eval_feedback ADD COLUMN IF NOT EXISTS signature TEXT", {}
+        )
+    except Exception:
+        pass
     _TABLE_READY = True
 
 
@@ -724,7 +731,7 @@ const STEP_LABELS = ['Source', 'Outline', 'Transcript', 'Final'];
 let feedback = resetFeedback();
 
 function resetFeedback() {
-  return { fields: {}, finalNote: '' };
+  return { fields: {}, finalNote: '', signature: '' };
 }
 
 // Get or init a per-field feedback slot
@@ -788,7 +795,7 @@ async function loadCluster(sourceId, jobId) {
 
 function renderClusterPanel(threshold) {
   const panel = document.getElementById('cluster-panel');
-  panel.style.display = '';
+  panel.style.display = 'block';
 
   const checked = _clusterCandidates.filter(c => c.score >= threshold);
   const selectedCount = checked.length + 1;
@@ -1198,6 +1205,15 @@ function buildFinal(container) {
     <div class="final-section-label">Global Note</div>
     <textarea id="final-note" placeholder="Overall thoughts on this episode…">${esc(feedback.finalNote||'')}</textarea>`;
   container.appendChild(noteBox);
+
+  const sigBox = document.createElement('div');
+  sigBox.className = 'final-note-area';
+  sigBox.innerHTML = `
+    <div class="final-section-label">Signature</div>
+    <input type="text" id="signature-input" placeholder="Your name"
+           value="${esc(feedback.signature||'')}"
+           style="width:100%;padding:10px 12px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:13px;background:#fafafa;outline:none;box-sizing:border-box">`;
+  container.appendChild(sigBox);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -1206,6 +1222,8 @@ function _saveCurrentStep() {
   if (step === 3) {
     const el = document.getElementById('final-note');
     if (el) feedback.finalNote = el.value;
+    const sig = document.getElementById('signature-input');
+    if (sig) feedback.signature = sig.value;
   }
 }
 
@@ -1242,7 +1260,7 @@ async function submitFeedback() {
     const res  = await fetch('/api/eval/submit', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ episode_id: episode.id, episode_title: episode.title || '', stages }),
+      body:    JSON.stringify({ episode_id: episode.id, episode_title: episode.title || '', signature: feedback.signature || '', stages }),
     });
     const data = await res.json();
 
@@ -1339,7 +1357,7 @@ function _pollJob(jobId) {
 
 function renderSteps(steps, errMsg) {
   const el = document.getElementById('job-status');
-  el.style.display = '';
+  el.style.display = 'block';
   el.className = 'running';
   let html = '<ul class="step-list">';
   for (const s of steps) {
@@ -1357,7 +1375,7 @@ function renderSteps(steps, errMsg) {
 
 function setJobStatus(cls, html) {
   const el = document.getElementById('job-status');
-  el.style.display = '';
+  el.style.display = 'block';
   el.className     = cls;
   el.innerHTML     = html;
 }
@@ -1447,6 +1465,7 @@ async def submit_feedback(request: Request):
         body          = await request.json()
         episode_id    = body.get("episode_id", "")
         episode_title = body.get("episode_title", "")
+        signature     = body.get("signature", "")
         stages        = body.get("stages", [])
         ts            = datetime.now(timezone.utc)
 
@@ -1467,8 +1486,8 @@ async def submit_feedback(request: Request):
                 for s in stages:
                     await conn.execute(
                         """INSERT INTO eval_feedback
-                           (timestamp, episode_id, episode_title, stage, original, edited, verdict, comment)
-                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                           (timestamp, episode_id, episode_title, stage, original, edited, verdict, comment, signature)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
                         ts,
                         episode_id,
                         episode_title,
@@ -1477,6 +1496,7 @@ async def submit_feedback(request: Request):
                         _sanitize(s.get("edited", "")),
                         s.get("verdict", ""),
                         s.get("comment", ""),
+                        signature,
                     )
 
             count = await conn.fetchval(
@@ -1512,7 +1532,7 @@ async def export_csv():
         await _ensure_table()
         from core.db.connection import db_query
         rows = await db_query(
-            "SELECT timestamp, episode_id, episode_title, stage, original, edited, verdict, comment "
+            "SELECT timestamp, episode_id, episode_title, stage, original, edited, verdict, comment, signature "
             "FROM eval_feedback ORDER BY timestamp",
             {},
         )

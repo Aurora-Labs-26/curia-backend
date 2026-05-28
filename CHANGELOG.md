@@ -6,8 +6,12 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-05-27 · Arihant + Claude (claude-opus-4-6)
 
+### Feature
+- **`studio/eval_server.py`** — signature field on final step: text input for evaluator name, saved to new `signature` column on `eval_feedback` table, included in CSV export
+
 ### Bug Fix
 - **`studio/eval_server.py`** — Submit Feedback button was invisible: CSS rule `#btn-submit { display: none }` overrode JS `style.display = ''` (clearing inline style falls back to stylesheet's `display:none`); fixed JS to set `display: 'inline-block'` explicitly
+- **`studio/eval_server.py`** — cluster panel and job status were also invisible due to the same `display: ''` bug on `#cluster-panel` and `#job-status`; fixed to use `display: 'block'`
 - **`studio/eval_server.py`** — feedback saves were silently failing: DELETE + INSERT used separate connections (each auto-committed independently) so a failed INSERT after a successful DELETE lost all data; rewrote `submit_feedback` to use a single `conn.transaction()` block for atomicity; added `_sanitize()` to strip null bytes from text fields (PostgreSQL TEXT rejects `\x00`); added post-save verification query and server-side traceback logging
 
 ---
