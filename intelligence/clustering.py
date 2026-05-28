@@ -35,7 +35,7 @@ async def find_similar_sources(
         f"SELECT {emb_col} FROM source_primitive_embedding WHERE source_id = $sid::uuid",
         {"sid": bare_id},
     )
-    if not target_row or not target_row.get(emb_col):
+    if not target_row or target_row.get(emb_col) is None:
         return []
 
     target_emb = list(target_row[emb_col])
