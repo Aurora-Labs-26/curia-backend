@@ -187,6 +187,41 @@ async def _load_job(job_id: str) -> dict | None:
     return data
 
 
+async def _ensure_primitive_embedding(source_id: str):
+    """Generate a primitive embedding for clustering, using all insights as fallback."""
+    from core.db.connection import db_query, db_execute
+    from core.embeddings import get_embedding, get_embedding_column
+
+    col = get_embedding_column()
+    rows = await db_query(
+        "SELECT insight_type, content FROM source_insight WHERE source_id = $sid::uuid",
+        {"sid": source_id},
+    )
+    # Prefer core_tensions + counterpoints (standard clustering primitives)
+    parts = []
+    for r in (rows or []):
+        c = (r.get("content") or "").strip()
+        if c and c.lower() != "null" and r["insight_type"] in ("core_tensions", "counterpoints"):
+            parts.append(c)
+    # Fallback: use all non-empty insights
+    if not parts:
+        for r in (rows or []):
+            c = (r.get("content") or "").strip()
+            if c and c.lower() != "null":
+                parts.append(c)
+    if not parts:
+        return
+    vector = await get_embedding("\n".join(parts))
+    if not vector:
+        return
+    await db_execute(
+        f"""INSERT INTO source_primitive_embedding (source_id, {col})
+            VALUES ($sid::uuid, $vec)
+            ON CONFLICT (source_id) DO UPDATE SET {col} = EXCLUDED.{col}""",
+        {"sid": source_id, "vec": vector},
+    )
+
+
 async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "single"):
     from core.db.connection import db_fetchrow, db_execute
     from core.ingest import process_source, get_or_create_source
@@ -244,6 +279,15 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
         await _step_done()
 
         if mode == "cluster":
+            emb_row = await db_fetchrow(
+                "SELECT source_id FROM source_primitive_embedding WHERE source_id = $sid::uuid",
+                {"sid": source_id},
+            )
+            if not emb_row:
+                await _step_start("Generating embedding for clustering")
+                await _ensure_primitive_embedding(source_id)
+                await _step_done()
+
             await _save_job(job_id, {
                 "status": "awaiting_selection",
                 "source_id": source_id,
