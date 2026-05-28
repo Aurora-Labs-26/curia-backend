@@ -1143,19 +1143,20 @@ function buildSource(container) {
 function buildOutline(container) {
   const outline = episode.outline;
 
+  // Title card — always show if we have a title from either outline or episode
+  const titleText = (outline && typeof outline === 'object' && outline.title) || episode.title || '';
+  if (titleText) {
+    const titleEl = document.createElement('div');
+    titleEl.className = 'outline-title'; titleEl.textContent = titleText;
+    container.appendChild(_makeCard('outline.title', 'Title', titleEl, titleText));
+  }
+
   if (!outline || typeof outline !== 'object') {
     const el = document.createElement('pre');
     el.style.cssText = 'font-size:12px;line-height:1.75;color:#555;white-space:pre-wrap';
     el.textContent = String(outline || '');
     container.appendChild(_makeCard('outline.text', 'Outline', el, String(outline||'')));
     return;
-  }
-
-  // Title card
-  if (outline.title) {
-    const titleEl = document.createElement('div');
-    titleEl.className = 'outline-title'; titleEl.textContent = outline.title;
-    container.appendChild(_makeCard('outline.title', 'Title', titleEl, outline.title));
   }
 
   // Thread / central tension card
