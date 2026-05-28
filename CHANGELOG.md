@@ -7,6 +7,7 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-05-27 · Arihant + Claude (claude-opus-4-6)
 
 ### Feature
+- **`studio/eval_server.py`** — title and thread now have separate Good/Bad/Edit/Note cards in the outline step (previously bundled together in a single "Overview" card)
 - **`studio/eval_server.py`** — signature field on final step: text input for evaluator name, saved to new `signature` column on `eval_feedback` table, included in CSV export
 
 ### Bug Fix

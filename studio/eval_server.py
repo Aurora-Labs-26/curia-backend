@@ -1133,20 +1133,20 @@ function buildOutline(container) {
     return;
   }
 
-  // Overview card (title + thread)
-  const overviewEl = document.createElement('div');
-  let overviewText = '';
+  // Title card
   if (outline.title) {
-    const t = document.createElement('div');
-    t.className = 'outline-title'; t.textContent = outline.title;
-    overviewEl.appendChild(t); overviewText += outline.title;
+    const titleEl = document.createElement('div');
+    titleEl.className = 'outline-title'; titleEl.textContent = outline.title;
+    container.appendChild(_makeCard('outline.title', 'Title', titleEl, outline.title));
   }
+
+  // Thread / central tension card
   if (outline.thread || outline.central_tension) {
-    const th = document.createElement('div');
-    th.className = 'outline-thread'; th.textContent = outline.thread || outline.central_tension;
-    overviewEl.appendChild(th); overviewText += '\n\n' + (outline.thread || outline.central_tension);
+    const threadVal = outline.thread || outline.central_tension;
+    const threadEl = document.createElement('div');
+    threadEl.className = 'outline-thread'; threadEl.textContent = threadVal;
+    container.appendChild(_makeCard('outline.thread', 'Thread', threadEl, threadVal));
   }
-  if (overviewText) container.appendChild(_makeCard('outline.overview', 'Overview', overviewEl, overviewText));
 
   // Per-segment cards
   (outline.segments || []).forEach((seg, i) => {
