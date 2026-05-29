@@ -7,6 +7,12 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
+Async correctness pass 3 — TTS adapters and audio streaming had sync file I/O blocking the event loop.
+- **`core/llm_config/adapters/tts.py`** — all 7 async TTS providers (`_async_elevenlabs`, `_async_openai_tts`, `_async_cartesia`, `_async_smallest`, `_async_smallest_with_timings`, `_async_google`, `_async_edge_tts`, `_async_xai`) had sync `open()`, `wave.open()`, `shutil.move()`, `os.unlink()`, `tempfile` writes, or `AudioSegment.from_wav()` calls. All wrapped in `asyncio.to_thread()`. Added `_write_bytes()` helper. `synthesize_bytes()` file read + cleanup also wrapped.
+- **`core/audio/stream.py`** — `wave.open()` read/write in async generator wrapped in `asyncio.to_thread()`
+- **`core/audio/stream_manager.py`** — same WAV read/write blocking ops wrapped in `asyncio.to_thread()`
+- **`api/routes/stream.py`** — `EPISODES_DIR.mkdir()` in WebSocket handler wrapped in `asyncio.to_thread()`
+
 Async correctness pass 2 — more blocking I/O and deprecated APIs found in second audit.
 - **`core/storage/blob.py`** — `Path.read_bytes()`, `Path.stat()`, `Path.mkdir()`, `Path.write_bytes()` in async upload functions wrapped in `asyncio.to_thread()`
 - **`api/routes/episodes.py`** — `Path.exists()` and `Path.stat()` in audio streaming endpoint wrapped in `asyncio.to_thread()`
