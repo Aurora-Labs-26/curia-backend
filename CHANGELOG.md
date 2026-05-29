@@ -10,6 +10,11 @@ Each entry: **date · who made the change · what changed and why.**
 Wire in segment-based TTS synthesis (v2) as the default pipeline path.
 - **`studio/generator.py`** — `process_episode()` now calls `synthesize_and_stitch_v2` instead of `synthesize_and_stitch`. Merges consecutive same-speaker lines into paragraphs before TTS, producing fewer API calls and more natural prosody. Returns the same `(output_path, tts_timings)` interface so all downstream code (chapters, DB storage) works unchanged.
 
+Hume AI Octave TTS provider integration.
+- **`core/llm_config/schema.py`** — added `"hume"` to `ProviderType` literal
+- **`core/llm_config/adapters/tts.py`** — added `_synthesize_hume()` (sync) and `_async_hume()` (async) methods with `generation_id` voice consistency and `description` emotional direction support; added `"hume"` to both dispatch chains and `output_format` property
+- **`config/models.yaml`** — added `hume` provider (api_key_env: `HUME_API_KEY`) and `hume-octave` model alias (kind: tts)
+
 ---
 
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)

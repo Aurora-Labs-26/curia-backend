@@ -96,6 +96,11 @@ providers:
   #   api_key_env: GEMINI_API_KEY
   #   base_url: https://generativelanguage.googleapis.com/v1beta
 
+  hume:
+    type: hume
+    api_key_env: HUME_API_KEY
+    base_url: https://api.hume.ai
+
   # ── TTS providers ──────────────────────────────────────────────────────────
   #
   # google_tts:
@@ -271,6 +276,14 @@ models:
   #   model_id: text-embedding-004
   #   kind: embedding
   #   dimension: 768
+
+  hume-octave:
+    provider: hume
+    model_id: octave
+    kind: tts
+    defaults:
+      description: "Speak in a warm, engaging podcast host tone with natural conversational energy"
+      output_format: mp3
 
   # ── Additional TTS model aliases ───────────────────────────────────────────
   #
