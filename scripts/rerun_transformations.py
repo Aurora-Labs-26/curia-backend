@@ -48,7 +48,7 @@ async def main():
                 continue
 
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 content = await loop.run_in_executor(
                     None, run_transformation, full_text, insight_type
                 )

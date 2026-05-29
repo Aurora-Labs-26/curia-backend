@@ -7,7 +7,13 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
-Async correctness — sync blocking calls in async handlers stalled the event loop.
+Async correctness pass 2 — more blocking I/O and deprecated APIs found in second audit.
+- **`core/storage/blob.py`** — `Path.read_bytes()`, `Path.stat()`, `Path.mkdir()`, `Path.write_bytes()` in async upload functions wrapped in `asyncio.to_thread()`
+- **`api/routes/episodes.py`** — `Path.exists()` and `Path.stat()` in audio streaming endpoint wrapped in `asyncio.to_thread()`
+- **`optimization/runner/gepa_runner.py`** — `save_prompt()` sync file write wrapped in `asyncio.to_thread()`
+- **`core/ingest.py`**, **`studio/generator.py`**, **`scripts/rerun_transformations.py`**, **`worker/main.py`** — `asyncio.get_event_loop()` → `asyncio.get_running_loop()` (deprecated in Python 3.10+)
+
+Async correctness pass 1 — sync blocking calls in async handlers stalled the event loop.
 - **`intelligence/idea_generator.py`** — DSPy `evaluate_ideas_batch` and `evaluate_single_idea` calls wrapped in `asyncio.to_thread()` so LLM inference doesn't block the event loop
 - **`api/routes/eval.py`** — `_append_verdict()` and `_load_verdicts()` file I/O wrapped in `asyncio.to_thread()`
 - **`api/routes/admin.py`** — replaced sync `get_guidelines(task)` with `await get_guidelines_async(task)`
