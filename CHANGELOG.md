@@ -80,6 +80,13 @@ Daily brief API endpoints for app and internal brief service.
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
+### Test
+39 new tests for previously untested modules — storage blob, audio streaming, TTS file I/O, eval verdicts.
+- **`tests/test_storage_blob.py`** — 8 tests: upload_blob writes/overwrites, upload_file, nested dirs, empty content, concurrent non-blocking
+- **`tests/test_audio_stream.py`** — 7 tests: yields per segment, saves WAV, empty transcript, empty TTS response, metadata, non-WAV passthrough
+- **`tests/test_tts_file_io.py`** — 12 tests: _write_bytes/_write_wav_from_pcm helpers, synthesize_bytes returns WAV + cleanup + concurrency, synthesize_async stub for all providers, non-blocking
+- **`tests/test_eval_verdicts.py`** — 12 tests: append/load JSONL, corrupted lines, stats aggregation, CSV export, empty states
+
 Async correctness pass 4 — last remaining issue.
 - **`scripts/synthesize_episode.py`** — `os.makedirs()`, `os.path.exists()`, `synthesize_line()` (subprocess.run), and `stitch_wavs()` (subprocess.run) wrapped in `asyncio.to_thread()`
 
