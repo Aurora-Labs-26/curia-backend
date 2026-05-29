@@ -543,8 +543,10 @@ HTML = r"""<!DOCTYPE html>
     padding: 16px 28px 14px; border-bottom: 1px solid #ebebeb;
     background: #fff; flex-shrink: 0;
   }
-  #ep-title-text { font-size: 15px; font-weight: 600; color: #111; letter-spacing: -0.01em; }
-  #ep-title-meta { font-size: 11px; color: #aaa; margin-top: 4px; }
+  #ep-title-text { font-size: 12px; font-weight: 500; color: #888; }
+  #ep-title-meta { display: none; }
+  #title-card-area { padding: 8px 20px 0; background: #fff; flex-shrink: 0; }
+  #title-card-area .eval-card { margin-bottom: 0; }
 
   /* Stepper */
   #stepper {
@@ -735,6 +737,7 @@ HTML = r"""<!DOCTYPE html>
         <div id="ep-title-text"></div>
         <div id="ep-title-meta"></div>
       </div>
+      <div id="title-card-area"></div>
 
       <div id="stepper">
         <div class="step-item" id="step-0">
@@ -991,11 +994,20 @@ async function selectEpisode(id) {
   step     = 0;
   feedback = resetFeedback();
 
-  // Title bar
-  document.getElementById('ep-title-text').textContent = episode.title || 'Untitled';
-  const score = episode.quality_score != null ? (episode.quality_score * 100).toFixed(0) + '%' : '—';
-  document.getElementById('ep-title-meta').textContent =
-    (episode.show_name || '') + '  ·  Quality score: ' + score;
+  // Title bar — show name + score as static meta
+  const titleText = episode.title || 'Untitled';
+  document.getElementById('ep-title-text').textContent =
+    (episode.show_name || '') + '  ·  Quality score: ' +
+    (episode.quality_score != null ? (episode.quality_score * 100).toFixed(0) + '%' : '—');
+  document.getElementById('ep-title-meta').textContent = '';
+
+  // Ratable title card
+  const titleContainer = document.getElementById('title-card-area');
+  titleContainer.innerHTML = '';
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText = 'font-size:16px;font-weight:600;color:#e0e0e0';
+  titleEl.textContent = titleText;
+  titleContainer.appendChild(_makeCard('episode.title', 'Episode Title', titleEl, titleText));
 
   renderStep();
 }
@@ -1186,14 +1198,6 @@ function buildSource(container) {
 
 function buildOutline(container) {
   const outline = episode.outline;
-
-  // Title card — always show if we have a title from either outline or episode
-  const titleText = (outline && typeof outline === 'object' && outline.title) || episode.title || '';
-  if (titleText) {
-    const titleEl = document.createElement('div');
-    titleEl.className = 'outline-title'; titleEl.textContent = titleText;
-    container.appendChild(_makeCard('outline.title', 'Title', titleEl, titleText));
-  }
 
   if (!outline || typeof outline !== 'object') {
     const el = document.createElement('pre');

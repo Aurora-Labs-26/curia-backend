@@ -4,6 +4,13 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-29 · Arihant + Claude (claude-opus-4-6)
+
+### Feature
+- **`studio/eval_server.py`** — episode title is now ratable: persistent card with Good/Bad/Edit/Note above the stepper (visible on all steps); removed duplicate title card from outline step; feedback saved as `episode.title` field
+
+---
+
 ## 2026-05-27 · Arihant + Claude (claude-opus-4-6)
 
 ### Feature
