@@ -12,6 +12,7 @@ Routes:
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -139,7 +140,7 @@ async def eval_verdict(source_id: str, body: VerdictRequest):
     )
     if not source:
         raise HTTPException(404, "Source not found")
-    _append_verdict({
+    await asyncio.to_thread(_append_verdict, {
         "source_id": source_id,
         "url": source["url"],
         "title": source["title"],
@@ -154,7 +155,7 @@ async def eval_verdict(source_id: str, body: VerdictRequest):
 
 @router.get("/stats")
 async def eval_stats():
-    verdicts = _load_verdicts()
+    verdicts = await asyncio.to_thread(_load_verdicts)
     counts: dict[str, dict[str, int]] = {}
     for v in verdicts:
         t = v.get("transform", "?")
@@ -180,7 +181,7 @@ async def eval_stats():
 
 @router.get("/export.csv")
 async def eval_export():
-    verdicts = _load_verdicts()
+    verdicts = await asyncio.to_thread(_load_verdicts)
     out = io.StringIO()
     fields = ["source_id", "url", "title", "transform", "verdict", "golden", "note", "ts"]
     w = csv.DictWriter(out, fieldnames=fields)

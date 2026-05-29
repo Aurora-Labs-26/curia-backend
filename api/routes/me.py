@@ -7,7 +7,7 @@ from api.auth import CurrentUser, current_user
 from api.schemas import MeResponse, RubricResponse
 from core.db.connection import db_execute, db_fetchrow
 from core.kb import UserKB, load_kb, save_kb
-from optimization.guidelines import get_guidelines
+from optimization.guidelines import get_guidelines_async
 from optimization.rubrics.generator import generate_judge_prompt_async
 
 router = APIRouter()
@@ -68,7 +68,7 @@ async def get_my_rubric(
     explain why an episode scored what it did, and edit their KB to shift it.
     """
     try:
-        get_guidelines(task)        # validates task exists
+        await get_guidelines_async(task)
     except KeyError as e:
         raise HTTPException(404, str(e))
 

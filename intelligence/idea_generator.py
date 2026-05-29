@@ -7,6 +7,7 @@ Workflow:
   load_archive → cluster_sources → diff_clusters → evaluate_ideas → filter_covered → save_ideas → auto_generate
 """
 
+import asyncio
 import json
 import os
 from typing import TypedDict
@@ -404,7 +405,7 @@ async def evaluate_ideas(state: IdeaGenState) -> IdeaGenState:
     raw_ideas = []
     try:
         # Batch call — one DSPy module invocation across all groups.
-        prediction = evaluate_ideas_batch(groups_text=human)
+        prediction = await asyncio.to_thread(evaluate_ideas_batch, groups_text=human)
         ideas = parse_json_response(prediction.ideas_json)
 
         for idea in ideas:
@@ -428,8 +429,9 @@ async def evaluate_ideas(state: IdeaGenState) -> IdeaGenState:
             try:
                 # Per-group fallback — one DSPy module invocation per group.
                 # Prepend the user context here too so each fallback call also gets it.
-                prediction = evaluate_single_idea(
-                    group_text=user_ctx + format_group(group_id, idea_type.upper(), cluster_sources)
+                prediction = await asyncio.to_thread(
+                    evaluate_single_idea,
+                    group_text=user_ctx + format_group(group_id, idea_type.upper(), cluster_sources),
                 )
                 idea = parse_json_response(prediction.idea_json)
                 if isinstance(idea, list):
