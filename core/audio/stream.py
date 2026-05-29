@@ -15,6 +15,7 @@ The streaming pipeline:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import wave
 from typing import AsyncIterator, Callable, Awaitable, Optional, Union
@@ -69,24 +70,29 @@ async def stream_episode_audio(
             continue
 
         # Extract PCM from WAV bytes for concatenation
-        buf = io.BytesIO(audio_bytes)
-        try:
-            with wave.open(buf, "rb") as w:
-                sample_rate = w.getframerate()
-                sampwidth = w.getsampwidth()
-                n_channels = w.getnchannels()
-                all_pcm.append(w.readframes(w.getnframes()))
-        except wave.Error:
-            # Not a valid WAV — yield raw bytes anyway
+        def _extract_pcm(data):
+            buf = io.BytesIO(data)
+            try:
+                with wave.open(buf, "rb") as w:
+                    return w.getframerate(), w.getsampwidth(), w.getnchannels(), w.readframes(w.getnframes())
+            except wave.Error:
+                return None
+        result = await asyncio.to_thread(_extract_pcm, audio_bytes)
+        if result:
+            sample_rate, sampwidth, n_channels, pcm = result
+            all_pcm.append(pcm)
+        else:
             all_pcm.append(audio_bytes)
 
         yield audio_bytes
 
     # Save concatenated audio for replay
     if save_path and all_pcm:
-        with wave.open(save_path, "wb") as out:
-            out.setnchannels(n_channels)
-            out.setsampwidth(sampwidth)
-            out.setframerate(sample_rate)
-            for pcm in all_pcm:
-                out.writeframes(pcm)
+        def _save_wav(path, nc, sw, sr, pcm_list):
+            with wave.open(path, "wb") as out:
+                out.setnchannels(nc)
+                out.setsampwidth(sw)
+                out.setframerate(sr)
+                for pcm in pcm_list:
+                    out.writeframes(pcm)
+        await asyncio.to_thread(_save_wav, save_path, n_channels, sampwidth, sample_rate, all_pcm)

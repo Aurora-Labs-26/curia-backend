@@ -55,6 +55,11 @@ def _write_wav_from_pcm(pcm_bytes: bytes, sample_rate: int, output_path: str) ->
         w.writeframes(pcm_bytes)
 
 
+def _write_bytes(path: str, data: bytes) -> None:
+    with open(path, "wb") as f:
+        f.write(data)
+
+
 def _write_silent_wav(output_path: str, duration_seconds: float = 1.0) -> None:
     sample_rate = 22050
     num_samples = int(sample_rate * duration_seconds)
@@ -311,11 +316,15 @@ class TTSAdapter:
         tmp_path = tempfile.mktemp(suffix=".wav")
         try:
             await self.synthesize_async(text=text, output_path=tmp_path)
-            with open(tmp_path, "rb") as f:
-                return f.read()
+            def _read_and_cleanup():
+                with open(tmp_path, "rb") as f:
+                    return f.read()
+            return await asyncio.to_thread(_read_and_cleanup)
         finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            def _cleanup():
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            await asyncio.to_thread(_cleanup)
 
     # -- async provider implementations ------------------------------------
 
@@ -343,10 +352,9 @@ class TTSAdapter:
         if resp.status_code != 200:
             raise RuntimeError(f"ElevenLabs error {resp.status_code}: {resp.text[:300]}")
         if output_format.startswith("pcm_"):
-            _write_wav_from_pcm(resp.content, _sample_rate_from_format(output_format), output_path)
+            await asyncio.to_thread(_write_wav_from_pcm, resp.content, _sample_rate_from_format(output_format), output_path)
         else:
-            with open(output_path, "wb") as f:
-                f.write(resp.content)
+            await asyncio.to_thread(_write_bytes, output_path, resp.content)
 
     async def _async_openai_tts(self, text: str, output_path: str, api_key: str) -> None:
         base_url = (self.provider.base_url or "https://api.openai.com/v1").rstrip("/")
@@ -366,8 +374,7 @@ class TTSAdapter:
             )
         if resp.status_code != 200:
             raise RuntimeError(f"OpenAI TTS error {resp.status_code}: {resp.text[:300]}")
-        with open(output_path, "wb") as f:
-            f.write(resp.content)
+        await asyncio.to_thread(_write_bytes, output_path, resp.content)
 
     async def _async_cartesia(self, text: str, output_path: str, api_key: str) -> None:
         base_url = (self.provider.base_url or "https://api.cartesia.ai").rstrip("/")
@@ -394,8 +401,7 @@ class TTSAdapter:
             )
         if resp.status_code != 200:
             raise RuntimeError(f"Cartesia error {resp.status_code}: {resp.text[:300]}")
-        with open(output_path, "wb") as f:
-            f.write(resp.content)
+        await asyncio.to_thread(_write_bytes, output_path, resp.content)
 
     async def _async_smallest(self, text: str, output_path: str, api_key: str) -> None:
         base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
@@ -419,8 +425,7 @@ class TTSAdapter:
                 )
             if resp.status_code != 200:
                 raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
-            with open(output_path, "wb") as f:
-                f.write(resp.content)
+            await asyncio.to_thread(_write_bytes, output_path, resp.content)
         else:
             # Multi-chunk: synthesize each, stitch with pydub
             from pydub import AudioSegment
@@ -443,12 +448,15 @@ class TTSAdapter:
                     )
                     if resp.status_code != 200:
                         raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        tmp.write(resp.content)
-                        tmp_path = tmp.name
-                    combined += AudioSegment.from_wav(tmp_path)
-                    os.unlink(tmp_path)
-            combined.export(output_path, format="wav")
+                    def _write_and_load(content, _AudioSegment=AudioSegment):
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                            tmp.write(content)
+                            tmp_path = tmp.name
+                        seg = _AudioSegment.from_wav(tmp_path)
+                        os.unlink(tmp_path)
+                        return seg
+                    combined += await asyncio.to_thread(_write_and_load, resp.content)
+            await asyncio.to_thread(combined.export, output_path, "wav")
 
     async def _async_smallest_with_timings(
         self, text: str, output_path: str, api_key: str
@@ -498,37 +506,49 @@ class TTSAdapter:
                     audio_b64 = payload.get("audio") or payload.get("audio_data")
                     if audio_b64:
                         audio_bytes = base64.b64decode(audio_b64)
-                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                            tmp.write(audio_bytes)
-                            clip_paths.append(tmp.name)
-                        # Offset timings by accumulated duration
+                        def _save_clip(data):
+                            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                                tmp.write(data)
+                                return tmp.name
+                        clip_path = await asyncio.to_thread(_save_clip, audio_bytes)
+                        clip_paths.append(clip_path)
                         chunk_timings = payload.get("timestamps") or payload.get("words") or []
                         for t in chunk_timings:
                             all_timings.append({**t, "start": t.get("start", 0) + time_offset,
                                                 "end": t.get("end", 0) + time_offset})
                         from pydub import AudioSegment as _AS
-                        time_offset += len(_AS.from_wav(clip_paths[-1])) / 1000.0
+                        duration_ms = await asyncio.to_thread(lambda: len(_AS.from_wav(clip_paths[-1])))
+                        time_offset += duration_ms / 1000.0
                     else:
-                        # No audio in JSON — synthesize without timings for this chunk
-                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                            clip_paths.append(tmp.name)
+                        def _make_tmp():
+                            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                                return tmp.name
+                        clip_path = await asyncio.to_thread(_make_tmp)
+                        clip_paths.append(clip_path)
                         await self._async_smallest(chunk, clip_paths[-1], api_key)
                 else:
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        tmp.write(resp.content)
-                        clip_paths.append(tmp.name)
+                    def _save_resp(data):
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                            tmp.write(data)
+                            return tmp.name
+                    clip_path = await asyncio.to_thread(_save_resp, resp.content)
+                    clip_paths.append(clip_path)
 
         # Stitch clips together
-        if len(clip_paths) == 1:
-            import shutil
-            shutil.move(clip_paths[0], output_path)
-        else:
-            from pydub import AudioSegment
-            combined = AudioSegment.empty()
-            for p in clip_paths:
-                combined += AudioSegment.from_wav(p)
-                os.unlink(p)
-            combined.export(output_path, format="wav")
+        import shutil
+
+        def _stitch():
+            if len(clip_paths) == 1:
+                shutil.move(clip_paths[0], output_path)
+            else:
+                from pydub import AudioSegment
+                combined = AudioSegment.empty()
+                for p in clip_paths:
+                    combined += AudioSegment.from_wav(p)
+                    os.unlink(p)
+                combined.export(output_path, format="wav")
+
+        await asyncio.to_thread(_stitch)
 
         return all_timings
 
@@ -564,10 +584,9 @@ class TTSAdapter:
             raise RuntimeError("Google TTS response missing audioContent")
         pcm = base64.b64decode(audio_b64)
         if pcm[:4] == b"RIFF":
-            with open(output_path, "wb") as f:
-                f.write(pcm)
+            await asyncio.to_thread(_write_bytes, output_path, pcm)
         else:
-            _write_wav_from_pcm(pcm, sample_rate, output_path)
+            await asyncio.to_thread(_write_wav_from_pcm, pcm, sample_rate, output_path)
 
     async def _async_edge_tts(self, text: str, output_path: str) -> None:
         """Native async — edge_tts is built on asyncio, no thread pool needed."""
@@ -581,7 +600,7 @@ class TTSAdapter:
         await communicate.save(mp3_path)
 
         if output_path != mp3_path:
-            shutil.move(mp3_path, output_path)
+            await asyncio.to_thread(shutil.move, mp3_path, output_path)
 
     async def _async_xai(self, text: str, output_path: str, api_key: str) -> None:
         endpoint_path = self.settings.get("endpoint_path")
@@ -605,10 +624,9 @@ class TTSAdapter:
         if resp.status_code != 200:
             raise RuntimeError(f"xAI TTS error {resp.status_code}: {resp.text[:300]}")
         if audio_format == "pcm":
-            _write_wav_from_pcm(resp.content, int(self.settings.get("sample_rate", 22050)), output_path)
+            await asyncio.to_thread(_write_wav_from_pcm, resp.content, int(self.settings.get("sample_rate", 22050)), output_path)
         else:
-            with open(output_path, "wb") as f:
-                f.write(resp.content)
+            await asyncio.to_thread(_write_bytes, output_path, resp.content)
 
     # -- sync providers (existing) -----------------------------------------
 

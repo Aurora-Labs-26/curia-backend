@@ -8,6 +8,7 @@ Also saves the full audio to disk so subsequent plays use the file (no re-genera
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -72,7 +73,7 @@ async def stream_episode(websocket: WebSocket, episode_id: str):
 
     # Save path for replay
     save_path = str(EPISODES_DIR / f"{episode_id}_stream.wav")
-    EPISODES_DIR.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(EPISODES_DIR.mkdir, parents=True, exist_ok=True)
 
     try:
         mgr = StreamManager(tts_fn=synthesize_for_speaker_bytes, save_path=save_path)
