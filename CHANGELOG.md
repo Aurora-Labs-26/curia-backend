@@ -4,6 +4,14 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-29 · Arihant + Claude (claude-opus-4-6)
+
+### Feature
+Wire in segment-based TTS synthesis (v2) as the default pipeline path.
+- **`studio/generator.py`** — `process_episode()` now calls `synthesize_and_stitch_v2` instead of `synthesize_and_stitch`. Merges consecutive same-speaker lines into paragraphs before TTS, producing fewer API calls and more natural prosody. Returns the same `(output_path, tts_timings)` interface so all downstream code (chapters, DB storage) works unchanged.
+
+---
+
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix

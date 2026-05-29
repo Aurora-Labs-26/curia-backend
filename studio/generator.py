@@ -404,10 +404,12 @@ def synthesize_and_stitch_v2(
     show_name: str,
     output_path: str,
     speaker_override: str | None = None,
-) -> str:
+) -> tuple[str, list[dict]]:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
     makes far fewer TTS calls, and produces more natural prosody.
+
+    Returns (output_path, tts_timings) — same interface as v1.
     """
     from core.audio.stitcher import prepare_segments
 
@@ -487,8 +489,22 @@ def synthesize_and_stitch_v2(
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), intro_offset={intro_offset_ms}ms")
-    return output_path, intro_offset_ms
+    # Build tts_timings from segments (same shape as v1 for downstream compat)
+    tts_timings: list[dict] = []
+    cursor_ms = intro_offset_ms
+    for i, (clip, seg) in enumerate(zip(clips, segments)):
+        clip_ms = len(clip)
+        tts_timings.append({
+            "line_index": i,
+            "start_ms": cursor_ms,
+            "end_ms": cursor_ms + clip_ms,
+            "speaker": seg["speaker"],
+            "text": seg["text"],
+        })
+        cursor_ms += clip_ms + gap_ms
+
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), {len(tts_timings)} segment timings")
+    return output_path, tts_timings
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +784,7 @@ async def process_episode(episode_id: str) -> None:
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
         _, tts_timings = await loop.run_in_executor(
-            None, synthesize_and_stitch,
+            None, synthesize_and_stitch_v2,
             transcript, show_name, audio_path, speaker_override,
         )
 
