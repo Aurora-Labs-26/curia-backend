@@ -119,7 +119,7 @@ async def get_user_rubric(
     when scoring this user's outputs. Most useful debugging tool.
     """
     try:
-        get_guidelines(task)
+        await get_guidelines_async(task)
     except KeyError as e:
         raise HTTPException(404, str(e))
 

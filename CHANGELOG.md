@@ -80,6 +80,13 @@ Daily brief API endpoints for app and internal brief service.
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
+Async correctness — sync blocking calls in async handlers stalled the event loop.
+- **`intelligence/idea_generator.py`** — DSPy `evaluate_ideas_batch` and `evaluate_single_idea` calls wrapped in `asyncio.to_thread()` so LLM inference doesn't block the event loop
+- **`api/routes/eval.py`** — `_append_verdict()` and `_load_verdicts()` file I/O wrapped in `asyncio.to_thread()`
+- **`api/routes/admin.py`** — replaced sync `get_guidelines(task)` with `await get_guidelines_async(task)`
+- **`api/routes/me.py`** — same: sync `get_guidelines()` → async `get_guidelines_async()`
+- **`studio/generator.py`** — `pydub.AudioSegment.from_mp3()` wrapped in `asyncio.to_thread()`
+
 - **`core/ingest.py`** — `embed_primitive()` only used `core_tensions` + `counterpoints` for clustering embeddings; technical/factual content (docs, guides) that don't produce those insight types were silently skipped and never clustered. Now falls back to all available insights (summary, key_insights, examples, etc.) when primary primitives are empty.
 
 ### Test
