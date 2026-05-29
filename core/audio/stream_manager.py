@@ -18,6 +18,7 @@ On TTS error for a segment:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import wave
@@ -101,15 +102,18 @@ class StreamManager:
                 audio_bytes = await self.tts_fn(seg["text"], seg["speaker"])
 
                 if audio_bytes:
-                    # Extract PCM for saving
-                    buf = io.BytesIO(audio_bytes)
-                    try:
-                        with wave.open(buf, "rb") as w:
-                            sample_rate = w.getframerate()
-                            sampwidth = w.getsampwidth()
-                            n_channels = w.getnchannels()
-                            all_pcm.append(w.readframes(w.getnframes()))
-                    except wave.Error:
+                    def _extract_pcm(data):
+                        buf = io.BytesIO(data)
+                        try:
+                            with wave.open(buf, "rb") as w:
+                                return w.getframerate(), w.getsampwidth(), w.getnchannels(), w.readframes(w.getnframes())
+                        except wave.Error:
+                            return None
+                    result = await asyncio.to_thread(_extract_pcm, audio_bytes)
+                    if result:
+                        sample_rate, sampwidth, n_channels, pcm = result
+                        all_pcm.append(pcm)
+                    else:
                         all_pcm.append(audio_bytes)
 
                     await ws.send_bytes(audio_bytes)
@@ -125,12 +129,14 @@ class StreamManager:
 
         # Save for replay
         if self.save_path and all_pcm:
-            with wave.open(self.save_path, "wb") as out:
-                out.setnchannels(n_channels)
-                out.setsampwidth(sampwidth)
-                out.setframerate(sample_rate)
-                for pcm in all_pcm:
-                    out.writeframes(pcm)
+            def _save_wav(path, nc, sw, sr, pcm_list):
+                with wave.open(path, "wb") as out:
+                    out.setnchannels(nc)
+                    out.setsampwidth(sw)
+                    out.setframerate(sr)
+                    for pcm in pcm_list:
+                        out.writeframes(pcm)
+            await asyncio.to_thread(_save_wav, self.save_path, n_channels, sampwidth, sample_rate, all_pcm)
             logger.info(f"Saved streaming audio to {self.save_path}")
 
         # Send completion
