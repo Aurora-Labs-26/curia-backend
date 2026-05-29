@@ -74,7 +74,7 @@ async def synthesize_episode(run_id: str):
     print(f"Episode: {title}")
     print(f"Lines: {len(transcript)}")
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    await asyncio.to_thread(os.makedirs, OUTPUT_DIR, exist_ok=True)
     safe_title = title.replace(" ", "_").replace(":", "").replace("'", "")[:60]
     output_path = os.path.join(OUTPUT_DIR, f"{safe_title}.mp3")
 
@@ -82,7 +82,7 @@ async def synthesize_episode(run_id: str):
         wav_paths = []
 
         # Prepend intro
-        if os.path.exists(INTRO_WAV):
+        if await asyncio.to_thread(os.path.exists, INTRO_WAV):
             wav_paths.append(INTRO_WAV)
             print("Added intro.wav")
         else:
@@ -95,12 +95,12 @@ async def synthesize_episode(run_id: str):
                 continue
             clip_path = os.path.join(tmpdir, f"line_{i:03d}.wav")
             print(f"  [{i+1}/{len(transcript)}] {text[:60]}...")
-            synthesize_line(text, clip_path)
+            await asyncio.to_thread(synthesize_line, text, clip_path)
             wav_paths.append(clip_path)
 
         # Stitch all clips
         print(f"\nStitching {len(wav_paths)} clips...")
-        stitch_wavs(wav_paths, output_path)
+        await asyncio.to_thread(stitch_wavs, wav_paths, output_path)
 
     print(f"\nDone. Episode saved to:\n  {output_path}")
 

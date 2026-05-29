@@ -80,6 +80,9 @@ Daily brief API endpoints for app and internal brief service.
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix
+Async correctness pass 4 — last remaining issue.
+- **`scripts/synthesize_episode.py`** — `os.makedirs()`, `os.path.exists()`, `synthesize_line()` (subprocess.run), and `stitch_wavs()` (subprocess.run) wrapped in `asyncio.to_thread()`
+
 Async correctness pass 3 — TTS adapters and audio streaming had sync file I/O blocking the event loop.
 - **`core/llm_config/adapters/tts.py`** — all 7 async TTS providers (`_async_elevenlabs`, `_async_openai_tts`, `_async_cartesia`, `_async_smallest`, `_async_smallest_with_timings`, `_async_google`, `_async_edge_tts`, `_async_xai`) had sync `open()`, `wave.open()`, `shutil.move()`, `os.unlink()`, `tempfile` writes, or `AudioSegment.from_wav()` calls. All wrapped in `asyncio.to_thread()`. Added `_write_bytes()` helper. `synthesize_bytes()` file read + cleanup also wrapped.
 - **`core/audio/stream.py`** — `wave.open()` read/write in async generator wrapped in `asyncio.to_thread()`
