@@ -178,7 +178,6 @@ class TTSAdapter:
         if self.provider.type == "openai_tts":
             fmt = self.settings.get("response_format", "wav")
             return "mp3" if fmt == "mp3" else "wav"
-        # cartesia always returns WAV (pcm_s16le in wav container)
         return "wav"
 
     # -- public ------------------------------------------------------------

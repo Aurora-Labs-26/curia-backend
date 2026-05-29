@@ -75,6 +75,11 @@ Daily brief API endpoints for app and internal brief service.
 - **`api/routes/internal.py`** — new file: `GET /internal/brief-context/{user_id}` and `/all` for the daily-brief-harness service; protected by `INTERNAL_SECRET` header
 - **`api/main.py`** — registered internal router
 
+Hume AI Octave TTS provider integration.
+- **`core/llm_config/schema.py`** — added `"hume"` to `ProviderType` literal
+- **`core/llm_config/adapters/tts.py`** — added `_synthesize_hume()` (sync) and `_async_hume()` (async) methods with `generation_id` voice consistency and `description` emotional direction support; added `"hume"` to both dispatch chains and `output_format` property
+- **`config/models.yaml`** — added `hume` provider (api_key_env: `HUME_API_KEY`) and `hume-octave` model alias (kind: tts)
+
 ---
 
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
