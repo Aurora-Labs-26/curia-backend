@@ -19,6 +19,7 @@ Env vars:
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -49,7 +50,7 @@ async def upload_file(
     backend = get_storage_backend()
     if backend == "s3":
         return await _upload_s3_file(file_path, key, content_type)
-    data = Path(file_path).read_bytes()
+    data = await asyncio.to_thread(Path(file_path).read_bytes)
     return await _upload_local(data, key)
 
 
@@ -131,8 +132,6 @@ async def _upload_s3(data: bytes, key: str, content_type: str) -> str:
         kwargs["aws_access_key_id"] = access_key
         kwargs["aws_secret_access_key"] = secret_key
 
-    import asyncio
-
     def _put():
         client = boto3.client("s3", **kwargs)
         client.put_object(
@@ -173,8 +172,6 @@ async def _upload_s3_file(file_path: str, key: str, content_type: str) -> str:
         kwargs["aws_access_key_id"] = access_key
         kwargs["aws_secret_access_key"] = secret_key
 
-    import asyncio
-
     def _put():
         client = boto3.client("s3", **kwargs)
         client.upload_file(
@@ -186,7 +183,7 @@ async def _upload_s3_file(file_path: str, key: str, content_type: str) -> str:
 
     await asyncio.to_thread(_put)
     url = get_blob_url(key)
-    file_size = Path(file_path).stat().st_size
+    file_size = await asyncio.to_thread(lambda: Path(file_path).stat().st_size)
     logger.info(f"[storage] uploaded file {file_size} bytes → s3://{bucket}/{key}")
     return url
 
@@ -199,8 +196,12 @@ async def _upload_s3_file(file_path: str, key: str, content_type: str) -> str:
 async def _upload_local(data: bytes, key: str) -> str:
     base = Path(os.getenv("CURIA_STORAGE_LOCAL_DIR", "data/blobs"))
     dest = base / key
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+
+    def _write():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+
+    await asyncio.to_thread(_write)
     url = f"file://{dest.resolve()}"
     logger.info(f"[storage] saved {len(data)} bytes → {dest}")
     return url

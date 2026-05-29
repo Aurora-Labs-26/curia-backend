@@ -190,7 +190,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
 
         # 2. Run transformations in parallel
         await _set_status(source_id, "transforming")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         tasks = [
             (name, loop.run_in_executor(None, run_transformation, full_text, name))
             for name in TRANSFORMATION_NAMES
