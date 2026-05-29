@@ -778,7 +778,7 @@ async def process_episode(episode_id: str) -> None:
         actual_length_minutes: int | None = None
         try:
             from pydub import AudioSegment as _AS
-            _audio = _AS.from_mp3(audio_path)
+            _audio = await asyncio.to_thread(_AS.from_mp3, audio_path)
             actual_duration_seconds = int(_audio.duration_seconds)
             actual_length_minutes = max(1, round(_audio.duration_seconds / 60))
         except Exception:
