@@ -995,7 +995,7 @@ async def process_episode(episode_id: str) -> None:
 
         # 3. Generate outline (sync DSPy call — offload to thread pool)
         await _set_episode_status(episode_id, "outlining")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         outline = await loop.run_in_executor(
             None, generate_outline, briefing, show_name
         )

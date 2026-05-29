@@ -4,6 +4,7 @@ POST /episodes — create episode row + enqueue generation job.
 GET /episodes, GET /episodes/:id, GET /episodes/:id/audio.
 """
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -283,10 +284,10 @@ async def get_episode_audio(
 
     # Local path — stream file with range support
     audio_path = row.get("audio_path")
-    if not audio_path or not Path(audio_path).exists():
+    if not audio_path or not await asyncio.to_thread(Path(audio_path).exists):
         raise HTTPException(410, "audio file missing on disk")
 
-    file_size = Path(audio_path).stat().st_size
+    file_size = await asyncio.to_thread(lambda: Path(audio_path).stat().st_size)
     filename = f"{row.get('title') or 'episode'}.mp3"
     range_header = request.headers.get("range")
 

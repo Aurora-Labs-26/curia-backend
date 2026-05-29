@@ -87,7 +87,7 @@ async def _maybe_reap_stale() -> None:
 
 
 def _install_signal_handlers() -> None:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: _shutdown.set())
 

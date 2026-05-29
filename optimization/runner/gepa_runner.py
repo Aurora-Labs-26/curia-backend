@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -253,7 +254,7 @@ async def execute_run(run_id: str) -> dict:
             # effect on the next cold start without loading the GEPA artifact.
             optimized_doc = getattr(optimized, "__doc__", None)
             if optimized_doc:
-                save_prompt(task, optimized_doc)
+                await asyncio.to_thread(save_prompt, task, optimized_doc)
 
         completed = datetime.now(timezone.utc)
         duration = int(time.perf_counter() - started_perf)
