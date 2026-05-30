@@ -1,13 +1,13 @@
 """Create daily_briefs table.
 
-revision: 0026_daily_briefs
-down_revision: 0025_user_brief_preferences
+revision: 0028_daily_briefs
+down_revision: 0027_user_brief_preferences
 """
 
 from alembic import op
 
-revision = "0026_daily_briefs"
-down_revision = "0025_user_brief_preferences"
+revision = "0028_daily_briefs"
+down_revision = "0027_user_brief_preferences"
 branch_labels = None
 depends_on = None
 

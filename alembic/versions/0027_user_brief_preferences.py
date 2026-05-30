@@ -1,13 +1,13 @@
 """Add brief preferences to users table.
 
-revision: 0025_user_brief_preferences
-down_revision: 0024_episode_audio_url
+revision: 0027_user_brief_preferences
+down_revision: 0025_source_thumbnail_url
 """
 
 from alembic import op
 
-revision = "0025_user_brief_preferences"
-down_revision = "0024_episode_audio_url"
+revision = "0027_user_brief_preferences"
+down_revision = "0025_source_thumbnail_url"
 branch_labels = None
 depends_on = None
 
