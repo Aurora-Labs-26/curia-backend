@@ -1,4 +1,6 @@
-"""GET /me, GET/PUT /me/kb, GET /me/rubric/{task}, PUT /me/fcm-token — current user surface."""
+"""GET /me, GET/PUT /me/kb, GET /me/rubric/{task}, PUT /me/fcm-token, PUT /me/brief-preferences — current user surface."""
+
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
@@ -54,6 +56,40 @@ async def put_fcm_token(payload: FcmTokenRequest, user: CurrentUser = Depends(cu
     await db_execute(
         "UPDATE users SET fcm_token = $token WHERE id = $id",
         {"token": payload.token, "id": user.id},
+    )
+
+
+class BriefPreferencesRequest(BaseModel):
+    interests: Optional[List[str]] = None
+    location_city: Optional[str] = None
+    brief_notify_time: Optional[str] = None  # "HH:MM" format
+    brief_enabled: Optional[bool] = None
+
+
+@router.put("/me/brief-preferences", status_code=204)
+async def put_brief_preferences(
+    payload: BriefPreferencesRequest,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    updates: list[str] = []
+    params: dict = {"id": user.id}
+    if payload.interests is not None:
+        updates.append("interests = $interests")
+        params["interests"] = payload.interests
+    if payload.location_city is not None:
+        updates.append("location_city = $location_city")
+        params["location_city"] = payload.location_city
+    if payload.brief_notify_time is not None:
+        updates.append("brief_notify_time = $brief_notify_time::time")
+        params["brief_notify_time"] = payload.brief_notify_time
+    if payload.brief_enabled is not None:
+        updates.append("brief_enabled = $brief_enabled")
+        params["brief_enabled"] = payload.brief_enabled
+    if not updates:
+        return
+    await db_execute(
+        f"UPDATE users SET {', '.join(updates)} WHERE id = $id",
+        params,
     )
 
 

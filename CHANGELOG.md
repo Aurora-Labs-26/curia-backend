@@ -4,6 +4,59 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-30 · Aditya + Claude (claude-sonnet-4-6)
+
+### Migration
+Daily brief schema — users preferences + daily_briefs table.
+- **`alembic/versions/0025_user_brief_preferences.py`** — adds `interests`, `location_city`, `brief_notify_time`, `brief_enabled` to users table
+- **`alembic/versions/0026_daily_briefs.py`** — creates `daily_briefs` table with status/transcript/audio_url/articles_json/outline_json/pn_sent
+
+### Feature
+Daily brief API endpoints for app and internal brief service.
+- **`api/routes/brief.py`** — added `GET /brief/today` (always 200, returns status+audio_url+transcript for today's brief)
+- **`api/routes/me.py`** — added `PUT /me/brief-preferences` (interests, location_city, brief_notify_time, brief_enabled)
+- **`api/routes/internal.py`** — new file: `GET /internal/brief-context/{user_id}` and `/all` for the daily-brief-harness service; protected by `INTERNAL_SECRET` header
+- **`api/main.py`** — registered internal router
+
+---
+
+## 2026-05-26 · Aditya + Claude (claude-sonnet-4-6) [3]
+
+### Feature
+Restructured brief pipeline from 1 LLM call → 6 explicit steps with full prompt/output visibility in test UI.
+- **`intelligence/brief_generator.py`** — split into 6 steps: user_context, news_fetch (8/topic, no cap), interest_filter LLM, curation LLM, outline LLM, transcript LLM. Each step emits its prompt + raw output in SSE events. Added `_strip_fences`, `_make_client`, `_build_filter_prompt`, `_build_curation_prompt`, `_build_outline_prompt`, `_build_transcript_prompt`. Non-streaming `generate_brief` updated to match.
+- **`assets/brief_test.html`** — updated to 6 steps; LLM steps (3–6) show "View prompt" / "View output" toggles; steps show scored article lists, curated story cards with angles, outline structure view.
+
+---
+
+## 2026-05-26 · Aditya + Claude (claude-sonnet-4-6) [2]
+
+### Feature
+SSE streaming for brief pipeline + step-by-step UI visibility.
+- **`intelligence/brief_generator.py`** — added `generate_brief_stream`: async generator yielding SSE events at each step (user_context loading/done, news loading/done, generating loading/done, final result)
+- **`api/routes/brief.py`** — added `GET /brief/stream` (StreamingResponse, text/event-stream)
+- **`assets/brief_test.html`** — rebuilt UI: pipeline section shows each step live with spinner → checkmark, detail cards per step (topics/saves/token counts), then segments appear on completion
+
+---
+
+## 2026-05-26 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Daily brief transcript generation pipeline + test UI.
+- **`intelligence/brief_generator.py`** — new module: fetches user KB + recent saves + recent listens, pulls Google News RSS per interest topic, calls Claude to generate a structured transcript (4 intro variants, activity acknowledgment, 4–6 headlines, outro), returns `BriefResult` with typed segments
+- **`api/routes/brief.py`** — new route: `GET /brief/generate` (authenticated, returns segments JSON), `GET /brief/` (serves test HTML)
+- **`api/main.py`** — registered the brief router
+- **`assets/brief_test.html`** — single-page test UI: paste API token, click Generate, view/copy all transcript segments with word counts and news debug panel
+
+---
+
+## 2026-05-26 · Claude (claude-sonnet-4-6)
+
+### Feature
+- **`core/firebase.py`** — added `FIREBASE_SERVICE_ACCOUNT_JSON` env var support (priority over file path). Paste the service account JSON string directly into Railway; no file mount needed. Falls back to `GOOGLE_APPLICATION_CREDENTIALS` then `FIREBASE_PROJECT_ID` as before.
+
+---
+
 ## 2026-05-22 · Claude (claude-sonnet-4-6)
 
 ### Feature
