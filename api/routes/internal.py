@@ -13,9 +13,28 @@ from typing import Any, Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from core.db.connection import db_fetchrow, db_query
+from core.db.connection import db_execute, db_fetchrow, db_query
 
 router = APIRouter(prefix="/internal", include_in_schema=False)
+
+
+class SeedInterestsRequest(BaseModel):
+    user_id: str
+    interests: list[str]
+    location_city: Optional[str] = "Bangalore"
+
+
+@router.post("/seed-interests")
+async def seed_interests(
+    req: SeedInterestsRequest,
+    x_internal_key: Optional[str] = Header(None),
+) -> dict:
+    _check_secret(x_internal_key)
+    await db_execute(
+        "UPDATE users SET interests = $interests, location_city = $location_city, brief_enabled = TRUE WHERE id = $id",
+        {"interests": req.interests, "location_city": req.location_city, "id": req.user_id},
+    )
+    return {"status": "ok", "user_id": req.user_id}
 
 
 def _check_secret(x_internal_key: Optional[str]) -> None:
