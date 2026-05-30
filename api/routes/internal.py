@@ -19,6 +19,22 @@ from core.db.connection import db_execute, db_fetchrow, db_query
 router = APIRouter(prefix="/internal", include_in_schema=False)
 
 
+@router.get("/brief/{user_id}/{date}/status")
+async def brief_status(
+    user_id: str,
+    date: str,
+    x_internal_key: Optional[str] = Header(None),
+) -> dict:
+    _check_secret(x_internal_key)
+    row = await db_fetchrow(
+        "SELECT status, error_text, audio_url, created_at::text, updated_at::text FROM daily_briefs WHERE user_id = $user_id AND date = $date",
+        {"user_id": user_id, "date": date_type.fromisoformat(date)},
+    )
+    if not row:
+        return {"status": "no_row"}
+    return {"status": row["status"], "error": row["error_text"], "audio_url": row["audio_url"], "created_at": row["created_at"]}
+
+
 @router.delete("/brief/{user_id}/{date}")
 async def reset_brief(
     user_id: str,
