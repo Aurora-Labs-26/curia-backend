@@ -8,6 +8,7 @@ Not included in public API docs.
 from __future__ import annotations
 
 import os
+from datetime import date as date_type
 from typing import Any, Optional
 
 from fastapi import APIRouter, Header, HTTPException
@@ -26,8 +27,8 @@ async def reset_brief(
 ) -> dict:
     _check_secret(x_internal_key)
     await db_execute(
-        "DELETE FROM daily_briefs WHERE user_id = $user_id AND date = $date::date",
-        {"user_id": user_id, "date": date},
+        "DELETE FROM daily_briefs WHERE user_id = $user_id AND date = $date",
+        {"user_id": user_id, "date": date_type.fromisoformat(date)},
     )
     return {"status": "deleted", "user_id": user_id, "date": date}
 
