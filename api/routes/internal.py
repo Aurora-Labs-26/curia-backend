@@ -18,6 +18,20 @@ from core.db.connection import db_execute, db_fetchrow, db_query
 router = APIRouter(prefix="/internal", include_in_schema=False)
 
 
+@router.delete("/brief/{user_id}/{date}")
+async def reset_brief(
+    user_id: str,
+    date: str,
+    x_internal_key: Optional[str] = Header(None),
+) -> dict:
+    _check_secret(x_internal_key)
+    await db_execute(
+        "DELETE FROM daily_briefs WHERE user_id = $user_id AND date = $date::date",
+        {"user_id": user_id, "date": date},
+    )
+    return {"status": "deleted", "user_id": user_id, "date": date}
+
+
 class SeedInterestsRequest(BaseModel):
     user_id: str
     interests: list[str]
