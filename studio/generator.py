@@ -701,16 +701,19 @@ async def process_episode(episode_id: str) -> None:
         )
         briefing = briefing_packet_to_str(packet)
 
-        # 3. Generate outline
+        # 3. Generate outline (sync DSPy call — offload to thread pool)
         await _set_episode_status(episode_id, "outlining")
-        outline = generate_outline(briefing, show_name)
+        loop = asyncio.get_event_loop()
+        outline = await loop.run_in_executor(
+            None, generate_outline, briefing, show_name
+        )
         title = outline.get("title", show_name)
 
-        # 4. Generate transcript (KB → speaker_definition listener hints)
+        # 4. Generate transcript (sync DSPy call — offload to thread pool)
         await _set_episode_status(episode_id, "transcribing")
-        transcript = generate_transcript(
-            briefing, outline, show_name,
-            user_kb=user_kb, speaker_override=speaker_override,
+        transcript = await loop.run_in_executor(
+            None, generate_transcript,
+            briefing, outline, show_name, user_kb, speaker_override,
         )
 
         judgment = await _rubric_judge(
@@ -734,9 +737,9 @@ async def process_episode(episode_id: str) -> None:
             judgment_v1 = judgment
 
             # Generate v2
-            transcript_v2 = generate_transcript(
-                briefing, outline, show_name,
-                user_kb=user_kb, speaker_override=speaker_override,
+            transcript_v2 = await loop.run_in_executor(
+                None, generate_transcript,
+                briefing, outline, show_name, user_kb, speaker_override,
             )
             judgment_v2 = await _rubric_judge(
                 task="transcript",
@@ -761,11 +764,12 @@ async def process_episode(episode_id: str) -> None:
             f"floor_violations={len(judgment.floor_violations)})"
         )
 
-        # 5. Synthesize + stitch
+        # 5. Synthesize + stitch (sync TTS + pydub — offload to thread pool)
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        _, tts_timings = synthesize_and_stitch(
-            transcript, show_name, audio_path, speaker_override=speaker_override
+        _, tts_timings = await loop.run_in_executor(
+            None, synthesize_and_stitch,
+            transcript, show_name, audio_path, speaker_override,
         )
 
         # 6. Persist results onto the existing row

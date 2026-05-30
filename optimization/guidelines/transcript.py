@@ -11,7 +11,7 @@ QUALITY FLOOR (non-negotiable):
 - Speaker voice: the speech_patterns block applied subtly throughout — don't mimic, suggest.
 - Outline fidelity: each transcript line traces to a segment in the outline.
 - Output is a valid JSON array of {speaker, text}.
-- Length bounds: 6 to 80 lines.
+- Line count: must be within ±10% of episode_constraints.target_lines from the briefing packet. This controls episode duration.
 
 BANNED:
 - Meta-commentary about being a podcast or AI-generated.
