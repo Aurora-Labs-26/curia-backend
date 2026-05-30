@@ -46,7 +46,7 @@ async def brief_today(user: CurrentUser = Depends(current_user)) -> BriefTodayRe
         SELECT status, audio_url, audio_duration_seconds, transcript,
                articles_json, outline_json
         FROM daily_briefs
-        WHERE user_id = $user_id::uuid AND date = $date::date
+        WHERE user_id = $user_id AND date = $date::date
         """,
         {"user_id": user.id, "date": today},
     )

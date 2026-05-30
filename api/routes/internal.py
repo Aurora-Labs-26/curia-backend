@@ -78,8 +78,7 @@ async def brief_context_single(
         SELECT id, name, interests, location_city,
                brief_notify_time::text, brief_enabled, fcm_token
         FROM users
-        WHERE id = $id::uuid
-        """,
+        WHERE id = $id        """,
         {"id": user_id},
     )
     if not row:
@@ -102,8 +101,7 @@ async def _fetch_recent_saves(user_id: str) -> list[dict[str, Any]]:
         """
         SELECT title, url, description
         FROM source
-        WHERE user_id = $user_id::uuid
-          AND created_at >= now() - interval '7 days'
+        WHERE user_id = $user_id          AND created_at >= now() - interval '7 days'
           AND hidden = FALSE
         ORDER BY created_at DESC
         LIMIT 20

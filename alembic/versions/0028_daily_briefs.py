@@ -16,7 +16,7 @@ def upgrade() -> None:
     op.execute("""
         CREATE TABLE IF NOT EXISTS daily_briefs (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             date DATE NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
             transcript TEXT,
