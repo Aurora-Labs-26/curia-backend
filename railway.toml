@@ -1,2 +1,2 @@
 [deploy]
-startCommand = "alembic stamp 0025_source_thumbnail_url && alembic upgrade 0028_daily_briefs && uvicorn api.main:app --host 0.0.0.0 --port 8000"
+startCommand = "python scripts/fix_alembic_heads.py && alembic upgrade 0028_daily_briefs && uvicorn api.main:app --host 0.0.0.0 --port 8000"
