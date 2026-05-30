@@ -118,7 +118,7 @@ async def brief_context_single(
 async def _fetch_recent_saves(user_id: str) -> list[dict[str, Any]]:
     rows = await db_query(
         """
-        SELECT title, url, description
+        SELECT title, url
         FROM source
         WHERE user_id = $user_id          AND created_at >= now() - interval '7 days'
           AND hidden = FALSE
@@ -128,6 +128,6 @@ async def _fetch_recent_saves(user_id: str) -> list[dict[str, Any]]:
         {"user_id": user_id},
     )
     return [
-        {"title": r.get("title"), "url": r.get("url"), "description": r.get("description")}
+        {"title": r.get("title"), "url": r.get("url")}
         for r in rows
     ]
