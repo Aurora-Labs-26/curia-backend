@@ -1846,37 +1846,63 @@ async def _ensure_compare_run_table():
     await db_execute(
         """
         CREATE TABLE IF NOT EXISTS compare_run (
-            id              SERIAL PRIMARY KEY,
-            ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            url             TEXT NOT NULL,
-            show_name_a     TEXT,
-            show_name_b     TEXT,
-            outline_prompt_b TEXT,
-            transcript_prompt_b TEXT,
-            job_id_a        TEXT,
-            job_id_b        TEXT,
-            episode_id_a    TEXT,
-            episode_id_b    TEXT
+            id                          SERIAL PRIMARY KEY,
+            ts                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            url                         TEXT NOT NULL,
+            show_name_a                 TEXT,
+            show_name_b                 TEXT,
+            outline_prompt_b            TEXT,
+            transcript_prompt_b         TEXT,
+            effective_transcript_prompt TEXT,
+            effective_outline_prompt    TEXT,
+            change_note                 TEXT,
+            job_id_a                    TEXT,
+            job_id_b                    TEXT,
+            episode_id_a                TEXT,
+            episode_id_b                TEXT
         )
         """,
         {},
     )
+    for col in ("effective_transcript_prompt TEXT", "effective_outline_prompt TEXT", "change_note TEXT"):
+        try:
+            await db_execute(f"ALTER TABLE compare_run ADD COLUMN IF NOT EXISTS {col}", {})
+        except Exception:
+            pass
     _COMPARE_RUN_TABLE_READY = True
+
+
+def _resolve_effective_prompt(task: str, override: str | None) -> str:
+    """Return the actual prompt that will be used: override if set, else live file/docstring."""
+    if override:
+        return override
+    from core.prompts.loader import load_prompt
+    if task == "transcript":
+        from core.prompts.transcript import GenerateTranscript as _S
+    else:
+        from core.prompts.outline import GenerateOutline as _S
+    return load_prompt(task) or (_S.__doc__ or "").strip()
 
 
 async def _save_compare_run(url: str, show_a: str, show_b: str,
                              outline_b: str | None, transcript_b: str | None,
-                             job_a: str, job_b: str) -> int:
+                             job_a: str, job_b: str,
+                             change_note: str | None = None) -> int:
     await _ensure_compare_run_table()
     from core.db.connection import db_fetchrow
+    eff_transcript = _resolve_effective_prompt("transcript", transcript_b)
+    eff_outline    = _resolve_effective_prompt("outline", outline_b)
     row = await db_fetchrow(
         """INSERT INTO compare_run (url, show_name_a, show_name_b, outline_prompt_b,
-               transcript_prompt_b, job_id_a, job_id_b)
-           VALUES ($url, $show_a, $show_b, $outline_b, $transcript_b, $job_a, $job_b)
+               transcript_prompt_b, effective_transcript_prompt, effective_outline_prompt,
+               change_note, job_id_a, job_id_b)
+           VALUES ($url, $show_a, $show_b, $outline_b, $transcript_b, $eff_t, $eff_o,
+                   $note, $job_a, $job_b)
            RETURNING id""",
         {"url": url, "show_a": show_a, "show_b": show_b,
          "outline_b": outline_b, "transcript_b": transcript_b,
-         "job_a": job_a, "job_b": job_b},
+         "eff_t": eff_transcript, "eff_o": eff_outline,
+         "note": change_note or "", "job_a": job_a, "job_b": job_b},
     )
     return row["id"]
 
@@ -2002,20 +2028,73 @@ async def get_prompt(task: str):
 async def compare_run_outline(request: Request):
     """Phase 1: ingest + outline only for both A and B."""
     body = await request.json()
-    url         = (body.get("url") or "").strip()
-    show_name_a = (body.get("show_name_a") or "clarity_engine").strip()
-    show_name_b = (body.get("show_name_b") or show_name_a).strip()
-    outline_b   = body.get("outline_prompt_b") or None
+    url          = (body.get("url") or "").strip()
+    show_name_a  = (body.get("show_name_a") or "clarity_engine").strip()
+    show_name_b  = (body.get("show_name_b") or show_name_a).strip()
+    outline_b    = body.get("outline_prompt_b") or None
     transcript_b = body.get("transcript_prompt_b") or None
+    change_note  = (body.get("change_note") or "").strip() or None
     if not url:
         return JSONResponse(content={"error": "url required"}, status_code=400)
     job_a = str(uuid4())
     job_b = str(uuid4())
-    await _save_compare_run(url, show_name_a, show_name_b, outline_b, transcript_b, job_a, job_b)
+    await _save_compare_run(url, show_name_a, show_name_b, outline_b, transcript_b,
+                             job_a, job_b, change_note=change_note)
     asyncio.create_task(_run_pipeline(job_a, url, show_name_a, stop_after="outline"))
     asyncio.create_task(_run_pipeline(job_b, url, show_name_b, stop_after="outline",
                                       outline_prompt_override=outline_b))
     return JSONResponse(content={"job_a": job_a, "job_b": job_b})
+
+
+@app.get("/api/compare/runs-for-url")
+async def runs_for_url(url: str):
+    try:
+        from core.ingest import normalise_url
+        norm = normalise_url(url)
+        await _ensure_compare_run_table()
+        from core.db.connection import db_query
+        rows = await db_query(
+            """SELECT id, ts, show_name_a, show_name_b, change_note,
+                      outline_prompt_b IS NOT NULL AS outline_overridden,
+                      transcript_prompt_b IS NOT NULL AS transcript_overridden,
+                      effective_transcript_prompt, effective_outline_prompt,
+                      job_id_a, job_id_b, episode_id_a, episode_id_b
+               FROM compare_run WHERE url = $url ORDER BY ts ASC""",
+            {"url": norm},
+        )
+        return JSONResponse(content=_json.loads(_json.dumps(rows or [], default=_json_serial)))
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.get("/api/compare/existing-episode")
+async def existing_episode(url: str):
+    """Find most recent ready episode for this URL from any user (production data)."""
+    try:
+        from core.ingest import normalise_url
+        from core.db.connection import db_fetchrow
+        norm = normalise_url(url)
+        row = await db_fetchrow(
+            """SELECT e.id, e.title, e.show_name, e.created_at,
+                      e.outline::text AS outline, e.transcript::text AS transcript
+               FROM episode e
+               JOIN source s ON s.id = ANY(e.source_ids)
+               WHERE s.url = $url AND s.status = 'ready' AND e.status = 'ready'
+               ORDER BY e.created_at DESC LIMIT 1""",
+            {"url": norm},
+        )
+        if not row:
+            return JSONResponse(content={"found": False})
+        data = _json.loads(_json.dumps(dict(row), default=_json_serial))
+        # Parse JSON fields
+        for k in ("outline", "transcript"):
+            if isinstance(data.get(k), str):
+                try: data[k] = _json.loads(data[k])
+                except Exception: pass
+        data["found"] = True
+        return JSONResponse(content=data)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 @app.post("/api/compare/run-transcript")
@@ -2083,20 +2162,50 @@ async def compare_run(request: Request):
 
 @app.post("/api/compare/transcribe")
 async def compare_transcribe(file: UploadFile = File(...)):
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    if not groq_key:
-        return JSONResponse(content={"error": "GROQ_API_KEY not set"}, status_code=500)
-    try:
-        from groq import Groq
-        data = await file.read()
-        client = Groq(api_key=groq_key)
-        transcription = client.audio.transcriptions.create(
-            model="whisper-large-v3",
-            file=(file.filename or "audio.mp3", data),
-        )
-        return JSONResponse(content={"transcript": transcription.text})
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+    groq_key     = os.getenv("GROQ_API_KEY", "")
+    smallest_key = os.getenv("SMALLEST_API_KEY", "")
+    if not groq_key and not smallest_key:
+        return JSONResponse(content={"error": "No transcription key set (GROQ_API_KEY or SMALLEST_API_KEY)"}, status_code=500)
+
+    data     = await file.read()
+    filename = file.filename or "audio.mp3"
+    groq_err = None
+
+    # Try Groq first
+    if groq_key:
+        try:
+            from groq import Groq
+            client = Groq(api_key=groq_key)
+            result = client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=(filename, data),
+            )
+            return JSONResponse(content={"transcript": result.text, "provider": "groq"})
+        except Exception as e:
+            groq_err = str(e)
+            # Only fall through on size/request errors; re-raise auth errors
+            if "api_key" in groq_err.lower() or "authentication" in groq_err.lower():
+                return JSONResponse(content={"error": groq_err}, status_code=500)
+
+    # Fallback: Smallest AI ASR
+    if smallest_key:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(
+                    "https://waves-api.smallest.ai/api/v1/asr",
+                    headers={"Authorization": f"Bearer {smallest_key}"},
+                    files={"file": (filename, data, "audio/mpeg")},
+                )
+                resp.raise_for_status()
+                text = resp.json().get("text") or resp.json().get("transcript") or ""
+                return JSONResponse(content={"transcript": text, "provider": "smallest"})
+        except Exception as e:
+            fallback_err = str(e)
+            err_msg = f"Groq: {groq_err} | Smallest: {fallback_err}" if groq_err else fallback_err
+            return JSONResponse(content={"error": err_msg}, status_code=500)
+
+    return JSONResponse(content={"error": groq_err or "No fallback available"}, status_code=500)
 
 
 @app.post("/api/compare/judge")
@@ -2225,6 +2334,8 @@ nav a:hover{color:var(--accent)}
 /* ── Layout ── */
 .tab-panel{display:none;padding:32px;max-width:1200px;margin:0 auto}
 .tab-panel.active{display:block}
+#tab-format{padding:0}
+#tab-format.active{display:flex;height:calc(100vh - 108px);overflow:hidden}
 
 /* ── Section headers ── */
 .section-eyebrow{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle);margin-bottom:8px}
@@ -2296,6 +2407,27 @@ select:focus{outline:none;border-color:var(--accent)}
 .result-title{font-family:'Lora',Georgia,serif;font-size:17px;font-weight:600;margin-bottom:6px}
 .result-thread{font-size:13px;color:var(--muted);font-style:italic;line-height:1.6;margin-bottom:14px}
 .transcript-block{font-size:13px;line-height:1.9;color:var(--text);max-height:420px;overflow-y:auto}
+
+/* ── Prompt lab sidebar ── */
+.plab-run{padding:9px 10px;border-radius:7px;cursor:pointer;margin-bottom:2px;transition:background .12s;border:1px solid transparent}
+.plab-run:hover{background:var(--bg)}
+.plab-run.slot-a{background:var(--blue-bg);border-color:#bfdbfe}
+.plab-run.slot-b{background:var(--purple-bg);border-color:#ddd6fe}
+.plab-run.slot-ab{background:linear-gradient(135deg,var(--blue-bg) 50%,var(--purple-bg) 50%);border-color:var(--border-strong)}
+.plab-run-top{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.plab-ver{font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--bg);border:1px solid var(--border);color:var(--muted);flex-shrink:0}
+.plab-run.slot-a .plab-ver,.plab-run.slot-ab .plab-ver{background:var(--blue-bg);border-color:#93c5fd;color:var(--blue)}
+.plab-run.slot-b .plab-ver{background:var(--purple-bg);border-color:#c4b5fd;color:var(--purple)}
+.plab-change{font-size:12px;font-weight:500;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plab-meta{font-size:10px;color:var(--subtle);margin-bottom:4px}
+.plab-slots{display:flex;gap:4px;opacity:0;transition:opacity .15s}
+.plab-run:hover .plab-slots,.plab-run.slot-a .plab-slots,.plab-run.slot-b .plab-slots,.plab-run.slot-ab .plab-slots{opacity:1}
+.plab-slot-btn{padding:2px 8px;font-size:10px;font-weight:600;border-radius:4px;cursor:pointer;border:none;transition:all .12s}
+.plab-slot-a{background:var(--blue-bg);color:var(--blue)}
+.plab-slot-a:hover,.plab-slot-a.on{background:var(--blue);color:#fff}
+.plab-slot-b{background:var(--purple-bg);color:var(--purple)}
+.plab-slot-b:hover,.plab-slot-b.on{background:var(--purple);color:#fff}
+.plab-prod-badge{font-size:9px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:1px 6px;border-radius:10px;background:#fef9c3;color:#854d0e;flex-shrink:0}
 .transcript-line{margin-bottom:14px}
 .transcript-speaker{font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--subtle);margin-bottom:3px}
 .transcript-text{color:var(--text)}
@@ -2419,122 +2551,143 @@ select:focus{outline:none;border-color:var(--accent)}
 
 <!-- ── Tab: Prompt A vs B ── -->
 <div class="tab-panel active" id="tab-format">
-  <div class="section-eyebrow">Prompt experimentation</div>
-  <h2 class="section-title">Control vs Variant</h2>
-  <p class="section-sub">A runs the current pipeline unchanged. Configure B by overriding any combination of show format, outline prompt, or transcript prompt.</p>
 
-  <!-- URL + run -->
-  <div class="card config-card" style="margin-bottom:20px">
-    <div class="config-row">
-      <input type="url" id="fmt-url" placeholder="https://…" style="flex:1">
-      <button class="btn-primary" id="fmt-btn" onclick="runPromptCompare()">Generate outlines →</button>
+  <!-- ── Run history sidebar ── -->
+  <div id="plab-sidebar" style="width:268px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;background:var(--surface)">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle);margin-bottom:6px">Article</div>
+      <div id="plab-url-display" style="font-size:11px;color:var(--muted);font-style:italic">Enter a URL to start</div>
     </div>
+    <div style="padding:10px 12px 6px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <span style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle)">Runs</span>
+      <span id="plab-run-count" style="font-size:11px;color:var(--subtle)"></span>
+    </div>
+    <div id="plab-runs" style="flex:1;overflow-y:auto;padding:0 8px 8px"></div>
   </div>
 
-  <div class="two-col" style="margin-bottom:20px;align-items:start">
+  <!-- ── Main area ── -->
+  <div style="flex:1;overflow-y:auto;padding:24px 28px">
 
-    <!-- A: Control -->
-    <div class="card" style="opacity:.7">
-      <div class="col-label col-a" style="display:flex;align-items:center;justify-content:space-between">
-        <span>A — Control</span>
-        <span style="font-size:10px;font-weight:500;background:#EFF6FF;color:var(--blue);padding:2px 8px;border-radius:10px;text-transform:none;letter-spacing:0">current pipeline</span>
-      </div>
-      <div style="padding:16px 20px">
-        <div class="config-field" style="margin-bottom:12px">
-          <label>Show format</label>
-          <select id="fmt-show-a" style="width:100%">
-            <option value="clarity_engine">clarity_engine</option>
-            <option value="narrative_drift">narrative_drift</option>
-            <option value="momentum_loop">momentum_loop</option>
-            <option value="exploration_engine">exploration_engine</option>
-          </select>
-        </div>
-        <div style="font-size:12px;color:var(--muted);font-style:italic">Outline + transcript prompts: live defaults</div>
+    <!-- URL + run -->
+    <div class="card config-card" style="margin-bottom:20px">
+      <div class="config-row">
+        <input type="url" id="fmt-url" placeholder="https://…" style="flex:1" oninput="onUrlInput()">
+        <button class="btn-primary" id="fmt-btn" onclick="runPromptCompare()">Generate outlines →</button>
       </div>
     </div>
 
-    <!-- B: Variant -->
-    <div class="card">
-      <div class="col-label col-b" style="display:flex;align-items:center;justify-content:space-between">
-        <span>B — Variant</span>
-        <span id="b-change-count" style="font-size:10px;font-weight:500;background:var(--accent-light);color:var(--accent);padding:2px 8px;border-radius:10px;text-transform:none;letter-spacing:0;display:none">0 overrides</span>
-      </div>
-      <div style="padding:16px 20px">
+    <div class="two-col" style="margin-bottom:20px;align-items:start">
 
-        <!-- Show format -->
-        <div class="config-field" style="margin-bottom:16px">
-          <label>Show format</label>
-          <select id="fmt-show-b" style="width:100%" onchange="updateChangeCount()">
-            <option value="clarity_engine">clarity_engine</option>
-            <option value="narrative_drift">narrative_drift</option>
-            <option value="momentum_loop">momentum_loop</option>
-            <option value="exploration_engine">exploration_engine</option>
-          </select>
+      <!-- A: Control -->
+      <div class="card" style="opacity:.75">
+        <div class="col-label col-a" style="display:flex;align-items:center;justify-content:space-between">
+          <span>A — Control</span>
+          <span style="font-size:10px;font-weight:500;background:#EFF6FF;color:var(--blue);padding:2px 8px;border-radius:10px;text-transform:none;letter-spacing:0">current pipeline</span>
         </div>
+        <div style="padding:16px 20px">
+          <div class="config-field" style="margin-bottom:8px">
+            <label>Show format</label>
+            <select id="fmt-show-a" style="width:100%">
+              <option value="clarity_engine">clarity_engine</option>
+              <option value="narrative_drift">narrative_drift</option>
+              <option value="momentum_loop">momentum_loop</option>
+              <option value="exploration_engine">exploration_engine</option>
+            </select>
+          </div>
+          <div id="existing-ep-notice" style="display:none;font-size:11px;padding:6px 8px;background:var(--good-bg);border:1px solid #bbf7d0;border-radius:6px;color:var(--good)">
+            ✓ Production episode found — will use cached output
+          </div>
+          <div id="no-existing-notice" style="font-size:12px;color:var(--muted);font-style:italic">Outline + transcript prompts: live defaults</div>
+        </div>
+      </div>
 
-        <!-- Outline prompt override -->
-        <div style="margin-bottom:12px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-size:12px;font-weight:600;color:var(--text)">Outline prompt</span>
-            <div style="display:flex;align-items:center;gap:8px">
-              <span id="outline-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
-              <button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="togglePromptOverride('outline')">Edit</button>
+      <!-- B: Variant -->
+      <div class="card">
+        <div class="col-label col-b" style="display:flex;align-items:center;justify-content:space-between">
+          <span>B — Variant</span>
+          <span id="b-change-count" style="font-size:10px;font-weight:500;background:var(--accent-light);color:var(--accent);padding:2px 8px;border-radius:10px;text-transform:none;letter-spacing:0;display:none">0 overrides</span>
+        </div>
+        <div style="padding:16px 20px">
+          <!-- Change note -->
+          <div style="margin-bottom:14px">
+            <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--subtle);margin-bottom:5px">What changed?</div>
+            <input type="text" id="change-note-input" placeholder="e.g. removed rhetorical questions rule"
+              style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);background:var(--bg);outline:none;transition:border-color .15s"
+              onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+          </div>
+          <!-- Show format -->
+          <div class="config-field" style="margin-bottom:14px">
+            <label>Show format</label>
+            <select id="fmt-show-b" style="width:100%" onchange="updateChangeCount()">
+              <option value="clarity_engine">clarity_engine</option>
+              <option value="narrative_drift">narrative_drift</option>
+              <option value="momentum_loop">momentum_loop</option>
+              <option value="exploration_engine">exploration_engine</option>
+            </select>
+          </div>
+          <!-- Outline prompt -->
+          <div style="margin-bottom:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+              <span style="font-size:12px;font-weight:600;color:var(--text)">Outline prompt</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span id="outline-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
+                <button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="togglePromptOverride('outline')">Edit</button>
+              </div>
+            </div>
+            <textarea id="outline-override" data-task="outline"
+              style="display:none;width:100%;height:180px;padding:10px 12px;font-family:'SF Mono',Menlo,monospace;font-size:11px;line-height:1.65;border:1px solid var(--border);border-radius:6px;resize:vertical;color:var(--text);background:var(--bg);outline:none"
+              oninput="onPromptEdit('outline')"></textarea>
+            <div id="outline-actions" style="display:none;margin-top:8px;gap:8px;justify-content:flex-end">
+              <button class="btn-secondary" style="padding:5px 12px;font-size:12px" onclick="cancelPromptEdit('outline')">Cancel</button>
+              <button class="btn-primary" style="padding:5px 14px;font-size:12px" onclick="submitPromptEdit('outline')">Submit ✓</button>
             </div>
           </div>
-          <textarea id="outline-override" data-task="outline"
-            style="display:none;width:100%;height:200px;padding:10px 12px;font-family:'SF Mono',Menlo,monospace;font-size:11px;line-height:1.65;border:1px solid var(--border);border-radius:6px;resize:vertical;color:var(--text);background:var(--bg);outline:none"
-            oninput="onPromptEdit('outline')"></textarea>
-          <div id="outline-actions" style="display:none;margin-top:8px;display:none;gap:8px;justify-content:flex-end">
-            <button class="btn-secondary" style="padding:5px 12px;font-size:12px" onclick="cancelPromptEdit('outline')">Cancel</button>
-            <button class="btn-primary" style="padding:5px 14px;font-size:12px" onclick="submitPromptEdit('outline')">Submit edit ✓</button>
-          </div>
-        </div>
-
-        <!-- Transcript prompt override -->
-        <div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-size:12px;font-weight:600;color:var(--text)">Transcript prompt</span>
-            <div style="display:flex;align-items:center;gap:8px">
-              <span id="transcript-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
-              <button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="togglePromptOverride('transcript')">Edit</button>
+          <!-- Transcript prompt -->
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+              <span style="font-size:12px;font-weight:600;color:var(--text)">Transcript prompt</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span id="transcript-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
+                <button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="togglePromptOverride('transcript')">Edit</button>
+              </div>
             </div>
-          </div>
-          <textarea id="transcript-override" data-task="transcript"
-            style="display:none;width:100%;height:280px;padding:10px 12px;font-family:'SF Mono',Menlo,monospace;font-size:11px;line-height:1.65;border:1px solid var(--border);border-radius:6px;resize:vertical;color:var(--text);background:var(--bg);outline:none"
-            oninput="onPromptEdit('transcript')"></textarea>
-          <div id="transcript-actions" style="display:none;margin-top:8px;gap:8px;justify-content:flex-end">
-            <button class="btn-secondary" style="padding:5px 12px;font-size:12px" onclick="cancelPromptEdit('transcript')">Cancel</button>
-            <button class="btn-primary" style="padding:5px 14px;font-size:12px" onclick="submitPromptEdit('transcript')">Submit edit ✓</button>
+            <textarea id="transcript-override" data-task="transcript"
+              style="display:none;width:100%;height:260px;padding:10px 12px;font-family:'SF Mono',Menlo,monospace;font-size:11px;line-height:1.65;border:1px solid var(--border);border-radius:6px;resize:vertical;color:var(--text);background:var(--bg);outline:none"
+              oninput="onPromptEdit('transcript')"></textarea>
+            <div id="transcript-actions" style="display:none;margin-top:8px;gap:8px;justify-content:flex-end">
+              <button class="btn-secondary" style="padding:5px 12px;font-size:12px" onclick="cancelPromptEdit('transcript')">Cancel</button>
+              <button class="btn-primary" style="padding:5px 14px;font-size:12px" onclick="submitPromptEdit('transcript')">Submit ✓</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- Results -->
-  <!-- Phase 2 bar: appears after outlines done -->
-  <div id="phase2-bar" style="display:none;margin-bottom:20px;padding:16px 20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);display:none;align-items:center;justify-content:space-between;gap:16px">
-    <div>
-      <div style="font-size:13px;font-weight:600;color:var(--text)">Outlines ready</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:2px">Review outlines above, then generate transcripts</div>
+    <!-- Phase 2 bar -->
+    <div id="phase2-bar" style="display:none;margin-bottom:20px;padding:14px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:13px;font-weight:600;color:var(--text)">Outlines ready</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Review outlines above, then generate transcripts</div>
+      </div>
+      <button class="btn-primary" id="transcript-btn" onclick="runTranscripts()">Generate transcripts →</button>
     </div>
-    <button class="btn-primary" id="transcript-btn" onclick="runTranscripts()">Generate transcripts →</button>
-  </div>
 
-  <div class="two-col" id="fmt-cols" style="display:none">
-    <div class="card" id="fmt-col-a">
-      <div class="col-label col-a" id="fmt-label-a">A — Control</div>
-      <ul class="steps-list" id="fmt-steps-a"></ul>
-      <div id="fmt-result-a"></div>
+    <!-- Results columns -->
+    <div class="two-col" id="fmt-cols" style="display:none">
+      <div class="card" id="fmt-col-a">
+        <div class="col-label col-a" id="fmt-label-a">A — Control</div>
+        <ul class="steps-list" id="fmt-steps-a"></ul>
+        <div id="fmt-result-a"></div>
+      </div>
+      <div class="card" id="fmt-col-b">
+        <div class="col-label col-b" id="fmt-label-b">B — Variant</div>
+        <ul class="steps-list" id="fmt-steps-b"></ul>
+        <div id="fmt-result-b"></div>
+        <div id="fmt-rerun-b" style="display:none;padding:12px 16px;border-top:1px solid var(--border);gap:8px;flex-wrap:wrap"></div>
+      </div>
     </div>
-    <div class="card" id="fmt-col-b">
-      <div class="col-label col-b" id="fmt-label-b">B — Variant</div>
-      <ul class="steps-list" id="fmt-steps-b"></ul>
-      <div id="fmt-result-b"></div>
-      <!-- Re-run buttons appear here after submit -->
-      <div id="fmt-rerun-b" style="display:none;padding:12px 16px;border-top:1px solid var(--border);display:none;gap:8px;flex-wrap:wrap"></div>
-    </div>
-  </div>
+
+  </div><!-- /main area -->
 </div>
 
 <!-- ── Tab: vs External ── -->
@@ -2641,6 +2794,137 @@ function switchTab(name) {
   document.getElementById('tab-btn-' + name).classList.add('active');
 }
 
+// ── Prompt lab sidebar ────────────────────────────────────────────────────────
+let _plabRuns = [];     // all runs for current URL
+let _plabSlotA = null;  // run index in slot A
+let _plabSlotB = null;  // run index in slot B
+let _existingEp = null; // production episode for current URL
+let _urlCheckTimer = null;
+
+function onUrlInput() {
+  clearTimeout(_urlCheckTimer);
+  _urlCheckTimer = setTimeout(checkUrlForExistingData, 600);
+}
+
+async function checkUrlForExistingData() {
+  const url = document.getElementById('fmt-url').value.trim();
+  if (!url || !url.startsWith('http')) return;
+
+  // Update sidebar URL display
+  try { document.getElementById('plab-url-display').textContent = new URL(url).hostname + '…'; }
+  catch { document.getElementById('plab-url-display').textContent = url.slice(0, 40) + '…'; }
+
+  // Check for existing production episode
+  const epRes = await fetch('/api/compare/existing-episode?url=' + encodeURIComponent(url));
+  const epData = await epRes.json();
+  _existingEp = epData.found ? epData : null;
+  document.getElementById('existing-ep-notice').style.display = _existingEp ? '' : 'none';
+  document.getElementById('no-existing-notice').style.display = _existingEp ? 'none' : '';
+
+  // Load run history for this URL
+  await refreshSidebar(url);
+}
+
+async function refreshSidebar(url) {
+  if (!url) url = document.getElementById('fmt-url').value.trim();
+  if (!url) return;
+  try {
+    const res = await fetch('/api/compare/runs-for-url?url=' + encodeURIComponent(url));
+    const data = await res.json();
+    _plabRuns = data || [];
+    renderSidebar();
+  } catch {}
+}
+
+function renderSidebar() {
+  const el = document.getElementById('plab-runs');
+  document.getElementById('plab-run-count').textContent = _plabRuns.length ? `${_plabRuns.length} run${_plabRuns.length > 1 ? 's' : ''}` : '';
+
+  let html = '';
+
+  // Production episode entry
+  if (_existingEp) {
+    html += `<div class="plab-run" id="plab-prod" style="border:1px dashed var(--border-strong)">
+      <div class="plab-run-top">
+        <span class="plab-ver" style="background:#fef9c3;border-color:#fde047;color:#854d0e">prod</span>
+        <span class="plab-change">Production episode</span>
+        <span class="plab-prod-badge">cached</span>
+      </div>
+      <div class="plab-meta">${esc(new Date(_existingEp.created_at).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</div>
+      <div class="plab-slots">
+        <button class="plab-slot-btn plab-slot-a" onclick="loadExistingToSlot('a');event.stopPropagation()">← Left</button>
+        <button class="plab-slot-btn plab-slot-b" onclick="loadExistingToSlot('b');event.stopPropagation()">Right →</button>
+      </div>
+    </div>`;
+  }
+
+  if (!_plabRuns.length && !_existingEp) {
+    html += `<div style="padding:20px 8px;text-align:center;font-size:12px;color:var(--subtle)">No runs yet for this URL</div>`;
+  }
+
+  _plabRuns.forEach((r, i) => {
+    const isA = _plabSlotA === i, isB = _plabSlotB === i;
+    const cls = isA && isB ? 'slot-ab' : isA ? 'slot-a' : isB ? 'slot-b' : '';
+    const ver = 'v' + (i + 1);
+    const note = r.change_note || (r.transcript_overridden ? 'transcript override' : r.outline_overridden ? 'outline override' : 'default prompts');
+    const ts = new Date(r.ts).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    const hasEp = r.episode_id_b || r.episode_id_a;
+    html += `<div class="plab-run ${cls}" id="plab-run-${i}">
+      <div class="plab-run-top">
+        <span class="plab-ver">${ver}</span>
+        <span class="plab-change">${esc(note)}</span>
+        ${!hasEp ? '<span style="font-size:9px;color:var(--subtle);font-style:italic">outline only</span>' : ''}
+      </div>
+      <div class="plab-meta">${esc(ts)} · ${esc(r.show_name_b || r.show_name_a || '')}</div>
+      <div class="plab-slots">
+        <button class="plab-slot-btn plab-slot-a ${isA ? 'on' : ''}" onclick="assignSlot(${i},'a');event.stopPropagation()">← Left</button>
+        <button class="plab-slot-btn plab-slot-b ${isB ? 'on' : ''}" onclick="assignSlot(${i},'b');event.stopPropagation()">Right →</button>
+      </div>
+    </div>`;
+  });
+  el.innerHTML = html;
+}
+
+function assignSlot(idx, slot) {
+  if (slot === 'a') _plabSlotA = idx;
+  else _plabSlotB = idx;
+  renderSidebar();
+  const run = _plabRuns[idx];
+  const epId = slot === 'a' ? run.episode_id_a : run.episode_id_b;
+  if (epId) loadEpisodeIntoColumn(epId, slot === 'a' ? 'a' : 'b');
+}
+
+async function loadExistingToSlot(slot) {
+  if (!_existingEp) return;
+  const colId = slot === 'a' ? 'fmt-col-a' : 'fmt-col-b';
+  document.getElementById('fmt-cols').style.display = 'grid';
+  const container = document.getElementById(slot === 'a' ? 'fmt-result-a' : 'fmt-result-b');
+  container.innerHTML = '';
+  const div = document.createElement('div');
+  const outline = _existingEp.outline || {};
+  const lines = Array.isArray(_existingEp.transcript) ? _existingEp.transcript : [];
+  if (outline.title) {
+    div.innerHTML += `<div class="result-section">
+      <div class="result-section-label">Episode (production)</div>
+      <div class="result-title">${esc(outline.title)}</div>
+      ${outline.thread ? `<div class="result-thread">${esc(outline.thread)}</div>` : ''}
+    </div>`;
+  }
+  if (lines.length) {
+    const plainText = lines.map(l => l.text||'').join('\n\n');
+    const copyId = 'copy-prod-' + slot;
+    div.innerHTML += `<div class="result-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div class="result-section-label" style="margin-bottom:0">Transcript</div>
+        <button id="${copyId}" onclick="copyTranscript('${copyId}', \`${plainText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)"
+          style="padding:3px 10px;font-size:11px;font-weight:500;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer">Copy</button>
+      </div>
+      <div class="transcript-block">${lines.map(l=>`<div class="transcript-line"><div class="transcript-text">${esc(l.text||'')}</div></div>`).join('')}</div>
+    </div>`;
+  }
+  container.appendChild(div);
+}
+
 // ── Control vs Variant ────────────────────────────────────────────────────────
 let fmtPollA = null, fmtPollB = null;
 const _promptCache = {};
@@ -2728,8 +3012,9 @@ async function runPromptCompare() {
   const url = document.getElementById('fmt-url').value.trim();
   if (!url) { alert('Enter a URL'); return; }
 
-  const showA = document.getElementById('fmt-show-a').value;
-  const showB = document.getElementById('fmt-show-b').value;
+  const showA      = document.getElementById('fmt-show-a').value;
+  const showB      = document.getElementById('fmt-show-b').value;
+  const changeNote = document.getElementById('change-note-input').value.trim() || null;
 
   document.getElementById('fmt-btn').disabled = true;
   document.getElementById('phase2-bar').style.display = 'none';
@@ -2744,18 +3029,35 @@ async function runPromptCompare() {
   if (fmtPollA) clearTimeout(fmtPollA);
   if (fmtPollB) clearTimeout(fmtPollB);
 
+  // If production episode exists, use it for column A (skip re-generation)
+  if (_existingEp) {
+    _outlineDoneA = true;
+    loadExistingToSlot('a');
+    document.getElementById('fmt-steps-a').innerHTML =
+      '<li class="step done"><span class="step-icon">✓</span><span>Using cached production episode</span></li>';
+  }
+
   const res = await fetch('/api/compare/run-outline', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
-      url, show_name_a: showA, show_name_b: showB,
+      url,
+      show_name_a: showA,
+      show_name_b: showB,
       outline_prompt_b: _getOutlinePromptB(),
+      transcript_prompt_b: _getTranscriptPromptB(),
+      change_note: changeNote,
     })
   });
   const d = await res.json();
   _fmtJobA = d.job_a; _fmtJobB = d.job_b;
-  pollFmtJob(_fmtJobA, 'a', 'outline');
+
+  // Only poll A if we're actually running it (no cached episode)
+  if (!_existingEp) pollFmtJob(_fmtJobA, 'a', 'outline');
   pollFmtJob(_fmtJobB, 'b', 'outline');
+
+  // Refresh sidebar after a moment to show new run entry
+  setTimeout(() => refreshSidebar(url), 3000);
 }
 
 async function runTranscripts() {
@@ -2773,8 +3075,11 @@ async function runTranscripts() {
       transcript_prompt_b: _getTranscriptPromptB(),
     })
   });
-  pollFmtJob(_fmtJobA, 'a', 'transcript');
+  // Skip A if using cached production episode
+  if (!_existingEp) pollFmtJob(_fmtJobA, 'a', 'transcript');
   pollFmtJob(_fmtJobB, 'b', 'transcript');
+  // Refresh sidebar after transcripts finish
+  setTimeout(() => refreshSidebar(), 8000);
 }
 
 async function rerunStep(step) {
