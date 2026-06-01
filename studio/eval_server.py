@@ -2187,18 +2187,24 @@ async def compare_transcribe(file: UploadFile = File(...)):
             if "api_key" in groq_err.lower() or "authentication" in groq_err.lower():
                 return JSONResponse(content={"error": groq_err}, status_code=500)
 
-    # Fallback: Smallest AI ASR
+    # Fallback: Smallest AI Pulse STT
+    # Endpoint: POST https://api.smallest.ai/waves/v1/stt/
+    # Body: raw audio bytes, Content-Type: application/octet-stream
     if smallest_key:
         try:
             import httpx
             async with httpx.AsyncClient(timeout=180) as client:
                 resp = await client.post(
-                    "https://waves-api.smallest.ai/api/v1/asr",
-                    headers={"Authorization": f"Bearer {smallest_key}"},
-                    files={"file": (filename, data, "audio/mpeg")},
+                    "https://api.smallest.ai/waves/v1/stt/",
+                    params={"model": "pulse-pro", "language": "en"},
+                    headers={
+                        "Authorization": f"Bearer {smallest_key}",
+                        "Content-Type": "application/octet-stream",
+                    },
+                    content=data,
                 )
                 resp.raise_for_status()
-                text = resp.json().get("text") or resp.json().get("transcript") or ""
+                text = resp.json().get("transcription") or ""
                 return JSONResponse(content={"transcript": text, "provider": "smallest"})
         except Exception as e:
             fallback_err = str(e)
