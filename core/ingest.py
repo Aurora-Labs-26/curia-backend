@@ -298,27 +298,31 @@ async def get_or_create_source(
         return str(existing["id"])
 
     source_id = str(uuid.uuid4())
-    await db_execute(
-        """
-        INSERT INTO source (id, title, url, pool, user_id, status)
-        VALUES ($id::uuid, $title, $url, $pool, $user_id, 'queued')
-        ON CONFLICT (user_id, url) DO NOTHING
-        """,
-        {
-            "id": source_id,
-            "title": "Processing...",
-            "url": url,
-            "pool": pool,
-            "user_id": user_id,
-        },
-    )
-    # Re-fetch: handles race where concurrent insert won the conflict
-    row = await db_fetchrow(
-        "SELECT id FROM source WHERE user_id = $user_id AND url = $url",
-        {"user_id": user_id, "url": url},
-    )
-    source_id = str(row["id"])
-    logger.info(f"Created/found source record: {source_id}")
+    try:
+        await db_execute(
+            """
+            INSERT INTO source (id, title, url, pool, user_id, status)
+            VALUES ($id::uuid, $title, $url, $pool, $user_id, 'queued')
+            """,
+            {
+                "id": source_id,
+                "title": "Processing...",
+                "url": url,
+                "pool": pool,
+                "user_id": user_id,
+            },
+        )
+        logger.info(f"Created source record: {source_id}")
+    except Exception as e:
+        if "unique" not in str(e).lower() and "duplicate" not in str(e).lower():
+            raise
+        # Race condition: another concurrent insert won — fetch the winner
+        row = await db_fetchrow(
+            "SELECT id FROM source WHERE user_id = $user_id AND url = $url",
+            {"user_id": user_id, "url": url},
+        )
+        source_id = str(row["id"])
+        logger.info(f"Race: reusing existing source record: {source_id}")
     return source_id
 
 
