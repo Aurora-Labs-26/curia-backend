@@ -2563,6 +2563,9 @@ select:focus{outline:none;border-color:var(--accent)}
       <span id="plab-run-count" style="font-size:11px;color:var(--subtle)"></span>
     </div>
     <div id="plab-runs" style="flex:1;overflow-y:auto;padding:0 8px 8px"></div>
+    <div style="padding:10px;border-top:1px solid var(--border);flex-shrink:0">
+      <button onclick="startNewRun()" style="width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#e85c10'" onmouseout="this.style.background='var(--accent)'">+ New run</button>
+    </div>
   </div>
 
   <!-- ── Main area ── -->
@@ -2885,6 +2888,16 @@ function renderSidebar() {
   el.innerHTML = html;
 }
 
+function startNewRun() {
+  // Clear B overrides + change note, keep URL + show format, ready for next iteration
+  document.getElementById('change-note-input').value = '';
+  cancelPromptEdit('outline');
+  cancelPromptEdit('transcript');
+  document.getElementById('fmt-url').focus();
+  document.getElementById('fmt-rerun-b').style.display = 'none';
+  document.getElementById('fmt-rerun-b').innerHTML = '';
+}
+
 function assignSlot(idx, slot) {
   if (slot === 'a') _plabSlotA = idx;
   else _plabSlotB = idx;
@@ -3056,8 +3069,8 @@ async function runPromptCompare() {
   if (!_existingEp) pollFmtJob(_fmtJobA, 'a', 'outline');
   pollFmtJob(_fmtJobB, 'b', 'outline');
 
-  // Refresh sidebar after a moment to show new run entry
-  setTimeout(() => refreshSidebar(url), 3000);
+  // compare_run row is already saved — refresh sidebar immediately
+  await refreshSidebar(url);
 }
 
 async function runTranscripts() {
@@ -3078,8 +3091,6 @@ async function runTranscripts() {
   // Skip A if using cached production episode
   if (!_existingEp) pollFmtJob(_fmtJobA, 'a', 'transcript');
   pollFmtJob(_fmtJobB, 'b', 'transcript');
-  // Refresh sidebar after transcripts finish
-  setTimeout(() => refreshSidebar(), 8000);
 }
 
 async function rerunStep(step) {
@@ -3121,7 +3132,10 @@ function pollFmtJob(jobId, side, phase) {
     } else if (data.status === 'done') {
       document.getElementById('fmt-btn').disabled = false;
       if (data.episode_id) loadEpisodeIntoColumn(data.episode_id, side);
-      if (side === 'b') showRerunButton('transcript');
+      if (side === 'b') {
+        showRerunButton('transcript');
+        refreshSidebar(); // episode_id now stored — update sidebar
+      }
       if (side === 'b' && document.getElementById('transcript-btn'))
         document.getElementById('transcript-btn').disabled = false;
     } else if (data.status === 'error') {
