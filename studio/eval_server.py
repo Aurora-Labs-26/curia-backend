@@ -283,31 +283,33 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
         user_id = str(user_row["id"])
         await _step_done()
 
-        await _step_start("Registering source")
         from core.ingest import normalise_url
         norm_url = normalise_url(url)
-        existing = await db_fetchrow(
-            "SELECT id::text, status FROM source WHERE url = $url AND status = 'ready' LIMIT 1",
+        cached = await db_fetchrow(
+            "SELECT id::text FROM source WHERE url = $url AND status = 'ready' LIMIT 1",
             {"url": norm_url},
         )
-        if existing:
-            source_id = existing["id"]
+        if cached:
+            source_id = cached["id"]
+            steps.append({"text": "Source cached — skipping ingest", "status": "done"})
+            await _save_job(job_id, {"status": "running", "steps": list(steps)})
         else:
+            await _step_start("Registering source")
             source_id = await get_or_create_source(url=url, user_id=user_id)
-        await _step_done()
+            await _step_done()
 
-        await _step_start("Scraping & ingesting")
-        src = await db_fetchrow(
-            "SELECT status FROM source WHERE id = $id::uuid", {"id": source_id}
-        )
-        if not src or src["status"] != "ready":
-            await process_source(source_id=source_id)
-        src_after = await db_fetchrow(
-            "SELECT status FROM source WHERE id = $id::uuid", {"id": source_id}
-        )
-        if not src_after or src_after["status"] != "ready":
-            raise RuntimeError(f"Source failed to ingest (status: {src_after['status'] if src_after else 'missing'}). The URL may be behind a login, blocked, or empty.")
-        await _step_done()
+            await _step_start("Scraping & ingesting")
+            src = await db_fetchrow(
+                "SELECT status FROM source WHERE id = $id::uuid", {"id": source_id}
+            )
+            if not src or src["status"] != "ready":
+                await process_source(source_id=source_id)
+            src_after = await db_fetchrow(
+                "SELECT status FROM source WHERE id = $id::uuid", {"id": source_id}
+            )
+            if not src_after or src_after["status"] != "ready":
+                raise RuntimeError(f"Source failed to ingest (status: {src_after['status'] if src_after else 'missing'}). The URL may be behind a login, blocked, or empty.")
+            await _step_done()
 
         if mode == "cluster":
             emb_row = await db_fetchrow(
@@ -1787,7 +1789,7 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
             )
         else:
             await db_execute(
-                """UPDATE episode SET transcript = $transcript::jsonb, status = 'ready', updated_at = NOW()
+                """UPDATE episode SET transcript = $transcript::jsonb, status = 'ready'
                    WHERE id = $id::uuid""",
                 {"id": episode_id, "transcript": _js.dumps(transcript)},
             )
@@ -2883,17 +2885,40 @@ async function loadEpisodeIntoColumn(episodeId, side) {
   }
 
   if (lines.length) {
+    const plainText = lines.map(l => l.text||'').join('\n\n');
     const transcriptHtml = lines.map(l =>
       `<div class="transcript-line">
         <div class="transcript-text">${esc(l.text||'')}</div>
       </div>`
     ).join('');
+    const copyId = 'copy-' + side + '-' + episodeId.slice(0,8);
     div.innerHTML += `<div class="result-section">
-      <div class="result-section-label">Transcript</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div class="result-section-label" style="margin-bottom:0">Transcript</div>
+        <button id="${copyId}" onclick="copyTranscript('${copyId}', \`${plainText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)"
+          style="padding:3px 10px;font-size:11px;font-weight:500;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;transition:all .15s"
+          onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+          onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+      </div>
       <div class="transcript-block">${transcriptHtml}</div>
     </div>`;
   }
   container.appendChild(div);
+}
+
+function copyTranscript(btnId, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.textContent = '✓ Copied';
+    btn.style.color = 'var(--good)';
+    btn.style.borderColor = 'var(--good)';
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.style.color = 'var(--muted)';
+      btn.style.borderColor = 'var(--border)';
+    }, 2000);
+  });
 }
 
 function renderSteps(steps, elId) {
