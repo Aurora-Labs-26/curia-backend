@@ -34,7 +34,9 @@ from intelligence.selector import select_episode_sources, get_source_insights
 from core.db.connection import db_execute, db_fetchrow, db_query
 from core.kb import UserKB, load_kb
 from core.llm_config import resolve
+from core.prompts.outline import GenerateOutline as _OutlineSignature
 from core.prompts.outline import generate_outline as _outline_module
+from core.prompts.transcript import GenerateTranscript as _TranscriptSignature
 from core.prompts.transcript import generate_transcript as _transcript_module
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
 from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
@@ -54,15 +56,20 @@ QUALITY_REROLL_ENABLED = os.getenv("CURIA_QUALITY_REROLL", "true").lower() == "t
 # LLM calls
 # ---------------------------------------------------------------------------
 
-def generate_outline(briefing: str, show_name: str) -> dict:
+def generate_outline(briefing: str, show_name: str, prompt_override: str | None = None) -> dict:
     import time as _time
     llm_log = logger.bind(log_type="llm")
     logger.info(f"Generating outline (show={show_name})...")
+    if prompt_override:
+        _custom_sig = type("OverrideOutline", (_OutlineSignature,), {"__doc__": prompt_override})
+        _ol_module = dspy.Predict(_custom_sig)
+    else:
+        _ol_module = _outline_module
     llm_log.info(f"LLM_CALL_START | task=outline show={show_name} briefing_len={len(briefing)}")
     _start = _time.time()
     # Resolver picks the right model: show-scoped binding overrides task default.
     with dspy.context(lm=resolve.llm("outline", show=show_name)):
-        prediction = _outline_module(briefing=briefing)
+        prediction = _ol_module(briefing=briefing)
     _elapsed = _time.time() - _start
     raw = prediction.outline_json.strip()
     llm_log.info(f"LLM_CALL_END | task=outline show={show_name} duration={_elapsed:.2f}s output_len={len(raw)}")
@@ -125,6 +132,7 @@ def generate_transcript(
     show_name: str,
     user_kb: UserKB | None = None,
     speaker_override: str | None = None,
+    prompt_override: str | None = None,
 ) -> list[dict]:
     profile = SHOW_PROFILES[show_name]
     import time as _time
@@ -148,11 +156,16 @@ def generate_transcript(
         f"Speech patterns: {speaker.speech_patterns}"
         + _format_listener_hints(user_kb)
     )
+    if prompt_override:
+        _custom_sig = type("OverrideTranscript", (_TranscriptSignature,), {"__doc__": prompt_override})
+        _module = dspy.Predict(_custom_sig)
+    else:
+        _module = _transcript_module
     # Resolver picks the right model: show-scoped binding overrides task default.
     llm_log.info(f"LLM_CALL_START | task=transcript show={show_name} briefing_len={len(briefing)}")
     _start = _time.time()
     with dspy.context(lm=resolve.llm("transcript", show=show_name)):
-        prediction = _transcript_module(
+        prediction = _module(
             briefing=briefing,
             outline=json.dumps(outline, indent=2),
             speaker_definition=speaker_definition,
@@ -628,7 +641,7 @@ async def _resolve_sources_for_episode(
     )
 
 
-async def process_episode(episode_id: str) -> None:
+async def process_episode(episode_id: str, prompt_override: str | None = None, outline_prompt_override: str | None = None) -> None:
     """
     Process an episode row that already exists in the DB (status='queued').
     Reads show_name + show_idea_id + editorial_direction from the row, runs the full
@@ -703,7 +716,7 @@ async def process_episode(episode_id: str) -> None:
 
         # 3. Generate outline
         await _set_episode_status(episode_id, "outlining")
-        outline = generate_outline(briefing, show_name)
+        outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
         title = outline.get("title", show_name)
 
         # 4. Generate transcript (KB → speaker_definition listener hints)
@@ -711,6 +724,7 @@ async def process_episode(episode_id: str) -> None:
         transcript = generate_transcript(
             briefing, outline, show_name,
             user_kb=user_kb, speaker_override=speaker_override,
+            prompt_override=prompt_override,
         )
 
         judgment = await _rubric_judge(
@@ -737,6 +751,7 @@ async def process_episode(episode_id: str) -> None:
             transcript_v2 = generate_transcript(
                 briefing, outline, show_name,
                 user_kb=user_kb, speaker_override=speaker_override,
+                prompt_override=prompt_override,
             )
             judgment_v2 = await _rubric_judge(
                 task="transcript",

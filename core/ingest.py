@@ -302,6 +302,7 @@ async def get_or_create_source(
         """
         INSERT INTO source (id, title, url, pool, user_id, status)
         VALUES ($id::uuid, $title, $url, $pool, $user_id, 'queued')
+        ON CONFLICT (user_id, url) DO NOTHING
         """,
         {
             "id": source_id,
@@ -311,7 +312,13 @@ async def get_or_create_source(
             "user_id": user_id,
         },
     )
-    logger.info(f"Created source record: {source_id}")
+    # Re-fetch: handles race where concurrent insert won the conflict
+    row = await db_fetchrow(
+        "SELECT id FROM source WHERE user_id = $user_id AND url = $url",
+        {"user_id": user_id, "url": url},
+    )
+    source_id = str(row["id"])
+    logger.info(f"Created/found source record: {source_id}")
     return source_id
 
 

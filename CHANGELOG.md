@@ -4,6 +4,18 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-01 · Aditya + Claude (claude-sonnet-4-6) [2]
+
+### Feature
+Two-phase prompt comparison pipeline + run history storage.
+- **`studio/eval_server.py`** — "Generate outlines →" runs ingest+outline only (stop_after="outline"); "Generate transcripts →" runs transcript from stored state; "Re-run outline/transcript (B)" reruns single step with edited prompt; History tab shows all past runs
+- **`studio/eval_server.py`** — `compare_run` table stores every run (url, show configs, prompt overrides, job IDs, episode IDs); `GET /api/compare/runs` endpoint; `POST /api/compare/run-outline`, `run-transcript`, `rerun-step`
+- **`studio/generator.py`** — `generate_outline()` and `process_episode()` accept `prompt_override` / `outline_prompt_override` for per-call DSPy Signature overrides without mutating global state
+- **`core/ingest.py`** — `get_or_create_source` uses `ON CONFLICT DO NOTHING` + re-fetch to fix race condition when two jobs share the same URL
+- **`pyproject.toml`** — added `groq>=0.4` and `python-multipart>=0.0.9`
+
+---
+
 ## 2026-06-01 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Feature

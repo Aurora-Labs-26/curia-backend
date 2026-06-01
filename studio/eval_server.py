@@ -122,12 +122,14 @@ async def _ensure_jobs_table():
             message     TEXT,
             episode_id  TEXT,
             steps       JSONB DEFAULT '[]'::jsonb,
+            extra       JSONB DEFAULT '{}'::jsonb,
             created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
         {},
     )
+    await db_execute("ALTER TABLE eval_job ADD COLUMN IF NOT EXISTS extra JSONB DEFAULT '{}'::jsonb", {})
     await db_execute(
         """
         UPDATE eval_job SET status = 'error', message = 'Server restarted while job was running',
@@ -143,13 +145,15 @@ async def _save_job(job_id: str, data: dict):
     await _ensure_jobs_table()
     from core.db.connection import db_execute
     _jobs[job_id] = data
+    # extra holds large pipeline state: source_id, show_name, briefing, outline
+    extra = {k: data[k] for k in ("source_id", "show_name", "briefing", "outline") if k in data}
     await db_execute(
         """
-        INSERT INTO eval_job (id, status, message, episode_id, steps, updated_at)
-        VALUES ($id, $status, $message, $episode_id, $steps::jsonb, NOW())
+        INSERT INTO eval_job (id, status, message, episode_id, steps, extra, updated_at)
+        VALUES ($id, $status, $message, $episode_id, $steps::jsonb, $extra::jsonb, NOW())
         ON CONFLICT (id) DO UPDATE
         SET status = $status, message = $message, episode_id = $episode_id,
-            steps = $steps::jsonb, updated_at = NOW()
+            steps = $steps::jsonb, extra = $extra::jsonb, updated_at = NOW()
         """,
         {
             "id": job_id,
@@ -157,6 +161,7 @@ async def _save_job(job_id: str, data: dict):
             "message": data.get("message", ""),
             "episode_id": data.get("episode_id", ""),
             "steps": _json.dumps(data.get("steps", [])),
+            "extra": _json.dumps(extra),
         },
     )
 
@@ -167,22 +172,21 @@ async def _load_job(job_id: str) -> dict | None:
     await _ensure_jobs_table()
     from core.db.connection import db_fetchrow
     row = await db_fetchrow(
-        "SELECT status, message, episode_id, steps FROM eval_job WHERE id = $id",
+        "SELECT status, message, episode_id, steps, extra FROM eval_job WHERE id = $id",
         {"id": job_id},
     )
     if not row:
         return None
-    data = {
-        "status": row["status"],
-        "message": row.get("message") or "",
-    }
+    data = {"status": row["status"], "message": row.get("message") or ""}
     if row.get("episode_id"):
         data["episode_id"] = row["episode_id"]
-    steps = row.get("steps")
-    if steps:
-        if isinstance(steps, str):
-            steps = _json.loads(steps)
-        data["steps"] = steps
+    for field in ("steps", "extra"):
+        val = row.get(field)
+        if val:
+            data[field] = _json.loads(val) if isinstance(val, str) else val
+    # Flatten extra fields into top-level for easy access
+    for k, v in (data.get("extra") or {}).items():
+        data[k] = v
     _jobs[job_id] = data
     return data
 
@@ -222,7 +226,34 @@ async def _ensure_primitive_embedding(source_id: str):
     )
 
 
-async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "single"):
+async def _build_briefing(source_id: str, show_name: str, user_id: str) -> str:
+    """Build briefing string for a single already-ingested source."""
+    from core.db.connection import db_fetchrow, db_query
+    from studio.briefing_builder import build_briefing_packet, briefing_packet_to_str
+    from studio.shows.profiles import SHOW_PROFILES
+
+    profile = SHOW_PROFILES[show_name]
+    source_row = await db_fetchrow(
+        "SELECT id, title, url, full_text FROM source WHERE id = $id::uuid", {"id": source_id}
+    )
+    insight_rows = await db_query(
+        "SELECT insight_type, content FROM source_insight WHERE source_id = $id::uuid", {"id": source_id}
+    )
+    sources = [dict(source_row)]
+    insights = {source_id: {r["insight_type"]: r["content"] for r in (insight_rows or [])}}
+    packet = build_briefing_packet(
+        format_name=profile.format_name,
+        sources=sources,
+        insights=insights,
+        editorial_direction=None,
+        user_kb=None,
+    )
+    return briefing_packet_to_str(packet)
+
+
+async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "single",
+                        prompt_override: str | None = None, outline_prompt_override: str | None = None,
+                        stop_after: str = "full"):
     from core.db.connection import db_fetchrow, db_execute
     from core.ingest import process_source, get_or_create_source
     from studio.generator import process_episode
@@ -298,6 +329,27 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
             })
             return
 
+        if stop_after == "outline":
+            await _step_start("Building briefing")
+            briefing = await _build_briefing(source_id, show_name, user_id)
+            await _step_done()
+
+            await _step_start("Generating outline")
+            from studio.generator import generate_outline
+            outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
+            await _step_done()
+
+            await _save_job(job_id, {
+                "status": "outline_done",
+                "source_id": source_id,
+                "user_id": user_id,
+                "show_name": show_name,
+                "briefing": briefing,
+                "outline": outline,
+                "steps": list(steps),
+            })
+            return
+
         await _step_start("Generating episode")
         episode_id = str(uuid4())
         show_idea_id = str(uuid4())
@@ -312,7 +364,7 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
             {"id": episode_id, "user_id": user_id, "show": show_name,
              "idea_id": show_idea_id, "src_id": source_id},
         )
-        await process_episode(episode_id=episode_id)
+        await process_episode(episode_id=episode_id, prompt_override=prompt_override, outline_prompt_override=outline_prompt_override)
         await _step_done()
 
         await _save_job(job_id, {"status": "done", "episode_id": episode_id, "message": "Done!", "steps": list(steps)})
@@ -1686,9 +1738,160 @@ async def get_job(job_id: str):
     return JSONResponse(content=job)
 
 
+async def _run_transcript_step(job_id: str, transcript_prompt_override: str | None = None):
+    """Generate transcript from stored job state (briefing + outline). Skips audio for speed."""
+    from core.db.connection import db_execute
+    from studio.generator import generate_transcript
+    import json as _js
+
+    job = await _load_job(job_id)
+    if not job:
+        raise RuntimeError("Job not found")
+    briefing   = job.get("briefing") or ""
+    outline    = job.get("outline") or {}
+    show_name  = job.get("show_name") or "clarity_engine"
+    source_id  = job.get("source_id") or ""
+    user_id    = job.get("user_id") or "default"
+    steps      = list(job.get("steps") or [])
+
+    steps.append({"text": "Generating transcript", "status": "running"})
+    await _save_job(job_id, {**job, "status": "running", "steps": steps})
+
+    try:
+        transcript = generate_transcript(
+            briefing, outline, show_name,
+            prompt_override=transcript_prompt_override,
+        )
+
+        # Persist to episode row (create or update)
+        episode_id = job.get("episode_id") or str(uuid4())
+        if not job.get("episode_id"):
+            show_idea_id = str(uuid4())
+            await db_execute(
+                """INSERT INTO show_idea (id, user_id, angle, idea_type, format, source_ids, generated)
+                   VALUES ($id::uuid, $user_id, '(eval)', 'standalone', $format, ARRAY[$src_id::uuid], false)""",
+                {"id": show_idea_id, "user_id": user_id, "format": show_name, "src_id": source_id},
+            )
+            await db_execute(
+                """INSERT INTO episode (id, user_id, show_name, show_idea_id, status, source_ids,
+                          outline, transcript, title)
+                   VALUES ($id::uuid, $user_id, $show, $idea_id::uuid, 'ready',
+                          ARRAY[$src_id::uuid], $outline::jsonb, $transcript::jsonb, $title)""",
+                {
+                    "id": episode_id, "user_id": user_id, "show": show_name,
+                    "idea_id": show_idea_id, "src_id": source_id,
+                    "outline": _js.dumps(outline),
+                    "transcript": _js.dumps(transcript),
+                    "title": (outline.get("title") or show_name),
+                },
+            )
+        else:
+            await db_execute(
+                """UPDATE episode SET transcript = $transcript::jsonb, status = 'ready', updated_at = NOW()
+                   WHERE id = $id::uuid""",
+                {"id": episode_id, "transcript": _js.dumps(transcript)},
+            )
+
+        steps[-1]["status"] = "done"
+        await _save_job(job_id, {**job, "status": "done", "episode_id": episode_id,
+                                  "steps": steps, "transcript": transcript})
+        return episode_id
+
+    except Exception as e:
+        steps[-1]["status"] = "error"
+        await _save_job(job_id, {**job, "status": "error", "message": str(e), "steps": steps})
+        raise
+
+
+async def _rerun_outline_step(job_id: str, outline_prompt_override: str | None = None):
+    """Re-run outline from stored briefing. Updates stored outline in job state."""
+    from studio.generator import generate_outline
+
+    job = await _load_job(job_id)
+    if not job:
+        raise RuntimeError("Job not found")
+
+    briefing  = job.get("briefing") or ""
+    show_name = job.get("show_name") or "clarity_engine"
+    steps     = list(job.get("steps") or [])
+
+    steps.append({"text": "Re-running outline", "status": "running"})
+    await _save_job(job_id, {**job, "status": "running", "steps": steps})
+
+    try:
+        outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
+        steps[-1]["status"] = "done"
+        # Clear episode_id — transcript will need re-run too
+        await _save_job(job_id, {**job, "status": "outline_done", "outline": outline,
+                                  "steps": steps, "episode_id": None})
+        return outline
+    except Exception as e:
+        steps[-1]["status"] = "error"
+        await _save_job(job_id, {**job, "status": "error", "message": str(e), "steps": steps})
+        raise
+
+
 # ── Compare page ──────────────────────────────────────────────────────────────
 
 _COMPARE_TABLE_READY = False
+_COMPARE_RUN_TABLE_READY = False
+
+async def _ensure_compare_run_table():
+    global _COMPARE_RUN_TABLE_READY
+    if _COMPARE_RUN_TABLE_READY:
+        return
+    from core.db.connection import db_execute
+    await db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS compare_run (
+            id              SERIAL PRIMARY KEY,
+            ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            url             TEXT NOT NULL,
+            show_name_a     TEXT,
+            show_name_b     TEXT,
+            outline_prompt_b TEXT,
+            transcript_prompt_b TEXT,
+            job_id_a        TEXT,
+            job_id_b        TEXT,
+            episode_id_a    TEXT,
+            episode_id_b    TEXT
+        )
+        """,
+        {},
+    )
+    _COMPARE_RUN_TABLE_READY = True
+
+
+async def _save_compare_run(url: str, show_a: str, show_b: str,
+                             outline_b: str | None, transcript_b: str | None,
+                             job_a: str, job_b: str) -> int:
+    await _ensure_compare_run_table()
+    from core.db.connection import db_fetchrow
+    row = await db_fetchrow(
+        """INSERT INTO compare_run (url, show_name_a, show_name_b, outline_prompt_b,
+               transcript_prompt_b, job_id_a, job_id_b)
+           VALUES ($url, $show_a, $show_b, $outline_b, $transcript_b, $job_a, $job_b)
+           RETURNING id""",
+        {"url": url, "show_a": show_a, "show_b": show_b,
+         "outline_b": outline_b, "transcript_b": transcript_b,
+         "job_a": job_a, "job_b": job_b},
+    )
+    return row["id"]
+
+
+async def _update_compare_run_episodes(job_a: str, job_b: str,
+                                        ep_a: str | None, ep_b: str | None):
+    try:
+        await _ensure_compare_run_table()
+        from core.db.connection import db_execute
+        await db_execute(
+            """UPDATE compare_run SET episode_id_a = $ep_a, episode_id_b = $ep_b
+               WHERE job_id_a = $job_a AND job_id_b = $job_b""",
+            {"ep_a": ep_a or "", "ep_b": ep_b or "", "job_a": job_a, "job_b": job_b},
+        )
+    except Exception:
+        pass
+
 
 async def _ensure_compare_table():
     global _COMPARE_TABLE_READY
@@ -1779,18 +1982,100 @@ Score each axis 1–5 for both transcripts. Return JSON:
         return {"error": "Judge returned invalid JSON", "raw": raw[:500]}
 
 
-@app.post("/api/compare/run")
-async def compare_run(request: Request):
+@app.get("/api/prompts/{task}")
+async def get_prompt(task: str):
+    from core.prompts.loader import load_prompt, PROMPTS_DIR
+    allowed = {"transcript", "outline"}
+    if task not in allowed:
+        return JSONResponse(content={"error": "unknown task"}, status_code=400)
+    if task == "transcript":
+        from core.prompts.transcript import GenerateTranscript as _Sig
+    else:
+        from core.prompts.outline import GenerateOutline as _Sig
+    text = load_prompt(task) or (_Sig.__doc__ or "").strip()
+    return JSONResponse(content={"prompt": text, "source": "file" if (PROMPTS_DIR / f"{task}.txt").exists() else "docstring"})
+
+
+@app.post("/api/compare/run-outline")
+async def compare_run_outline(request: Request):
+    """Phase 1: ingest + outline only for both A and B."""
     body = await request.json()
-    url = (body.get("url") or "").strip()
-    show_a = (body.get("show_a") or "clarity_engine").strip()
-    show_b = (body.get("show_b") or "narrative_drift").strip()
+    url         = (body.get("url") or "").strip()
+    show_name_a = (body.get("show_name_a") or "clarity_engine").strip()
+    show_name_b = (body.get("show_name_b") or show_name_a).strip()
+    outline_b   = body.get("outline_prompt_b") or None
+    transcript_b = body.get("transcript_prompt_b") or None
     if not url:
         return JSONResponse(content={"error": "url required"}, status_code=400)
     job_a = str(uuid4())
     job_b = str(uuid4())
-    asyncio.create_task(_run_pipeline(job_a, url, show_a))
-    asyncio.create_task(_run_pipeline(job_b, url, show_b))
+    await _save_compare_run(url, show_name_a, show_name_b, outline_b, transcript_b, job_a, job_b)
+    asyncio.create_task(_run_pipeline(job_a, url, show_name_a, stop_after="outline"))
+    asyncio.create_task(_run_pipeline(job_b, url, show_name_b, stop_after="outline",
+                                      outline_prompt_override=outline_b))
+    return JSONResponse(content={"job_a": job_a, "job_b": job_b})
+
+
+@app.post("/api/compare/run-transcript")
+async def compare_run_transcript(request: Request):
+    """Phase 2: generate transcripts from stored outline state."""
+    body = await request.json()
+    job_id_a     = (body.get("job_a") or "").strip()
+    job_id_b     = (body.get("job_b") or "").strip()
+    transcript_b = body.get("transcript_prompt_b") or None
+    if not job_id_a or not job_id_b:
+        return JSONResponse(content={"error": "job_a and job_b required"}, status_code=400)
+
+    async def _run_both():
+        import asyncio as _aio
+        ep_a, ep_b = None, None
+        try:
+            ep_a = await _run_transcript_step(job_id_a)
+        except Exception:
+            pass
+        try:
+            ep_b = await _run_transcript_step(job_id_b, transcript_prompt_override=transcript_b)
+        except Exception:
+            pass
+        await _update_compare_run_episodes(job_id_a, job_id_b, ep_a, ep_b)
+
+    asyncio.create_task(_run_both())
+    return JSONResponse(content={"ok": True})
+
+
+@app.post("/api/compare/rerun-step")
+async def compare_rerun_step(request: Request):
+    """Re-run a single step (outline or transcript) for one job with a new prompt."""
+    body      = await request.json()
+    job_id    = (body.get("job_id") or "").strip()
+    step      = (body.get("step") or "").strip()   # "outline" | "transcript"
+    prompt    = body.get("prompt") or None
+    if not job_id or step not in ("outline", "transcript"):
+        return JSONResponse(content={"error": "job_id and step (outline|transcript) required"}, status_code=400)
+    if step == "outline":
+        asyncio.create_task(_rerun_outline_step(job_id, outline_prompt_override=prompt))
+    else:
+        asyncio.create_task(_run_transcript_step(job_id, transcript_prompt_override=prompt))
+    return JSONResponse(content={"ok": True})
+
+
+@app.post("/api/compare/run")
+async def compare_run(request: Request):
+    """Legacy full-pipeline run (kept for backwards compat)."""
+    body = await request.json()
+    url              = (body.get("url") or "").strip()
+    show_name_a      = (body.get("show_name_a") or "clarity_engine").strip()
+    show_name_b      = (body.get("show_name_b") or show_name_a).strip()
+    outline_b        = body.get("outline_prompt_b") or None
+    transcript_b     = body.get("transcript_prompt_b") or None
+    if not url:
+        return JSONResponse(content={"error": "url required"}, status_code=400)
+    job_a = str(uuid4())
+    job_b = str(uuid4())
+    asyncio.create_task(_run_pipeline(job_a, url, show_name_a))
+    asyncio.create_task(_run_pipeline(job_b, url, show_name_b,
+                                      prompt_override=transcript_b,
+                                      outline_prompt_override=outline_b))
     return JSONResponse(content={"job_a": job_a, "job_b": job_b})
 
 
@@ -1846,6 +2131,24 @@ async def compare_feedback(request: Request):
         },
     )
     return JSONResponse(content={"ok": True})
+
+
+@app.get("/api/compare/runs")
+async def list_compare_runs():
+    try:
+        await _ensure_compare_run_table()
+        from core.db.connection import db_query
+        rows = await db_query(
+            """SELECT id, ts, url, show_name_a, show_name_b,
+                      outline_prompt_b IS NOT NULL AS has_outline_override,
+                      transcript_prompt_b IS NOT NULL AS has_transcript_override,
+                      job_id_a, job_id_b, episode_id_a, episode_id_b
+               FROM compare_run ORDER BY ts DESC LIMIT 50""",
+            {},
+        )
+        return JSONResponse(content=_json.loads(_json.dumps(rows or [], default=_json_serial)))
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 @app.get("/compare", response_class=HTMLResponse)
@@ -2107,51 +2410,127 @@ select:focus{outline:none;border-color:var(--accent)}
 </header>
 
 <div class="tabs-bar">
-  <button class="tab-btn active" id="tab-btn-format" onclick="switchTab('format')">Format A vs B</button>
+  <button class="tab-btn active" id="tab-btn-format" onclick="switchTab('format')">Prompt A vs B</button>
   <button class="tab-btn" id="tab-btn-external" onclick="switchTab('external')">vs External</button>
+  <button class="tab-btn" id="tab-btn-history" onclick="switchTab('history');loadHistory()">History</button>
 </div>
 
-<!-- ── Tab: Format A vs B ── -->
+<!-- ── Tab: Prompt A vs B ── -->
 <div class="tab-panel active" id="tab-format">
-  <div class="section-eyebrow">Output comparison</div>
-  <h2 class="section-title">Format A vs B</h2>
-  <p class="section-sub">Run the same article through two different show formats and compare the output side by side.</p>
+  <div class="section-eyebrow">Prompt experimentation</div>
+  <h2 class="section-title">Control vs Variant</h2>
+  <p class="section-sub">A runs the current pipeline unchanged. Configure B by overriding any combination of show format, outline prompt, or transcript prompt.</p>
 
-  <div class="card config-card">
+  <!-- URL + run -->
+  <div class="card config-card" style="margin-bottom:20px">
     <div class="config-row">
-      <input type="url" id="fmt-url" placeholder="https://…" style="flex:2">
-      <div class="config-field">
-        <label>Format A</label>
-        <select id="show-a">
-          <option value="clarity_engine">clarity_engine</option>
-          <option value="narrative_drift">narrative_drift</option>
-          <option value="momentum_loop">momentum_loop</option>
-          <option value="exploration_engine">exploration_engine</option>
-        </select>
-      </div>
-      <div class="config-field">
-        <label>Format B</label>
-        <select id="show-b">
-          <option value="narrative_drift">narrative_drift</option>
-          <option value="clarity_engine">clarity_engine</option>
-          <option value="momentum_loop">momentum_loop</option>
-          <option value="exploration_engine">exploration_engine</option>
-        </select>
-      </div>
-      <button class="btn-primary" id="fmt-btn" onclick="runFormats()">Compare →</button>
+      <input type="url" id="fmt-url" placeholder="https://…" style="flex:1">
+      <button class="btn-primary" id="fmt-btn" onclick="runPromptCompare()">Generate outlines →</button>
     </div>
+  </div>
+
+  <div class="two-col" style="margin-bottom:20px;align-items:start">
+
+    <!-- A: Control -->
+    <div class="card" style="opacity:.7">
+      <div class="col-label col-a" style="display:flex;align-items:center;justify-content:space-between">
+        <span>A — Control</span>
+        <span style="font-size:10px;font-weight:500;background:#EFF6FF;color:var(--blue);padding:2px 8px;border-radius:10px;text-transform:none;letter-spacing:0">current pipeline</span>
+      </div>
+      <div style="padding:16px 20px">
+        <div class="config-field" style="margin-bottom:12px">
+          <label>Show format</label>
+          <select id="fmt-show-a" style="width:100%">
+            <option value="clarity_engine">clarity_engine</option>
+            <option value="narrative_drift">narrative_drift</option>
+            <option value="momentum_loop">momentum_loop</option>
+            <option value="exploration_engine">exploration_engine</option>
+          </select>
+        </div>
+        <div style="font-size:12px;color:var(--muted);font-style:italic">Outline + transcript prompts: live defaults</div>
+      </div>
+    </div>
+
+    <!-- B: Variant -->
+    <div class="card">
+      <div class="col-label col-b" style="display:flex;align-items:center;justify-content:space-between">
+        <span>B — Variant</span>
+        <span id="b-change-count" style="font-size:10px;font-weight:500;background:var(--accent-light);color:var(--accent);padding:2px 8px;border-radius:10px;text-transform:none;letter-spacing:0;display:none">0 overrides</span>
+      </div>
+      <div style="padding:16px 20px">
+
+        <!-- Show format -->
+        <div class="config-field" style="margin-bottom:16px">
+          <label>Show format</label>
+          <select id="fmt-show-b" style="width:100%" onchange="updateChangeCount()">
+            <option value="clarity_engine">clarity_engine</option>
+            <option value="narrative_drift">narrative_drift</option>
+            <option value="momentum_loop">momentum_loop</option>
+            <option value="exploration_engine">exploration_engine</option>
+          </select>
+        </div>
+
+        <!-- Outline prompt override -->
+        <div style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:12px;font-weight:600;color:var(--text)">Outline prompt</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="outline-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
+              <button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="togglePromptOverride('outline')">Edit</button>
+            </div>
+          </div>
+          <textarea id="outline-override" data-task="outline"
+            style="display:none;width:100%;height:200px;padding:10px 12px;font-family:'SF Mono',Menlo,monospace;font-size:11px;line-height:1.65;border:1px solid var(--border);border-radius:6px;resize:vertical;color:var(--text);background:var(--bg);outline:none"
+            oninput="onPromptEdit('outline')"></textarea>
+          <div id="outline-actions" style="display:none;margin-top:8px;display:none;gap:8px;justify-content:flex-end">
+            <button class="btn-secondary" style="padding:5px 12px;font-size:12px" onclick="cancelPromptEdit('outline')">Cancel</button>
+            <button class="btn-primary" style="padding:5px 14px;font-size:12px" onclick="submitPromptEdit('outline')">Submit edit ✓</button>
+          </div>
+        </div>
+
+        <!-- Transcript prompt override -->
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:12px;font-weight:600;color:var(--text)">Transcript prompt</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="transcript-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
+              <button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="togglePromptOverride('transcript')">Edit</button>
+            </div>
+          </div>
+          <textarea id="transcript-override" data-task="transcript"
+            style="display:none;width:100%;height:280px;padding:10px 12px;font-family:'SF Mono',Menlo,monospace;font-size:11px;line-height:1.65;border:1px solid var(--border);border-radius:6px;resize:vertical;color:var(--text);background:var(--bg);outline:none"
+            oninput="onPromptEdit('transcript')"></textarea>
+          <div id="transcript-actions" style="display:none;margin-top:8px;gap:8px;justify-content:flex-end">
+            <button class="btn-secondary" style="padding:5px 12px;font-size:12px" onclick="cancelPromptEdit('transcript')">Cancel</button>
+            <button class="btn-primary" style="padding:5px 14px;font-size:12px" onclick="submitPromptEdit('transcript')">Submit edit ✓</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <!-- Phase 2 bar: appears after outlines done -->
+  <div id="phase2-bar" style="display:none;margin-bottom:20px;padding:16px 20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);display:none;align-items:center;justify-content:space-between;gap:16px">
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--text)">Outlines ready</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">Review outlines above, then generate transcripts</div>
+    </div>
+    <button class="btn-primary" id="transcript-btn" onclick="runTranscripts()">Generate transcripts →</button>
   </div>
 
   <div class="two-col" id="fmt-cols" style="display:none">
     <div class="card" id="fmt-col-a">
-      <div class="col-label col-a" id="fmt-label-a">Format A</div>
+      <div class="col-label col-a" id="fmt-label-a">A — Control</div>
       <ul class="steps-list" id="fmt-steps-a"></ul>
       <div id="fmt-result-a"></div>
     </div>
     <div class="card" id="fmt-col-b">
-      <div class="col-label col-b" id="fmt-label-b">Format B</div>
+      <div class="col-label col-b" id="fmt-label-b">B — Variant</div>
       <ul class="steps-list" id="fmt-steps-b"></ul>
       <div id="fmt-result-b"></div>
+      <!-- Re-run buttons appear here after submit -->
+      <div id="fmt-rerun-b" style="display:none;padding:12px 16px;border-top:1px solid var(--border);display:none;gap:8px;flex-wrap:wrap"></div>
     </div>
   </div>
 </div>
@@ -2239,6 +2618,16 @@ select:focus{outline:none;border-color:var(--accent)}
   </div>
 </div>
 
+<!-- ── Tab: History ── -->
+<div class="tab-panel" id="tab-history">
+  <div class="section-eyebrow">Past runs</div>
+  <h2 class="section-title">Run history</h2>
+  <p class="section-sub">Every compare run is saved here — URL, show config, what was overridden, episode IDs.</p>
+  <div id="history-body">
+    <div class="empty-hint"><div class="empty-icon">📋</div>Loading…</div>
+  </div>
+</div>
+
 <script>
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -2250,53 +2639,228 @@ function switchTab(name) {
   document.getElementById('tab-btn-' + name).classList.add('active');
 }
 
-// ── Format A vs B ─────────────────────────────────────────────────────────────
+// ── Control vs Variant ────────────────────────────────────────────────────────
 let fmtPollA = null, fmtPollB = null;
+const _promptCache = {};
 
-async function runFormats() {
+async function togglePromptOverride(task) {
+  const ta = document.getElementById(task + '-override');
+  const actions = document.getElementById(task + '-actions');
+  const isHidden = ta.style.display === 'none';
+  if (isHidden) {
+    if (!ta.value) {
+      if (!_promptCache[task]) {
+        const r = await fetch('/api/prompts/' + task);
+        _promptCache[task] = (await r.json()).prompt;
+      }
+      ta.value = _promptCache[task];
+    }
+    ta.style.display = 'block';
+    actions.style.display = 'flex';
+    document.querySelector(`[onclick="togglePromptOverride('${task}')"]`).textContent = 'Remove';
+  } else {
+    cancelPromptEdit(task);
+  }
+}
+
+function onPromptEdit(task) {
+  // live feedback — pill updates but edit isn't "committed" until Submit
+  const pill = document.getElementById(task + '-pill');
+  pill.textContent = 'editing…';
+  pill.style.background = '#FFF3EE';
+  pill.style.color = 'var(--accent)';
+}
+
+function submitPromptEdit(task) {
+  const ta = document.getElementById(task + '-override');
+  const pill = document.getElementById(task + '-pill');
+  ta.dataset.modified = '1';
+  pill.textContent = 'modified ✓';
+  pill.style.background = 'var(--accent-light)';
+  pill.style.color = 'var(--accent)';
+  ta.style.display = 'none';
+  document.getElementById(task + '-actions').style.display = 'none';
+  document.querySelector(`[onclick="togglePromptOverride('${task}')"]`).textContent = 'Edit';
+  updateChangeCount();
+  // If a run is already done, offer re-run
+  if (_fmtJobB) showRerunButton(task);
+}
+
+function cancelPromptEdit(task) {
+  const ta = document.getElementById(task + '-override');
+  ta.style.display = 'none';
+  ta.dataset.modified = '';
+  document.getElementById(task + '-actions').style.display = 'none';
+  document.getElementById(task + '-pill').textContent = 'default';
+  document.getElementById(task + '-pill').style.background = '#f3f0ed';
+  document.getElementById(task + '-pill').style.color = 'var(--subtle)';
+  document.querySelector(`[onclick="togglePromptOverride('${task}')"]`).textContent = 'Edit';
+  updateChangeCount();
+}
+
+function updateChangeCount() {
+  let n = 0;
+  const showA = document.getElementById('fmt-show-a').value;
+  const showB = document.getElementById('fmt-show-b').value;
+  if (showA !== showB) n++;
+  if (document.getElementById('outline-override').dataset.modified) n++;
+  if (document.getElementById('transcript-override').dataset.modified) n++;
+  const el = document.getElementById('b-change-count');
+  el.style.display = n > 0 ? '' : 'none';
+  el.textContent = n + (n === 1 ? ' override' : ' overrides');
+}
+
+let _fmtJobA = null, _fmtJobB = null;
+let _outlineDoneA = false, _outlineDoneB = false;
+
+function _getOutlinePromptB() {
+  const ta = document.getElementById('outline-override');
+  return (ta.dataset.modified && ta.value.trim()) ? ta.value.trim() : null;
+}
+function _getTranscriptPromptB() {
+  const ta = document.getElementById('transcript-override');
+  return (ta.dataset.modified && ta.value.trim()) ? ta.value.trim() : null;
+}
+
+async function runPromptCompare() {
   const url = document.getElementById('fmt-url').value.trim();
   if (!url) { alert('Enter a URL'); return; }
-  const showA = document.getElementById('show-a').value;
-  const showB = document.getElementById('show-b').value;
+
+  const showA = document.getElementById('fmt-show-a').value;
+  const showB = document.getElementById('fmt-show-b').value;
+
   document.getElementById('fmt-btn').disabled = true;
+  document.getElementById('phase2-bar').style.display = 'none';
   document.getElementById('fmt-cols').style.display = 'grid';
-  document.getElementById('fmt-label-a').textContent = showA;
-  document.getElementById('fmt-label-b').textContent = showB;
   document.getElementById('fmt-steps-a').innerHTML = '';
   document.getElementById('fmt-steps-b').innerHTML = '';
   document.getElementById('fmt-result-a').innerHTML = '';
   document.getElementById('fmt-result-b').innerHTML = '';
+  document.getElementById('fmt-rerun-b').style.display = 'none';
+  document.getElementById('fmt-rerun-b').innerHTML = '';
+  _outlineDoneA = false; _outlineDoneB = false;
   if (fmtPollA) clearTimeout(fmtPollA);
   if (fmtPollB) clearTimeout(fmtPollB);
 
-  const res = await fetch('/api/compare/run', {
+  const res = await fetch('/api/compare/run-outline', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({url, show_a: showA, show_b: showB})
+    body: JSON.stringify({
+      url, show_name_a: showA, show_name_b: showB,
+      outline_prompt_b: _getOutlinePromptB(),
+    })
   });
-  const {job_a, job_b} = await res.json();
-  pollFmtJob(job_a, 'a');
-  pollFmtJob(job_b, 'b');
+  const d = await res.json();
+  _fmtJobA = d.job_a; _fmtJobB = d.job_b;
+  pollFmtJob(_fmtJobA, 'a', 'outline');
+  pollFmtJob(_fmtJobB, 'b', 'outline');
 }
 
-function pollFmtJob(jobId, side) {
+async function runTranscripts() {
+  document.getElementById('transcript-btn').disabled = true;
+  document.getElementById('fmt-steps-a').innerHTML = '';
+  document.getElementById('fmt-steps-b').innerHTML = '';
+  document.getElementById('fmt-result-a').innerHTML = '';
+  document.getElementById('fmt-result-b').innerHTML = '';
+
+  await fetch('/api/compare/run-transcript', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      job_a: _fmtJobA, job_b: _fmtJobB,
+      transcript_prompt_b: _getTranscriptPromptB(),
+    })
+  });
+  pollFmtJob(_fmtJobA, 'a', 'transcript');
+  pollFmtJob(_fmtJobB, 'b', 'transcript');
+}
+
+async function rerunStep(step) {
+  const prompt = step === 'outline' ? _getOutlinePromptB() : _getTranscriptPromptB();
+  document.getElementById('fmt-rerun-b').style.display = 'none';
+  document.getElementById('fmt-steps-b').innerHTML = '';
+  document.getElementById('fmt-result-b').innerHTML = '';
+  await fetch('/api/compare/rerun-step', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({job_id: _fmtJobB, step, prompt})
+  });
+  if (step === 'outline') {
+    document.getElementById('phase2-bar').style.display = 'none';
+    _outlineDoneB = false;
+    pollFmtJob(_fmtJobB, 'b', 'outline');
+  } else {
+    pollFmtJob(_fmtJobB, 'b', 'transcript');
+  }
+}
+
+function pollFmtJob(jobId, side, phase) {
   setTimeout(async () => {
     const res = await fetch('/api/jobs/' + jobId);
     const data = await res.json();
     renderSteps(data.steps || [], 'fmt-steps-' + side);
-    if (data.status === 'done') {
+
+    if (data.status === 'outline_done') {
+      // Show outline content
+      if (data.outline) renderOutlineInColumn(data.outline, side);
+      if (side === 'a') _outlineDoneA = true;
+      if (side === 'b') _outlineDoneB = true;
+      if (_outlineDoneA && _outlineDoneB) {
+        document.getElementById('fmt-btn').disabled = false;
+        document.getElementById('phase2-bar').style.display = 'flex';
+        // Show re-run outline button for B
+        showRerunButton('outline');
+      }
+    } else if (data.status === 'done') {
       document.getElementById('fmt-btn').disabled = false;
       if (data.episode_id) loadEpisodeIntoColumn(data.episode_id, side);
+      if (side === 'b') showRerunButton('transcript');
+      if (side === 'b' && document.getElementById('transcript-btn'))
+        document.getElementById('transcript-btn').disabled = false;
     } else if (data.status === 'error') {
       document.getElementById('fmt-btn').disabled = false;
+      if (document.getElementById('transcript-btn'))
+        document.getElementById('transcript-btn').disabled = false;
       const err = document.createElement('div');
       err.style.cssText = 'padding:14px 20px;color:var(--bad);font-size:13px';
       err.textContent = data.message || 'Error';
       document.getElementById('fmt-result-' + side).appendChild(err);
     } else {
-      pollFmtJob(jobId, side);
+      pollFmtJob(jobId, side, phase);
     }
   }, 2000);
+}
+
+function showRerunButton(step) {
+  const bar = document.getElementById('fmt-rerun-b');
+  // Remove existing button for this step if any
+  const existing = bar.querySelector(`[data-step="${step}"]`);
+  if (existing) existing.remove();
+  const btn = document.createElement('button');
+  btn.className = 'btn-secondary';
+  btn.dataset.step = step;
+  btn.style.cssText = 'padding:6px 14px;font-size:12px';
+  btn.textContent = `↺ Re-run ${step} (B)`;
+  btn.onclick = () => rerunStep(step);
+  bar.appendChild(btn);
+  bar.style.display = 'flex';
+}
+
+function renderOutlineInColumn(outline, side) {
+  const container = document.getElementById('fmt-result-' + side);
+  container.innerHTML = '';
+  const div = document.createElement('div');
+  div.innerHTML = `<div class="result-section">
+    <div class="result-section-label">Outline</div>
+    ${outline.title ? `<div class="result-title">${esc(outline.title)}</div>` : ''}
+    ${outline.thread ? `<div class="result-thread">${esc(outline.thread)}</div>` : ''}
+    ${(outline.segments||[]).map((s,i) => `
+      <div style="margin-bottom:8px;font-size:13px">
+        <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--subtle)">Seg ${s.segment||i+1}</span>
+        <span style="margin-left:8px;color:var(--text)">${esc(s.title||s.focus||s.purpose||'')}</span>
+      </div>`).join('')}
+  </div>`;
+  container.appendChild(div);
 }
 
 async function loadEpisodeIntoColumn(episodeId, side) {
@@ -2321,7 +2885,6 @@ async function loadEpisodeIntoColumn(episodeId, side) {
   if (lines.length) {
     const transcriptHtml = lines.map(l =>
       `<div class="transcript-line">
-        <div class="transcript-speaker">${esc(l.speaker||'Host')}</div>
         <div class="transcript-text">${esc(l.text||'')}</div>
       </div>`
     ).join('');
@@ -2377,7 +2940,6 @@ async function onEpisodeSelect() {
   if (lines.length) {
     bodyEl.innerHTML = lines.map(l =>
       `<div class="transcript-line">
-        <div class="transcript-speaker">${esc(l.speaker||'Host')}</div>
         <div class="transcript-text">${esc(l.text||'')}</div>
       </div>`
     ).join('');
@@ -2564,6 +3126,44 @@ zone.addEventListener('drop', e => {
     onFileSelect({files: e.dataTransfer.files});
   }
 });
+
+// ── History ───────────────────────────────────────────────────────────────────
+let _historyLoaded = false;
+async function loadHistory() {
+  if (_historyLoaded) return;
+  _historyLoaded = true;
+  const res = await fetch('/api/compare/runs');
+  const runs = await res.json();
+  const el = document.getElementById('history-body');
+  if (!runs.length) {
+    el.innerHTML = '<div class="empty-hint"><div class="empty-icon">📋</div>No runs yet.</div>';
+    return;
+  }
+  const rows = runs.map(r => {
+    const ts = new Date(r.ts).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    const overrides = [];
+    if (r.has_outline_override) overrides.push('outline');
+    if (r.has_transcript_override) overrides.push('transcript');
+    const badge = overrides.length
+      ? `<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:var(--accent-light);color:var(--accent)">${overrides.join(', ')} overridden</span>`
+      : `<span style="font-size:10px;padding:1px 7px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">defaults</span>`;
+    const epLinks = [r.episode_id_a, r.episode_id_b].filter(Boolean).map((id,i) =>
+      `<a href="/eval" style="font-size:11px;color:var(--accent);text-decoration:none">${['A','B'][i]} episode ↗</a>`
+    ).join('  ');
+    return `<div style="padding:14px 0;border-bottom:1px solid var(--border);display:flex;align-items:start;gap:16px">
+      <div style="font-size:11px;color:var(--subtle);white-space:nowrap;padding-top:2px">${esc(ts)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.url)}</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--muted)">${esc(r.show_name_a||'')} vs ${esc(r.show_name_b||'')}</span>
+          ${badge}
+          ${epLinks}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div style="border-top:1px solid var(--border)">${rows}</div>`;
+}
 
 // Boot
 loadEpisodes();
