@@ -8,6 +8,7 @@ readme = "README.md"
 dependencies = [
     # LLM
     "anthropic>=0.40",
+    "groq>=0.4",                     # Whisper transcription for eval compare
     "dspy-ai>=2.6",                  # DSPy + GEPA + MIPRO
 
     # Pipeline support

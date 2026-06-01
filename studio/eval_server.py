@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 import uvicorn
 
@@ -1684,6 +1684,892 @@ async def get_job(job_id: str):
     if not job:
         return JSONResponse(content={"error": "Not found"}, status_code=404)
     return JSONResponse(content=job)
+
+
+# ── Compare page ──────────────────────────────────────────────────────────────
+
+_COMPARE_TABLE_READY = False
+
+async def _ensure_compare_table():
+    global _COMPARE_TABLE_READY
+    if _COMPARE_TABLE_READY:
+        return
+    from core.db.connection import db_execute
+    await db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS compare_feedback (
+            id            SERIAL PRIMARY KEY,
+            ts            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            episode_id    TEXT,
+            external_label TEXT,
+            judge_scores  JSONB,
+            user_verdict  TEXT,
+            user_note     TEXT
+        )
+        """,
+        {},
+    )
+    _COMPARE_TABLE_READY = True
+
+
+async def _run_judge(source_text: str, source_insights: dict, transcript_a: str, label_a: str, transcript_b: str, label_b: str) -> dict:
+    """LLM-as-judge: score two transcripts on 5 axes, return structured result."""
+    import anthropic
+
+    AXES = [
+        ("source_fidelity",   "Source Fidelity",   "Accurately represents the source. No hallucinations. Covers the key facts."),
+        ("naturalness",       "Naturalness",        "Sounds like a real podcast monologue — conversational, not academic or essay-like."),
+        ("hook_quality",      "Hook Quality",       "The opening grabs attention. Doesn't start with preamble or self-introduction."),
+        ("coverage",          "Coverage",           "Hits the key insights and tensions from the source material."),
+        ("narrative_arc",     "Narrative Arc",      "Builds toward something. Has momentum and direction, not just information delivery."),
+    ]
+
+    insights_text = "\n".join(f"- {k}: {v}" for k, v in (source_insights or {}).items() if v and str(v).lower() != "null")
+
+    system = """You are an expert podcast quality evaluator. You score two podcast transcripts against each other on specific axes.
+For each axis, give a score 1–5 for each transcript and a one-sentence rationale explaining the difference.
+Then give an overall winner (or "tie") and a 2–3 sentence summary of the key differences.
+Respond in JSON only."""
+
+    human = f"""SOURCE MATERIAL (excerpt, first 3000 chars):
+{source_text[:3000]}
+
+KEY INSIGHTS FROM SOURCE:
+{insights_text or "(none)"}
+
+TRANSCRIPT A — {label_a}:
+{transcript_a[:4000]}
+
+TRANSCRIPT B — {label_b}:
+{transcript_b[:4000]}
+
+Score each axis 1–5 for both transcripts. Return JSON:
+{{
+  "axes": [
+    {{"key": "source_fidelity", "label": "Source Fidelity", "score_a": <1-5>, "score_b": <1-5>, "rationale": "..."}},
+    {{"key": "naturalness", "label": "Naturalness", "score_a": <1-5>, "score_b": <1-5>, "rationale": "..."}},
+    {{"key": "hook_quality", "label": "Hook Quality", "score_a": <1-5>, "score_b": <1-5>, "rationale": "..."}},
+    {{"key": "coverage", "label": "Coverage", "score_a": <1-5>, "score_b": <1-5>, "rationale": "..."}},
+    {{"key": "narrative_arc", "label": "Narrative Arc", "score_a": <1-5>, "score_b": <1-5>, "rationale": "..."}}
+  ],
+  "winner": "A" | "B" | "tie",
+  "summary": "2-3 sentences on key differences"
+}}"""
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"error": "ANTHROPIC_API_KEY not set"}
+
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        system=system,
+        messages=[{"role": "user", "content": human}],
+    )
+    raw = msg.content[0].text.strip()
+    # strip markdown fences if present
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return {"error": "Judge returned invalid JSON", "raw": raw[:500]}
+
+
+@app.post("/api/compare/run")
+async def compare_run(request: Request):
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    show_a = (body.get("show_a") or "clarity_engine").strip()
+    show_b = (body.get("show_b") or "narrative_drift").strip()
+    if not url:
+        return JSONResponse(content={"error": "url required"}, status_code=400)
+    job_a = str(uuid4())
+    job_b = str(uuid4())
+    asyncio.create_task(_run_pipeline(job_a, url, show_a))
+    asyncio.create_task(_run_pipeline(job_b, url, show_b))
+    return JSONResponse(content={"job_a": job_a, "job_b": job_b})
+
+
+@app.post("/api/compare/transcribe")
+async def compare_transcribe(file: UploadFile = File(...)):
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        return JSONResponse(content={"error": "GROQ_API_KEY not set"}, status_code=500)
+    try:
+        from groq import Groq
+        data = await file.read()
+        client = Groq(api_key=groq_key)
+        transcription = client.audio.transcriptions.create(
+            model="whisper-large-v3",
+            file=(file.filename or "audio.mp3", data),
+        )
+        return JSONResponse(content={"transcript": transcription.text})
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.post("/api/compare/judge")
+async def compare_judge(request: Request):
+    body = await request.json()
+    episode_id  = body.get("episode_id", "")
+    transcript_a = body.get("transcript_a", "")
+    label_a      = body.get("label_a", "Curia")
+    transcript_b = body.get("transcript_b", "")
+    label_b      = body.get("label_b", "External")
+    source_text  = body.get("source_text", "")
+    source_insights = body.get("source_insights", {})
+    if not transcript_a or not transcript_b:
+        return JSONResponse(content={"error": "Both transcripts required"}, status_code=400)
+    result = await _run_judge(source_text, source_insights, transcript_a, label_a, transcript_b, label_b)
+    return JSONResponse(content=result)
+
+
+@app.post("/api/compare/feedback")
+async def compare_feedback(request: Request):
+    body = await request.json()
+    await _ensure_compare_table()
+    from core.db.connection import db_execute
+    scores = body.get("judge_scores")
+    await db_execute(
+        """INSERT INTO compare_feedback (episode_id, external_label, judge_scores, user_verdict, user_note)
+           VALUES ($episode_id, $label, $scores::jsonb, $verdict, $note)""",
+        {
+            "episode_id": body.get("episode_id", ""),
+            "label":      body.get("external_label", ""),
+            "scores":     _json.dumps(scores) if scores else "{}",
+            "verdict":    body.get("user_verdict", ""),
+            "note":       body.get("user_note", ""),
+        },
+    )
+    return JSONResponse(content={"ok": True})
+
+
+@app.get("/compare", response_class=HTMLResponse)
+async def compare_page():
+    return HTMLResponse(content=COMPARE_HTML)
+
+
+COMPARE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Curia — Compare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#FAFAF8;
+  --surface:#FFFFFF;
+  --border:#E8E4DF;
+  --border-strong:#D4CFC9;
+  --text:#1a1a1a;
+  --muted:#6B6B6B;
+  --subtle:#9A9590;
+  --accent:#FF6719;
+  --accent-light:#FFF3EE;
+  --accent-mid:#FFD4BC;
+  --good:#16a34a;
+  --good-bg:#F0FDF4;
+  --bad:#dc2626;
+  --bad-bg:#FEF2F2;
+  --blue:#2563eb;
+  --blue-bg:#EFF6FF;
+  --radius:10px;
+  --shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:0 4px 12px rgba(0,0,0,.08),0 2px 4px rgba(0,0,0,.04);
+}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+/* ── Header ── */
+header{
+  background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 32px;height:56px;display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:50;
+}
+.logo{display:flex;align-items:baseline;gap:10px}
+.logo-name{font-family:'Lora',Georgia,serif;font-size:18px;font-weight:700;color:var(--text)}
+.logo-badge{
+  font-size:11px;font-weight:600;letter-spacing:.04em;
+  padding:2px 8px;border-radius:20px;
+  background:var(--accent-light);color:var(--accent)
+}
+nav{display:flex;gap:20px;align-items:center}
+nav a{font-size:13px;color:var(--muted);text-decoration:none;transition:color .15s}
+nav a:hover{color:var(--accent)}
+
+/* ── Tabs ── */
+.tabs-bar{
+  background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 32px;display:flex;gap:4px
+}
+.tab-btn{
+  padding:14px 20px;font-size:13px;font-weight:500;color:var(--muted);
+  background:none;border:none;cursor:pointer;position:relative;transition:color .15s;
+  border-bottom:2px solid transparent;margin-bottom:-1px
+}
+.tab-btn:hover{color:var(--text)}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ── Layout ── */
+.tab-panel{display:none;padding:32px;max-width:1200px;margin:0 auto}
+.tab-panel.active{display:block}
+
+/* ── Section headers ── */
+.section-eyebrow{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle);margin-bottom:8px}
+.section-title{font-family:'Lora',Georgia,serif;font-size:22px;font-weight:600;margin-bottom:6px}
+.section-sub{font-size:14px;color:var(--muted);margin-bottom:28px;line-height:1.6}
+
+/* ── Cards ── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+
+/* ── Config row ── */
+.config-card{padding:24px;margin-bottom:28px}
+.config-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.config-row input[type=url]{
+  flex:1;min-width:280px;padding:10px 14px;
+  border:1px solid var(--border);border-radius:8px;
+  font-size:14px;background:var(--surface);color:var(--text);
+  transition:border-color .15s,box-shadow .15s
+}
+.config-row input[type=url]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-light)}
+.config-field{display:flex;flex-direction:column;gap:5px}
+.config-field label{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--subtle)}
+select{
+  padding:10px 14px;border:1px solid var(--border);border-radius:8px;
+  font-size:13px;background:var(--surface);color:var(--text);cursor:pointer;
+  appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239A9590'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;
+  transition:border-color .15s
+}
+select:focus{outline:none;border-color:var(--accent)}
+.btn-primary{
+  padding:10px 22px;background:var(--accent);color:#fff;border:none;border-radius:8px;
+  font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .15s,transform .1s
+}
+.btn-primary:hover{background:#e85c10}
+.btn-primary:active{transform:scale(.98)}
+.btn-primary:disabled{background:#D4CFC9;cursor:not-allowed}
+.btn-secondary{
+  padding:9px 18px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;
+  font-size:13px;font-weight:500;cursor:pointer;transition:all .15s
+}
+.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── Two-column compare ── */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.col-label{
+  font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--subtle);padding:16px 20px 10px;border-bottom:1px solid var(--border)
+}
+.col-label.col-a{color:var(--blue)}
+.col-label.col-b{color:#7c3aed}
+.col-body{padding:20px;font-size:14px;line-height:1.8;color:var(--text)}
+.col-body pre{font-size:13px;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+
+/* ── Progress steps ── */
+.steps-list{list-style:none;padding:16px 20px;display:flex;flex-direction:column;gap:8px}
+.step{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
+.step.done{color:var(--good)}.step.running{color:var(--accent)}.step.error{color:var(--bad)}
+.step-icon{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
+.step.done .step-icon{background:var(--good-bg);color:var(--good)}
+.step.running .step-icon{background:var(--accent-light);color:var(--accent)}
+.step.error .step-icon{background:var(--bad-bg);color:var(--bad)}
+.step.pending .step-icon{background:#f3f0ed;color:var(--subtle)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin-icon{display:inline-block;animation:spin .7s linear infinite}
+
+/* ── Episode result within column ── */
+.result-section{border-top:1px solid var(--border);padding:20px}
+.result-section-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle);margin-bottom:8px}
+.result-title{font-family:'Lora',Georgia,serif;font-size:17px;font-weight:600;margin-bottom:6px}
+.result-thread{font-size:13px;color:var(--muted);font-style:italic;line-height:1.6;margin-bottom:14px}
+.transcript-block{font-size:13px;line-height:1.9;color:var(--text);max-height:420px;overflow-y:auto}
+.transcript-line{margin-bottom:14px}
+.transcript-speaker{font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--subtle);margin-bottom:3px}
+.transcript-text{color:var(--text)}
+
+/* ── External compare ── */
+.ext-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px}
+
+/* ── Upload zone ── */
+.upload-zone{
+  border:2px dashed var(--border-strong);border-radius:var(--radius);padding:28px 20px;
+  text-align:center;cursor:pointer;transition:all .2s;background:var(--bg);position:relative
+}
+.upload-zone:hover,.upload-zone.drag-over{border-color:var(--accent);background:var(--accent-light)}
+.upload-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-zone-icon{font-size:24px;margin-bottom:8px;color:var(--muted)}
+.upload-zone-text{font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px}
+.upload-zone-sub{font-size:12px;color:var(--muted)}
+.upload-filename{margin-top:8px;font-size:12px;color:var(--accent);font-weight:500}
+
+/* ── Episode picker ── */
+.episode-picker-card{padding:20px;margin-bottom:20px}
+.episode-picker-label{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--subtle);margin-bottom:8px}
+#episode-select{width:100%}
+
+/* ── Status bar ── */
+.status-bar{
+  display:none;padding:12px 16px;border-radius:8px;font-size:13px;
+  align-items:center;gap:10px;margin-bottom:16px
+}
+.status-bar.running{display:flex;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-mid)}
+.status-bar.error{display:flex;background:var(--bad-bg);color:var(--bad);border:1px solid #fecaca}
+.status-bar.done{display:flex;background:var(--good-bg);color:var(--good);border:1px solid #bbf7d0}
+
+/* ── Judge panel ── */
+.judge-card{margin-bottom:24px}
+.judge-header{
+  padding:18px 24px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between
+}
+.judge-title{font-family:'Lora',Georgia,serif;font-size:17px;font-weight:600}
+.judge-subtitle{font-size:13px;color:var(--muted);margin-top:2px}
+.judge-body{padding:20px 24px}
+.axis-row{
+  display:grid;grid-template-columns:140px 1fr 1fr 1fr;gap:12px;align-items:start;
+  padding:14px 0;border-bottom:1px solid var(--border)
+}
+.axis-row:last-child{border-bottom:none}
+.axis-name{font-size:13px;font-weight:600;color:var(--text);padding-top:2px}
+.score-cell{text-align:center}
+.score-label{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--subtle);margin-bottom:6px}
+.score-pip-row{display:flex;gap:3px;justify-content:center;margin-bottom:4px}
+.score-pip{width:14px;height:14px;border-radius:3px;background:var(--border)}
+.score-pip.filled-a{background:var(--blue)}
+.score-pip.filled-b{background:#7c3aed}
+.score-num{font-size:18px;font-weight:700}
+.score-num.col-a{color:var(--blue)}
+.score-num.col-b{color:#7c3aed}
+.axis-rationale{font-size:12px;color:var(--muted);line-height:1.6;padding-top:2px}
+.judge-winner{
+  margin-top:16px;padding:16px 20px;border-radius:8px;
+  background:var(--accent-light);border:1px solid var(--accent-mid)
+}
+.judge-winner-label{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.judge-winner-text{font-size:14px;line-height:1.7;color:var(--text)}
+.axes-header{
+  display:grid;grid-template-columns:140px 1fr 1fr 1fr;gap:12px;
+  padding:0 0 10px;border-bottom:2px solid var(--border-strong);margin-bottom:4px
+}
+.axes-header span{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--subtle);text-align:center}
+.axes-header span:first-child{text-align:left}
+
+/* ── User feedback ── */
+.feedback-card{margin-bottom:24px}
+.feedback-body{padding:20px 24px}
+.verdict-row{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.verdict-btn{
+  padding:8px 18px;border-radius:20px;font-size:13px;font-weight:500;
+  border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .15s
+}
+.verdict-btn:hover{border-color:var(--border-strong);color:var(--text)}
+.verdict-btn.sel-a{background:var(--blue-bg);border-color:var(--blue);color:var(--blue)}
+.verdict-btn.sel-b{background:#f5f3ff;border-color:#7c3aed;color:#7c3aed}
+.verdict-btn.sel-tie{background:var(--accent-light);border-color:var(--accent);color:var(--accent)}
+.feedback-note{
+  width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;
+  font-size:13px;font-family:inherit;resize:vertical;min-height:72px;
+  color:var(--text);transition:border-color .15s;margin-bottom:12px
+}
+.feedback-note:focus{outline:none;border-color:var(--accent)}
+.saved-confirm{display:none;color:var(--good);font-size:13px;font-weight:500;margin-top:8px}
+.saved-confirm.show{display:block}
+
+/* ── Empty states ── */
+.empty-hint{
+  padding:40px 20px;text-align:center;color:var(--subtle);font-size:14px;line-height:1.7
+}
+.empty-icon{font-size:32px;margin-bottom:12px;opacity:.5}
+
+/* ── Transcript compare side-by-side ── */
+.compare-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <span class="logo-name">Curia</span>
+    <span class="logo-badge">compare</span>
+  </div>
+  <nav>
+    <a href="/eval">← Eval</a>
+    <a href="/eval/export.csv">Export CSV</a>
+  </nav>
+</header>
+
+<div class="tabs-bar">
+  <button class="tab-btn active" id="tab-btn-format" onclick="switchTab('format')">Format A vs B</button>
+  <button class="tab-btn" id="tab-btn-external" onclick="switchTab('external')">vs External</button>
+</div>
+
+<!-- ── Tab: Format A vs B ── -->
+<div class="tab-panel active" id="tab-format">
+  <div class="section-eyebrow">Output comparison</div>
+  <h2 class="section-title">Format A vs B</h2>
+  <p class="section-sub">Run the same article through two different show formats and compare the output side by side.</p>
+
+  <div class="card config-card">
+    <div class="config-row">
+      <input type="url" id="fmt-url" placeholder="https://…" style="flex:2">
+      <div class="config-field">
+        <label>Format A</label>
+        <select id="show-a">
+          <option value="clarity_engine">clarity_engine</option>
+          <option value="narrative_drift">narrative_drift</option>
+          <option value="momentum_loop">momentum_loop</option>
+          <option value="exploration_engine">exploration_engine</option>
+        </select>
+      </div>
+      <div class="config-field">
+        <label>Format B</label>
+        <select id="show-b">
+          <option value="narrative_drift">narrative_drift</option>
+          <option value="clarity_engine">clarity_engine</option>
+          <option value="momentum_loop">momentum_loop</option>
+          <option value="exploration_engine">exploration_engine</option>
+        </select>
+      </div>
+      <button class="btn-primary" id="fmt-btn" onclick="runFormats()">Compare →</button>
+    </div>
+  </div>
+
+  <div class="two-col" id="fmt-cols" style="display:none">
+    <div class="card" id="fmt-col-a">
+      <div class="col-label col-a" id="fmt-label-a">Format A</div>
+      <ul class="steps-list" id="fmt-steps-a"></ul>
+      <div id="fmt-result-a"></div>
+    </div>
+    <div class="card" id="fmt-col-b">
+      <div class="col-label col-b" id="fmt-label-b">Format B</div>
+      <ul class="steps-list" id="fmt-steps-b"></ul>
+      <div id="fmt-result-b"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tab: vs External ── -->
+<div class="tab-panel" id="tab-external">
+  <div class="section-eyebrow">Pairwise comparison</div>
+  <h2 class="section-title">Curia vs External</h2>
+  <p class="section-sub">Upload an MP3 from NotebookLM or another tool. We transcribe it, run an LLM judge, and let you record your verdict.</p>
+
+  <!-- Episode picker + upload -->
+  <div class="ext-grid">
+    <div class="card episode-picker-card">
+      <div class="episode-picker-label">Select episode</div>
+      <select id="episode-select" onchange="onEpisodeSelect()">
+        <option value="">Loading episodes…</option>
+      </select>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="episode-picker-label">Upload external MP3</div>
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="mp3-file" accept="audio/*,video/mp4" onchange="onFileSelect(this)">
+        <div class="upload-zone-icon">🎙</div>
+        <div class="upload-zone-text">Drop MP3 here or click to upload</div>
+        <div class="upload-zone-sub">NotebookLM, Wondercraft, etc.</div>
+        <div class="upload-filename" id="upload-filename"></div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <input type="text" id="ext-label" placeholder='Label (e.g. "NotebookLM")' style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        <button class="btn-primary" id="transcribe-btn" onclick="transcribeAudio()" disabled>Transcribe →</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar" id="ext-status"></div>
+
+  <!-- Side-by-side transcripts -->
+  <div class="compare-cols" id="ext-transcripts" style="display:none">
+    <div class="card">
+      <div class="col-label col-a" id="curia-col-label">Curia</div>
+      <div class="col-body" id="curia-transcript-body">
+        <div class="empty-hint"><div class="empty-icon">📄</div>Select an episode above</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="col-label col-b" id="ext-col-label">External</div>
+      <div class="col-body" id="ext-transcript-body">
+        <div class="empty-hint"><div class="empty-icon">🎙</div>Upload and transcribe an MP3 above</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Judge panel -->
+  <div class="card judge-card" id="judge-card" style="display:none">
+    <div class="judge-header">
+      <div>
+        <div class="judge-title">LLM Judge</div>
+        <div class="judge-subtitle">Scores both transcripts on 5 axes using Claude</div>
+      </div>
+      <button class="btn-primary" id="judge-btn" onclick="runJudge()">Run judge →</button>
+    </div>
+    <div class="judge-body" id="judge-body">
+      <div class="empty-hint" style="padding:20px 0">Judge hasn't run yet. Both transcripts must be loaded first.</div>
+    </div>
+  </div>
+
+  <!-- User feedback -->
+  <div class="card feedback-card" id="feedback-card" style="display:none">
+    <div class="judge-header">
+      <div>
+        <div class="judge-title">Your verdict</div>
+        <div class="judge-subtitle">Override or confirm the judge's assessment</div>
+      </div>
+    </div>
+    <div class="feedback-body">
+      <div class="verdict-row">
+        <button class="verdict-btn" id="vb-a" onclick="setVerdict('curia')">Curia better</button>
+        <button class="verdict-btn" id="vb-b" onclick="setVerdict('external')">External better</button>
+        <button class="verdict-btn" id="vb-tie" onclick="setVerdict('tie')">About equal</button>
+      </div>
+      <textarea class="feedback-note" id="feedback-note" placeholder="Notes — what was different? what worked?"></textarea>
+      <button class="btn-primary" onclick="submitFeedback()">Save verdict →</button>
+      <div class="saved-confirm" id="saved-confirm">✓ Saved</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.getElementById('tab-btn-' + name).classList.add('active');
+}
+
+// ── Format A vs B ─────────────────────────────────────────────────────────────
+let fmtPollA = null, fmtPollB = null;
+
+async function runFormats() {
+  const url = document.getElementById('fmt-url').value.trim();
+  if (!url) { alert('Enter a URL'); return; }
+  const showA = document.getElementById('show-a').value;
+  const showB = document.getElementById('show-b').value;
+  document.getElementById('fmt-btn').disabled = true;
+  document.getElementById('fmt-cols').style.display = 'grid';
+  document.getElementById('fmt-label-a').textContent = showA;
+  document.getElementById('fmt-label-b').textContent = showB;
+  document.getElementById('fmt-steps-a').innerHTML = '';
+  document.getElementById('fmt-steps-b').innerHTML = '';
+  document.getElementById('fmt-result-a').innerHTML = '';
+  document.getElementById('fmt-result-b').innerHTML = '';
+  if (fmtPollA) clearTimeout(fmtPollA);
+  if (fmtPollB) clearTimeout(fmtPollB);
+
+  const res = await fetch('/api/compare/run', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({url, show_a: showA, show_b: showB})
+  });
+  const {job_a, job_b} = await res.json();
+  pollFmtJob(job_a, 'a');
+  pollFmtJob(job_b, 'b');
+}
+
+function pollFmtJob(jobId, side) {
+  setTimeout(async () => {
+    const res = await fetch('/api/jobs/' + jobId);
+    const data = await res.json();
+    renderSteps(data.steps || [], 'fmt-steps-' + side);
+    if (data.status === 'done') {
+      document.getElementById('fmt-btn').disabled = false;
+      if (data.episode_id) loadEpisodeIntoColumn(data.episode_id, side);
+    } else if (data.status === 'error') {
+      document.getElementById('fmt-btn').disabled = false;
+      const err = document.createElement('div');
+      err.style.cssText = 'padding:14px 20px;color:var(--bad);font-size:13px';
+      err.textContent = data.message || 'Error';
+      document.getElementById('fmt-result-' + side).appendChild(err);
+    } else {
+      pollFmtJob(jobId, side);
+    }
+  }, 2000);
+}
+
+async function loadEpisodeIntoColumn(episodeId, side) {
+  const res = await fetch('/api/episodes/' + episodeId);
+  const ep = await res.json();
+  const container = document.getElementById('fmt-result-' + side);
+  container.innerHTML = '';
+
+  const outline = ep.outline || {};
+  const lines = Array.isArray(ep.transcript) ? ep.transcript : [];
+
+  const div = document.createElement('div');
+
+  if (outline.title) {
+    div.innerHTML += `<div class="result-section">
+      <div class="result-section-label">Episode</div>
+      <div class="result-title">${esc(outline.title)}</div>
+      ${outline.thread ? `<div class="result-thread">${esc(outline.thread)}</div>` : ''}
+    </div>`;
+  }
+
+  if (lines.length) {
+    const transcriptHtml = lines.map(l =>
+      `<div class="transcript-line">
+        <div class="transcript-speaker">${esc(l.speaker||'Host')}</div>
+        <div class="transcript-text">${esc(l.text||'')}</div>
+      </div>`
+    ).join('');
+    div.innerHTML += `<div class="result-section">
+      <div class="result-section-label">Transcript</div>
+      <div class="transcript-block">${transcriptHtml}</div>
+    </div>`;
+  }
+  container.appendChild(div);
+}
+
+function renderSteps(steps, elId) {
+  const el = document.getElementById(elId);
+  el.innerHTML = steps.map(s => {
+    const iconMap = {done:'✓', running:'↻', error:'✕', pending:'·'};
+    const icon = s.status === 'running'
+      ? `<span class="spin-icon">↻</span>`
+      : (iconMap[s.status] || '·');
+    return `<li class="step ${s.status||'pending'}">
+      <span class="step-icon">${icon}</span>
+      <span>${esc(s.text)}</span>
+    </li>`;
+  }).join('');
+}
+
+// ── vs External ───────────────────────────────────────────────────────────────
+let curiaEpisode = null;
+let externalTranscript = '';
+let externalLabel = '';
+let userVerdict = '';
+let judgeResult = null;
+
+async function loadEpisodes() {
+  const res = await fetch('/api/episodes');
+  const episodes = await res.json();
+  const sel = document.getElementById('episode-select');
+  sel.innerHTML = '<option value="">— select an episode —</option>' +
+    (episodes || []).map(ep =>
+      `<option value="${esc(ep.id)}">${esc(ep.title || ep.show_name || ep.id)} · ${esc(new Date(ep.created_at).toLocaleDateString())}</option>`
+    ).join('');
+}
+
+async function onEpisodeSelect() {
+  const id = document.getElementById('episode-select').value;
+  if (!id) return;
+  setExtStatus('running', 'Loading episode…');
+  const res = await fetch('/api/episodes/' + id);
+  curiaEpisode = await res.json();
+  setExtStatus('', '');
+
+  const lines = Array.isArray(curiaEpisode.transcript) ? curiaEpisode.transcript : [];
+  const bodyEl = document.getElementById('curia-transcript-body');
+  if (lines.length) {
+    bodyEl.innerHTML = lines.map(l =>
+      `<div class="transcript-line">
+        <div class="transcript-speaker">${esc(l.speaker||'Host')}</div>
+        <div class="transcript-text">${esc(l.text||'')}</div>
+      </div>`
+    ).join('');
+  } else {
+    bodyEl.innerHTML = `<div class="empty-hint">No transcript available for this episode.</div>`;
+  }
+
+  const label = document.getElementById('episode-select').selectedOptions[0]?.text || 'Curia';
+  document.getElementById('curia-col-label').textContent = 'Curia — ' + label.split(' · ')[0];
+  document.getElementById('ext-transcripts').style.display = 'grid';
+  checkShowJudge();
+}
+
+function onFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('upload-filename').textContent = file.name;
+  document.getElementById('transcribe-btn').disabled = false;
+  const zone = document.getElementById('upload-zone');
+  zone.style.borderColor = 'var(--accent)';
+  zone.style.background = 'var(--accent-light)';
+}
+
+async function transcribeAudio() {
+  const fileInput = document.getElementById('mp3-file');
+  if (!fileInput.files[0]) return;
+  const label = document.getElementById('ext-label').value.trim() || fileInput.files[0].name.replace(/\.[^.]+$/, '');
+  externalLabel = label;
+
+  document.getElementById('transcribe-btn').disabled = true;
+  setExtStatus('running', 'Transcribing via Groq Whisper… this may take a minute');
+
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+
+  try {
+    const res = await fetch('/api/compare/transcribe', {method:'POST', body:fd});
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    externalTranscript = data.transcript;
+    setExtStatus('done', 'Transcription complete');
+    document.getElementById('ext-transcript-body').innerHTML =
+      `<div style="font-size:13px;line-height:1.9;white-space:pre-wrap;color:var(--text)">${esc(externalTranscript)}</div>`;
+    document.getElementById('ext-col-label').textContent = 'External — ' + label;
+    document.getElementById('ext-transcripts').style.display = 'grid';
+    checkShowJudge();
+  } catch(e) {
+    setExtStatus('error', e.message);
+    document.getElementById('transcribe-btn').disabled = false;
+  }
+}
+
+function checkShowJudge() {
+  const hasEp = !!curiaEpisode;
+  const hasExt = !!externalTranscript;
+  document.getElementById('judge-card').style.display = (hasEp || hasExt) ? '' : 'none';
+  document.getElementById('feedback-card').style.display = (hasEp || hasExt) ? '' : 'none';
+}
+
+async function runJudge() {
+  if (!curiaEpisode || !externalTranscript) {
+    alert('Load both a Curia episode and an external transcript first.');
+    return;
+  }
+  document.getElementById('judge-btn').disabled = true;
+  document.getElementById('judge-body').innerHTML = `<div class="empty-hint"><span class="spin-icon" style="font-size:20px">↻</span><br><br>Running judge…</div>`;
+
+  const lines = Array.isArray(curiaEpisode.transcript) ? curiaEpisode.transcript : [];
+  const curiaText = lines.map(l => l.text || '').join('\n\n');
+  const sourceText = curiaEpisode.source?.full_text || '';
+  const insights = curiaEpisode.source?.insights || {};
+  const epLabel = document.getElementById('episode-select').selectedOptions[0]?.text?.split(' · ')[0] || 'Curia';
+
+  try {
+    const res = await fetch('/api/compare/judge', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        episode_id: curiaEpisode.id,
+        transcript_a: curiaText,
+        label_a: 'Curia (' + epLabel + ')',
+        transcript_b: externalTranscript,
+        label_b: externalLabel || 'External',
+        source_text: sourceText,
+        source_insights: insights,
+      })
+    });
+    judgeResult = await res.json();
+    renderJudge(judgeResult, epLabel, externalLabel || 'External');
+  } catch(e) {
+    document.getElementById('judge-body').innerHTML = `<div style="color:var(--bad);padding:12px 0;font-size:13px">${esc(e.message)}</div>`;
+  }
+  document.getElementById('judge-btn').disabled = false;
+}
+
+function renderJudge(result, labelA, labelB) {
+  if (result.error) {
+    document.getElementById('judge-body').innerHTML = `<div style="color:var(--bad);padding:12px 0;font-size:13px">Judge error: ${esc(result.error)}</div>`;
+    return;
+  }
+
+  const axes = result.axes || [];
+  let html = `<div class="axes-header">
+    <span>Axis</span>
+    <span style="color:var(--blue)">${esc(labelA)}</span>
+    <span style="color:#7c3aed">${esc(labelB)}</span>
+    <span>Rationale</span>
+  </div>`;
+
+  axes.forEach(ax => {
+    const pipsA = Array.from({length:5}, (_,i) =>
+      `<div class="score-pip ${i < ax.score_a ? 'filled-a' : ''}"></div>`).join('');
+    const pipsB = Array.from({length:5}, (_,i) =>
+      `<div class="score-pip ${i < ax.score_b ? 'filled-b' : ''}"></div>`).join('');
+    html += `<div class="axis-row">
+      <div class="axis-name">${esc(ax.label)}</div>
+      <div class="score-cell">
+        <div class="score-pip-row">${pipsA}</div>
+        <div class="score-num col-a">${ax.score_a}/5</div>
+      </div>
+      <div class="score-cell">
+        <div class="score-pip-row">${pipsB}</div>
+        <div class="score-num col-b">${ax.score_b}/5</div>
+      </div>
+      <div class="axis-rationale">${esc(ax.rationale)}</div>
+    </div>`;
+  });
+
+  if (result.winner && result.summary) {
+    const winnerLabel = result.winner === 'A' ? labelA : result.winner === 'B' ? labelB : 'Tie';
+    html += `<div class="judge-winner">
+      <div class="judge-winner-label">Winner: ${esc(winnerLabel)}</div>
+      <div class="judge-winner-text">${esc(result.summary)}</div>
+    </div>`;
+  }
+
+  document.getElementById('judge-body').innerHTML = html;
+}
+
+function setVerdict(v) {
+  userVerdict = v;
+  document.getElementById('vb-a').className = 'verdict-btn' + (v==='curia' ? ' sel-a' : '');
+  document.getElementById('vb-b').className = 'verdict-btn' + (v==='external' ? ' sel-b' : '');
+  document.getElementById('vb-tie').className = 'verdict-btn' + (v==='tie' ? ' sel-tie' : '');
+}
+
+async function submitFeedback() {
+  if (!userVerdict) { alert('Select a verdict first.'); return; }
+  const note = document.getElementById('feedback-note').value;
+  await fetch('/api/compare/feedback', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      episode_id: curiaEpisode?.id || '',
+      external_label: externalLabel,
+      judge_scores: judgeResult,
+      user_verdict: userVerdict,
+      user_note: note,
+    })
+  });
+  const conf = document.getElementById('saved-confirm');
+  conf.classList.add('show');
+  setTimeout(() => conf.classList.remove('show'), 2500);
+}
+
+function setExtStatus(type, msg) {
+  const el = document.getElementById('ext-status');
+  el.className = 'status-bar' + (type ? ' ' + type : '');
+  el.innerHTML = type === 'running'
+    ? `<span class="spin-icon" style="font-size:16px">↻</span> ${esc(msg)}`
+    : esc(msg);
+}
+
+// Upload drag-over
+const zone = document.getElementById('upload-zone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) {
+    document.getElementById('mp3-file').files = e.dataTransfer.files;
+    onFileSelect({files: e.dataTransfer.files});
+  }
+});
+
+// Boot
+loadEpisodes();
+</script>
+</body>
+</html>"""
 
 
 if __name__ == "__main__":

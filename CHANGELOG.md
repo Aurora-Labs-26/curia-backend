@@ -4,6 +4,17 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-01 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+New `/compare` page in `studio/eval_server.py` — Substack-inspired UI with two tabs:
+- **`studio/eval_server.py`** — Tab "Format A vs B": run same URL through two show formats in parallel, compare outline + transcript side-by-side
+- **`studio/eval_server.py`** — Tab "vs External": upload competitor MP3 (NotebookLM etc.), transcribe via Groq Whisper, compare with Curia transcript, run LLM judge (5 axes: fidelity, naturalness, hook, coverage, narrative arc), save user verdict to `compare_feedback` table
+- **`studio/eval_server.py`** — `POST /api/compare/run`, `/api/compare/transcribe`, `/api/compare/judge`, `/api/compare/feedback` endpoints
+- **`pyproject.toml`** — added `groq>=0.4` for Whisper transcription
+
+---
+
 ## 2026-05-29 · Arihant + Claude (claude-opus-4-6)
 
 ### Feature
