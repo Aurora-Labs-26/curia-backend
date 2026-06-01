@@ -1929,13 +1929,15 @@ async def _ensure_compare_table():
     await db_execute(
         """
         CREATE TABLE IF NOT EXISTS compare_feedback (
-            id            SERIAL PRIMARY KEY,
-            ts            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            episode_id    TEXT,
-            external_label TEXT,
-            judge_scores  JSONB,
-            user_verdict  TEXT,
-            user_note     TEXT
+            id                 SERIAL PRIMARY KEY,
+            ts                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            episode_id         TEXT,
+            external_label     TEXT,
+            curia_transcript   TEXT,
+            external_transcript TEXT,
+            judge_scores       JSONB,
+            user_verdict       TEXT,
+            user_note          TEXT
         )
         """,
         {},
@@ -2236,12 +2238,23 @@ async def compare_feedback(request: Request):
     await _ensure_compare_table()
     from core.db.connection import db_execute
     scores = body.get("judge_scores")
+    # Add new columns if table was created before this change
+    for col in ("curia_transcript TEXT", "external_transcript TEXT"):
+        try:
+            from core.db.connection import db_execute as _dbe
+            await _dbe(f"ALTER TABLE compare_feedback ADD COLUMN IF NOT EXISTS {col}", {})
+        except Exception:
+            pass
     await db_execute(
-        """INSERT INTO compare_feedback (episode_id, external_label, judge_scores, user_verdict, user_note)
-           VALUES ($episode_id, $label, $scores::jsonb, $verdict, $note)""",
+        """INSERT INTO compare_feedback
+               (episode_id, external_label, curia_transcript, external_transcript,
+                judge_scores, user_verdict, user_note)
+           VALUES ($episode_id, $label, $curia_t, $ext_t, $scores::jsonb, $verdict, $note)""",
         {
             "episode_id": body.get("episode_id", ""),
             "label":      body.get("external_label", ""),
+            "curia_t":    body.get("curia_transcript", ""),
+            "ext_t":      body.get("external_transcript", ""),
             "scores":     _json.dumps(scores) if scores else "{}",
             "verdict":    body.get("user_verdict", ""),
             "note":       body.get("user_note", ""),
@@ -3439,15 +3452,19 @@ function setVerdict(v) {
 async function submitFeedback() {
   if (!userVerdict) { alert('Select a verdict first.'); return; }
   const note = document.getElementById('feedback-note').value;
+  const lines = Array.isArray(curiaEpisode?.transcript) ? curiaEpisode.transcript : [];
+  const curiaText = lines.map(l => l.text || '').join('\n\n');
   await fetch('/api/compare/feedback', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
-      episode_id: curiaEpisode?.id || '',
-      external_label: externalLabel,
-      judge_scores: judgeResult,
-      user_verdict: userVerdict,
-      user_note: note,
+      episode_id:          curiaEpisode?.id || '',
+      external_label:      externalLabel,
+      curia_transcript:    curiaText,
+      external_transcript: externalTranscript,
+      judge_scores:        judgeResult,
+      user_verdict:        userVerdict,
+      user_note:           note,
     })
   });
   const conf = document.getElementById('saved-confirm');
