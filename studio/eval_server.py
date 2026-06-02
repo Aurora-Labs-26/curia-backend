@@ -2302,6 +2302,94 @@ async def compare_transcribe(file: UploadFile = File(...)):
     return JSONResponse(content={"error": groq_err or "No fallback available"}, status_code=500)
 
 
+@app.post("/api/compare/youtube-transcript")
+async def youtube_transcript(request: Request):
+    """Fetch transcript for a YouTube URL via usetranscribe.io (no API key required)."""
+    import re
+    import httpx
+
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    if not url:
+        return JSONResponse(content={"error": "url required"}, status_code=400)
+
+    # Extract video ID
+    m = re.search(r'(?:v=|youtu\.be/|shorts/)([a-zA-Z0-9_-]{11})', url)
+    if not m:
+        return JSONResponse(content={"error": "Could not extract YouTube video ID from URL"}, status_code=400)
+    video_id = m.group(1)
+
+    BASE = "https://www.usetranscribe.io"
+    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CuriaEval/1.0)"}
+
+    async def _fetch_transcript(vid: str) -> dict:
+        async with httpx.AsyncClient(timeout=30, headers=HEADERS) as client:
+            resp = await client.get(f"{BASE}/yt/{vid}?format=json")
+            resp.raise_for_status()
+            data = resp.json()
+        # Extract plain text from segments
+        segments = data.get("segments") or data.get("transcript") or []
+        if isinstance(segments, list):
+            # Segments may be [{text, start, end}] or [{text}]
+            plain = " ".join(
+                (s.get("text") or s.get("content") or "").strip()
+                for s in segments if isinstance(s, dict)
+            ).strip()
+        else:
+            plain = str(segments)
+        return {
+            "transcript": plain,
+            "title": data.get("title") or "",
+            "duration": data.get("duration") or 0,
+            "video_id": vid,
+        }
+
+    try:
+        # Step 1: cache check
+        async with httpx.AsyncClient(timeout=10, headers=HEADERS) as client:
+            check = await client.get(f"{BASE}/api/check?platform=youtube&id={video_id}")
+            cached = check.json().get("cached", False)
+
+        if cached:
+            return JSONResponse(content={**(await _fetch_transcript(video_id)), "source": "cache"})
+
+        # Step 2: trigger transcription via SSE, wait for completion
+        done = False
+        error_msg = None
+        async with httpx.AsyncClient(timeout=300, headers=HEADERS) as client:
+            async with client.stream("GET", f"{BASE}/transcribe?url={url}&summarize=0") as resp:
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if not raw or raw == "[DONE]":
+                        continue
+                    try:
+                        evt = _json.loads(raw)
+                    except Exception:
+                        continue
+                    stage = evt.get("stage") or evt.get("type") or ""
+                    if stage in ("done", "complete", "ready") or evt.get("permalink"):
+                        done = True
+                        break
+                    if stage == "error" or evt.get("error"):
+                        error_msg = evt.get("message") or evt.get("error") or "Transcription failed"
+                        break
+
+        if error_msg:
+            return JSONResponse(content={"error": error_msg}, status_code=500)
+
+        if not done:
+            return JSONResponse(content={"error": "Transcription did not complete"}, status_code=500)
+
+        return JSONResponse(content={**(await _fetch_transcript(video_id)), "source": "fresh"})
+
+    except httpx.TimeoutException:
+        return JSONResponse(content={"error": "Transcription timed out (max 5 min). Try again or use a shorter video."}, status_code=504)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 @app.post("/api/compare/judge")
 async def compare_judge(request: Request):
     body = await request.json()
@@ -2985,17 +3073,38 @@ select:focus{outline:none;border-color:var(--accent)}
       </select>
     </div>
     <div class="card" style="padding:16px">
-      <div class="episode-picker-label" style="margin-bottom:8px">External transcript (optional)</div>
-      <div class="upload-zone" id="upload-zone">
-        <input type="file" id="mp3-file" accept="audio/*,video/mp4,text/plain,.txt,.md" onchange="onFileSelect(this)">
-        <div class="upload-zone-icon">🎙</div>
-        <div class="upload-zone-text">MP3 or text file (.txt)</div>
-        <div class="upload-zone-sub">NotebookLM, Wondercraft, plain transcript…</div>
-        <div class="upload-filename" id="upload-filename"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="episode-picker-label" style="margin-bottom:0">External transcript (optional)</div>
+        <div style="display:flex;gap:4px">
+          <button id="src-tab-file" class="analysis-mode-btn selected-structured" onclick="switchExtSource('file')" style="font-size:10px;padding:2px 9px">File</button>
+          <button id="src-tab-youtube" class="analysis-mode-btn" onclick="switchExtSource('youtube')" style="font-size:10px;padding:2px 9px">YouTube</button>
+        </div>
       </div>
-      <div style="margin-top:10px;display:flex;gap:8px">
-        <input type="text" id="ext-label" placeholder='Label (e.g. "NotebookLM")' style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-        <button class="btn-primary" id="transcribe-btn" onclick="transcribeAudio()" disabled>Load →</button>
+
+      <!-- File upload panel -->
+      <div id="ext-source-file">
+        <div class="upload-zone" id="upload-zone">
+          <input type="file" id="mp3-file" accept="audio/*,video/mp4,text/plain,.txt,.md" onchange="onFileSelect(this)">
+          <div class="upload-zone-icon">🎙</div>
+          <div class="upload-zone-text">MP3 or text file (.txt)</div>
+          <div class="upload-zone-sub">NotebookLM, Wondercraft, plain transcript…</div>
+          <div class="upload-filename" id="upload-filename"></div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <input type="text" id="ext-label" placeholder='Label (e.g. "NotebookLM")' style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <button class="btn-primary" id="transcribe-btn" onclick="transcribeAudio()" disabled>Load →</button>
+        </div>
+      </div>
+
+      <!-- YouTube URL panel -->
+      <div id="ext-source-youtube" style="display:none">
+        <input type="url" id="yt-url" placeholder="https://youtube.com/watch?v=..." oninput="onYtUrlInput()"
+          style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:8px;box-sizing:border-box">
+        <div style="display:flex;gap:8px">
+          <input type="text" id="yt-label" placeholder='Label (e.g. "NotebookLM podcast")' style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <button class="btn-primary" id="yt-btn" onclick="fetchYoutubeTranscript()" disabled>Get transcript →</button>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--subtle)">Powered by usetranscribe.io · max 90 min · no API key needed</div>
       </div>
     </div>
   </div>
@@ -4071,6 +4180,52 @@ async function loadHistory() {
     </div>`;
   }).join('');
   el.innerHTML = `<div style="border-top:1px solid var(--border)">${rows}</div>`;
+}
+
+function switchExtSource(tab) {
+  document.getElementById('ext-source-file').style.display    = tab === 'file'    ? '' : 'none';
+  document.getElementById('ext-source-youtube').style.display = tab === 'youtube' ? '' : 'none';
+  document.getElementById('src-tab-file').className    = 'analysis-mode-btn' + (tab === 'file'    ? ' selected-structured' : '');
+  document.getElementById('src-tab-youtube').className = 'analysis-mode-btn' + (tab === 'youtube' ? ' selected-evaluate'   : '');
+}
+
+function onYtUrlInput() {
+  const url = document.getElementById('yt-url').value.trim();
+  const valid = /(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/.test(url);
+  document.getElementById('yt-btn').disabled = !valid;
+}
+
+async function fetchYoutubeTranscript() {
+  const url   = document.getElementById('yt-url').value.trim();
+  const label = document.getElementById('yt-label').value.trim() || 'YouTube';
+  externalLabel = label;
+
+  document.getElementById('yt-btn').disabled = true;
+  setExtStatus('running', 'Fetching transcript… may take 1–3 min for uncached videos');
+
+  try {
+    const res = await fetch('/api/compare/youtube-transcript', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url})
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    externalTranscript = data.transcript;
+    const src = data.source === 'cache' ? ' (cached)' : '';
+    setExtStatus('done', `Transcript loaded${src} · ${data.title || ''}`);
+    document.getElementById('ext-transcript-body').innerHTML =
+      `<div style="font-size:13px;line-height:1.9;white-space:pre-wrap;color:var(--text)">${esc(externalTranscript)}</div>`;
+    document.getElementById('ext-col-label').textContent = 'External — ' + label;
+    // Set file key for cache: use video_id
+    _extFileKey = `yt:${data.video_id || url}`;
+    _showExtCard('external', true);
+    checkShowJudge();
+  } catch(e) {
+    setExtStatus('error', e.message);
+  }
+  document.getElementById('yt-btn').disabled = false;
 }
 
 function toggleTranscript(side) {
