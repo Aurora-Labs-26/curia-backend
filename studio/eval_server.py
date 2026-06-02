@@ -2266,10 +2266,11 @@ async def compare_judge(request: Request):
 
 @app.post("/api/compare/analyze-structure")
 async def analyze_structure(request: Request):
-    """Unsupervised narrative structure analysis for a single transcript."""
+    """Narrative structure analysis. mode='structured' uses a taxonomy; mode='open' is fully unsupervised."""
     body = await request.json()
     transcript_text = (body.get("transcript") or "").strip()
     label           = (body.get("label") or "Transcript").strip()
+    mode            = (body.get("mode") or "structured").strip()
     if not transcript_text:
         return JSONResponse(content={"error": "transcript required"}, status_code=400)
 
@@ -2281,19 +2282,52 @@ async def analyze_structure(request: Request):
 
     system = """You are an expert narrative analyst specializing in audio content and podcasts.
 Your job is to identify the natural narrative structure of a transcript — not the topic, but what each section is *doing* to the listener narratively.
-Find where the story's intention shifts. Each boundary is where the listener is being asked to feel or think something different.
+Find where the story's intention shifts. Each boundary is where the listener is being asked to feel or think something differently.
 Return only valid JSON, no prose."""
 
-    human = f"""Analyze the narrative structure of this transcript. Find 4–8 natural narrative segments.
+    if mode == "open":
+        human = f"""Read this transcript and find where the narrative intention shifts.
+
+Do NOT use standard labels (Hook, Stakes, etc.) or podcast/essay terminology.
+Name each section in your own words — describe what it's genuinely doing.
+If you observe something that doesn't have a common name, invent a phrase that captures it precisely.
+Let the structure tell you what it is; don't fit it to a template.
+
+For each section:
+- Where it sits in the transcript (approximate % range)
+- Your name for what it's doing — in plain language, not jargon
+- One sentence: what is this section doing to the listener?
+- One short quoted sentence from the section as an anchor
+
+Also describe the overall shape of the piece in 1–2 sentences — what kind of journey does the listener go on?
+
+TRANSCRIPT ({label}):
+{transcript_text[:6000]}
+
+Return JSON:
+{{
+  "arc_pattern": "your own name for the overall shape",
+  "arc_description": "1-2 sentences describing the listener's journey",
+  "segments": [
+    {{
+      "position": "0-20%",
+      "role": "your own label in plain language",
+      "function": "one sentence — what it does to the listener",
+      "anchor_quote": "short quote"
+    }}
+  ]
+}}"""
+    else:
+        human = f"""Analyze the narrative structure of this transcript. Find 4–8 natural narrative segments.
 
 For each segment:
-- Identify where it starts (approximate line or position as fraction e.g. "0–15%" of transcript)
+- Identify where it sits (approximate % range, e.g. "0–20%")
 - Give it a role label. Use from this taxonomy where it fits, or create your own label if none fit:
-  Hook | Context | Stakes | Mechanism | Complication | Pivot | Resolution | Outro | other custom label
+  Hook | Context | Stakes | Mechanism | Complication | Pivot | Resolution | Outro
 - Write one sentence describing what this segment is doing to the listener (not what it's about — what it's *doing*)
 - Quote 1 short sentence from the segment as an anchor
 
-Also identify the overall arc pattern (e.g. "revelation arc", "problem-solution", "journey", "argument", "portrait", etc.) and write 1–2 sentences describing the shape of the whole piece.
+Also identify the overall arc pattern (e.g. "revelation arc", "problem-solution", "journey", "argument", "portrait") and write 1–2 sentences on the shape of the whole piece.
 
 TRANSCRIPT ({label}):
 {transcript_text[:6000]}
@@ -2316,7 +2350,7 @@ Return JSON:
         client = anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1200,
+            max_tokens=1400,
             system=system,
             messages=[{"role": "user", "content": human}],
         )
@@ -2325,7 +2359,9 @@ Return JSON:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        return JSONResponse(content=_json.loads(raw.strip()))
+        result = _json.loads(raw.strip())
+        result["mode"] = mode
+        return JSONResponse(content=result)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
@@ -2848,14 +2884,20 @@ select:focus{outline:none;border-color:var(--accent)}
       <div class="card" id="ext-curia-card" style="display:none">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="col-label col-a" id="curia-col-label" style="border-bottom:none;padding-bottom:0">Curia</div>
-          <button class="btn-primary" id="analyze-curia-btn" style="margin:12px 16px;padding:6px 14px;font-size:12px" onclick="analyzeStructure('curia')">Analyze narrative →</button>
+          <div style="display:flex;gap:6px;margin:10px 16px">
+            <button class="btn-secondary" id="analyze-curia-structured-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('curia','structured')">Structured</button>
+            <button class="btn-secondary" id="analyze-curia-open-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('curia','open')">Open</button>
+          </div>
         </div>
         <div class="col-body" id="curia-transcript-body"></div>
       </div>
       <div class="card" id="ext-external-card" style="display:none">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="col-label col-b" id="ext-col-label" style="border-bottom:none;padding-bottom:0">External</div>
-          <button class="btn-primary" id="analyze-ext-btn" style="margin:12px 16px;padding:6px 14px;font-size:12px" onclick="analyzeStructure('external')">Analyze narrative →</button>
+          <div style="display:flex;gap:6px;margin:10px 16px">
+            <button class="btn-secondary" id="analyze-ext-structured-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('external','structured')">Structured</button>
+            <button class="btn-secondary" id="analyze-ext-open-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('external','open')">Open</button>
+          </div>
         </div>
         <div class="col-body" id="ext-transcript-body"></div>
       </div>
@@ -3538,13 +3580,13 @@ function checkShowJudge() {
 }
 
 // ── Narrative structure analysis ──────────────────────────────────────────────
+// _narrativeResults: { 'curia:structured': {label, result}, 'curia:open': ..., 'external:structured': ..., ... }
 const _narrativeResults = {};
 
-async function analyzeStructure(side) {
-  const btnId = side === 'curia' ? 'analyze-curia-btn' : 'analyze-ext-btn';
+async function analyzeStructure(side, mode) {
+  const btnId = `analyze-${side}-${mode}-btn`;
   const btn = document.getElementById(btnId);
-  btn.disabled = true;
-  btn.textContent = '↻ Analyzing…';
+  if (btn) { btn.disabled = true; btn.textContent = '↻'; }
 
   let text = '';
   let label = '';
@@ -3558,8 +3600,7 @@ async function analyzeStructure(side) {
   }
 
   if (!text.trim()) {
-    btn.disabled = false;
-    btn.textContent = 'Analyze narrative →';
+    if (btn) { btn.disabled = false; btn.textContent = mode === 'open' ? 'Open' : 'Structured'; }
     return;
   }
 
@@ -3567,50 +3608,65 @@ async function analyzeStructure(side) {
     const res = await fetch('/api/compare/analyze-structure', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({transcript: text, label})
+      body: JSON.stringify({transcript: text, label, mode})
     });
     const result = await res.json();
-    _narrativeResults[side] = {label, result};
+    _narrativeResults[`${side}:${mode}`] = {side, label, mode, result};
     renderNarrativePanels();
-    btn.textContent = '↺ Re-analyze';
-  } catch(e) {
-    btn.textContent = 'Analyze narrative →';
-  }
-  btn.disabled = false;
+  } catch(e) { /* silent */ }
+  if (btn) { btn.disabled = false; btn.textContent = mode === 'open' ? 'Open' : 'Structured'; }
+}
+
+function _buildNarrativeCard(entry) {
+  const {side, label, mode, result} = entry;
+  if (result.error) return `<div class="card" style="padding:16px;color:var(--bad);font-size:13px">Error: ${esc(result.error)}</div>`;
+
+  const colorVar = side === 'curia' ? 'var(--blue)' : 'var(--purple)';
+  const modeLabel = mode === 'open'
+    ? `<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">open</span>`
+    : `<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:${colorVar}15;color:${colorVar}">structured</span>`;
+
+  const segs = (result.segments || []).map(s => `
+    <div style="padding:11px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+        <span style="font-size:10px;font-weight:700;padding:1px 8px;border-radius:10px;background:${colorVar}18;color:${colorVar}">${esc(s.role)}</span>
+        <span style="font-size:10px;color:var(--subtle)">${esc(s.position||'')}</span>
+      </div>
+      <div style="font-size:13px;color:var(--text);margin-bottom:3px">${esc(s.function||'')}</div>
+      ${s.anchor_quote ? `<div style="font-size:11px;color:var(--muted);font-style:italic;padding-left:10px;border-left:2px solid var(--border)">"${esc(s.anchor_quote)}"</div>` : ''}
+    </div>`).join('');
+
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+      <span style="font-size:13px;font-weight:700;color:${colorVar}">${esc(label)}</span>
+      ${modeLabel}
+      <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(result.arc_pattern||'')}</span>
+    </div>
+    <div style="padding:10px 18px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6">${esc(result.arc_description||'')}</div>
+    <div style="padding:0 18px">${segs}</div>
+  </div>`;
 }
 
 function renderNarrativePanels() {
-  const container = document.getElementById('narrative-cols');
-  const sides = Object.keys(_narrativeResults);
-  if (!sides.length) return;
-
+  const allKeys = Object.keys(_narrativeResults);
+  if (!allKeys.length) return;
   document.getElementById('narrative-panels').style.display = '';
-  container.style.gridTemplateColumns = sides.length > 1 ? '1fr 1fr' : '1fr';
 
-  container.innerHTML = sides.map(side => {
-    const {label, result} = _narrativeResults[side];
-    if (result.error) return `<div class="card" style="padding:20px;color:var(--bad);font-size:13px">Error: ${esc(result.error)}</div>`;
+  // Group by side: curia keys vs external keys
+  const curiaKeys = allKeys.filter(k => k.startsWith('curia:'));
+  const extKeys   = allKeys.filter(k => k.startsWith('external:'));
+  const hasBoth   = curiaKeys.length && extKeys.length;
 
-    const colorVar = side === 'curia' ? 'var(--blue)' : 'var(--purple)';
-    const segs = (result.segments || []).map((s, i) => `
-      <div style="padding:12px 0;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="font-size:10px;font-weight:700;padding:1px 8px;border-radius:10px;background:${colorVar}20;color:${colorVar}">${esc(s.role)}</span>
-          <span style="font-size:10px;color:var(--subtle)">${esc(s.position || '')}</span>
-        </div>
-        <div style="font-size:13px;color:var(--text);margin-bottom:4px">${esc(s.function || '')}</div>
-        ${s.anchor_quote ? `<div style="font-size:11px;color:var(--muted);font-style:italic;padding-left:10px;border-left:2px solid var(--border)">"${esc(s.anchor_quote)}"</div>` : ''}
-      </div>`).join('');
+  const container = document.getElementById('narrative-cols');
+  container.style.gridTemplateColumns = hasBoth ? '1fr 1fr' : '1fr';
 
-    return `<div class="card">
-      <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:8px">
-        <span style="font-size:13px;font-weight:700;color:${colorVar}">${esc(label)}</span>
-        <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(result.arc_pattern || '')}</span>
-      </div>
-      <div style="padding:12px 18px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6">${esc(result.arc_description || '')}</div>
-      <div style="padding:0 18px">${segs}</div>
-    </div>`;
-  }).join('');
+  const renderSide = keys => keys.map(k => _buildNarrativeCard(_narrativeResults[k])).join('');
+
+  if (hasBoth) {
+    container.innerHTML = `<div>${renderSide(curiaKeys)}</div><div>${renderSide(extKeys)}</div>`;
+  } else {
+    container.innerHTML = renderSide([...curiaKeys, ...extKeys]);
+  }
 }
 
 function toggleJudgePrompt() {
