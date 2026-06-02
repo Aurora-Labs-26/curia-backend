@@ -2323,7 +2323,7 @@ async def youtube_transcript(request: Request):
     HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CuriaEval/1.0)"}
 
     async def _fetch_transcript(vid: str) -> dict:
-        async with httpx.AsyncClient(timeout=30, headers=HEADERS) as client:
+        async with httpx.AsyncClient(timeout=30, headers=HEADERS, follow_redirects=True) as client:
             resp = await client.get(f"{BASE}/yt/{vid}?format=json")
             resp.raise_for_status()
             data = resp.json()
