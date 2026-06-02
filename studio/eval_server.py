@@ -2327,16 +2327,22 @@ async def youtube_transcript(request: Request):
             resp = await client.get(f"{BASE}/yt/{vid}?format=json")
             resp.raise_for_status()
             data = resp.json()
-        # Extract plain text from segments
+        # Extract and clean plain text from segments
         segments = data.get("segments") or data.get("transcript") or []
         if isinstance(segments, list):
-            # Segments may be [{text, start, end}] or [{text}]
-            plain = " ".join(
-                (s.get("text") or s.get("content") or "").strip()
-                for s in segments if isinstance(s, dict)
-            ).strip()
+            parts = []
+            for s in segments:
+                if not isinstance(s, dict):
+                    continue
+                t = (s.get("text") or s.get("content") or "")
+                # Clean: non-breaking spaces → space, collapse whitespace/newlines
+                t = t.replace("\xa0", " ").replace("\n", " ")
+                t = " ".join(t.split()).strip()
+                if t:
+                    parts.append(t)
+            plain = " ".join(parts).strip()
         else:
-            plain = str(segments)
+            plain = str(segments).replace("\xa0", " ")
         return {
             "transcript": plain,
             "title": data.get("title") or "",
