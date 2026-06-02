@@ -146,7 +146,11 @@ async def _save_job(job_id: str, data: dict):
     from core.db.connection import db_execute
     _jobs[job_id] = data
     # extra holds large pipeline state: source_id, show_name, briefing, outline
-    extra = {k: data[k] for k in ("source_id", "show_name", "briefing", "outline") if k in data}
+    extra = {k: data[k] for k in (
+        "source_id", "show_name", "briefing", "outline",
+        "outline_duration_s", "outline_output_tokens",
+        "transcript_duration_s", "transcript_output_tokens",
+    ) if k in data}
     await db_execute(
         """
         INSERT INTO eval_job (id, status, message, episode_id, steps, extra, updated_at)
@@ -337,10 +341,21 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
             await _step_done()
 
             await _step_start("Generating outline")
+            import time as _time
+            from dspy.utils.usage_tracker import track_usage as _track_usage
             from studio.generator import generate_outline
-            outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
-            await _step_done()
 
+            _t0 = _time.time()
+            with _track_usage() as _tracker:
+                outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
+            _ol_duration = round(_time.time() - _t0, 2)
+            _ol_tokens = sum(
+                v.get("completion_tokens") or v.get("output_tokens") or 0
+                for v in _tracker.get_total_tokens().values()
+            )
+
+            if steps:
+                steps[-1] = {"text": f"Outline done · {_ol_duration}s · {_ol_tokens:,} tokens", "status": "done"}
             await _save_job(job_id, {
                 "status": "outline_done",
                 "source_id": source_id,
@@ -348,6 +363,8 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
                 "show_name": show_name,
                 "briefing": briefing,
                 "outline": outline,
+                "outline_duration_s": _ol_duration,
+                "outline_output_tokens": _ol_tokens,
                 "steps": list(steps),
             })
             return
@@ -1760,9 +1777,22 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
     await _save_job(job_id, {**job, "status": "running", "steps": steps})
 
     try:
-        transcript = generate_transcript(
-            briefing, outline, show_name,
-            prompt_override=transcript_prompt_override,
+        import time as _time
+        from dspy.utils.usage_tracker import track_usage as _track_usage
+
+        _t0 = _time.time()
+        with _track_usage() as _tracker:
+            transcript = generate_transcript(
+                briefing, outline, show_name,
+                prompt_override=transcript_prompt_override,
+            )
+        _duration_s = round(_time.time() - _t0, 2)
+
+        # Extract output tokens from tracker
+        _total = _tracker.get_total_tokens()
+        _output_tokens = sum(
+            v.get("completion_tokens") or v.get("output_tokens") or 0
+            for v in _total.values()
         )
 
         # Persist to episode row (create or update)
@@ -1794,9 +1824,11 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
                 {"id": episode_id, "transcript": _js.dumps(transcript)},
             )
 
-        steps[-1]["status"] = "done"
+        steps[-1] = {"text": f"Transcript done · {_duration_s}s · {_output_tokens:,} output tokens", "status": "done"}
         await _save_job(job_id, {**job, "status": "done", "episode_id": episode_id,
-                                  "steps": steps, "transcript": transcript})
+                                  "steps": steps, "transcript": transcript,
+                                  "transcript_duration_s": _duration_s,
+                                  "transcript_output_tokens": _output_tokens})
         return episode_id
 
     except Exception as e:
@@ -3150,10 +3182,10 @@ function pollFmtJob(jobId, side, phase) {
       }
     } else if (data.status === 'done') {
       document.getElementById('fmt-btn').disabled = false;
-      if (data.episode_id) loadEpisodeIntoColumn(data.episode_id, side);
+      if (data.episode_id) loadEpisodeIntoColumn(data.episode_id, side, data);
       if (side === 'b') {
         showRerunButton('transcript');
-        refreshSidebar(); // episode_id now stored — update sidebar
+        refreshSidebar();
       }
       if (side === 'b' && document.getElementById('transcript-btn'))
         document.getElementById('transcript-btn').disabled = false;
@@ -3203,7 +3235,7 @@ function renderOutlineInColumn(outline, side) {
   container.appendChild(div);
 }
 
-async function loadEpisodeIntoColumn(episodeId, side) {
+async function loadEpisodeIntoColumn(episodeId, side, jobData) {
   const res = await fetch('/api/episodes/' + episodeId);
   const ep = await res.json();
   const container = document.getElementById('fmt-result-' + side);
@@ -3213,6 +3245,22 @@ async function loadEpisodeIntoColumn(episodeId, side) {
   const lines = Array.isArray(ep.transcript) ? ep.transcript : [];
 
   const div = document.createElement('div');
+
+  // Stats bar (timing + tokens)
+  if (jobData) {
+    const dur   = jobData.transcript_duration_s;
+    const toks  = jobData.transcript_output_tokens;
+    const cost  = toks ? (toks * 15 / 1_000_000).toFixed(4) : null;
+    const parts = [];
+    if (dur)  parts.push(`${dur}s`);
+    if (toks) parts.push(`${toks.toLocaleString()} output tokens`);
+    if (cost) parts.push(`~$${cost}`);
+    if (parts.length) {
+      div.innerHTML += `<div style="padding:8px 20px;font-size:11px;color:var(--muted);background:var(--bg);border-bottom:1px solid var(--border);display:flex;gap:12px">
+        ${parts.map(p => `<span>${esc(p)}</span>`).join('<span style="color:var(--border-strong)">·</span>')}
+      </div>`;
+    }
+  }
 
   if (outline.title) {
     div.innerHTML += `<div class="result-section">
