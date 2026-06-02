@@ -1869,6 +1869,60 @@ async def _rerun_outline_step(job_id: str, outline_prompt_override: str | None =
 
 _COMPARE_TABLE_READY = False
 _COMPARE_RUN_TABLE_READY = False
+_NARRATIVE_TABLE_READY = False
+
+async def _ensure_narrative_table():
+    global _NARRATIVE_TABLE_READY
+    if _NARRATIVE_TABLE_READY:
+        return
+    from core.db.connection import db_execute
+    await db_execute(
+        """
+        CREATE TABLE IF NOT EXISTS narrative_analysis (
+            id         SERIAL PRIMARY KEY,
+            ts         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source_key TEXT NOT NULL,
+            mode       TEXT NOT NULL,
+            label      TEXT,
+            result     JSONB NOT NULL,
+            UNIQUE (source_key, mode)
+        )
+        """,
+        {},
+    )
+    _NARRATIVE_TABLE_READY = True
+
+
+async def _get_cached_narrative(source_key: str, mode: str) -> dict | None:
+    try:
+        await _ensure_narrative_table()
+        from core.db.connection import db_fetchrow
+        row = await db_fetchrow(
+            "SELECT result FROM narrative_analysis WHERE source_key = $key AND mode = $mode",
+            {"key": source_key, "mode": mode},
+        )
+        if row:
+            r = row["result"]
+            return _json.loads(r) if isinstance(r, str) else r
+    except Exception:
+        pass
+    return None
+
+
+async def _store_narrative(source_key: str, mode: str, label: str, result: dict):
+    try:
+        await _ensure_narrative_table()
+        from core.db.connection import db_execute
+        await db_execute(
+            """INSERT INTO narrative_analysis (source_key, mode, label, result)
+               VALUES ($key, $mode, $label, $result::jsonb)
+               ON CONFLICT (source_key, mode) DO UPDATE
+               SET result = EXCLUDED.result, ts = NOW(), label = EXCLUDED.label""",
+            {"key": source_key, "mode": mode, "label": label,
+             "result": _json.dumps(result)},
+        )
+    except Exception:
+        pass
 
 async def _ensure_compare_run_table():
     global _COMPARE_RUN_TABLE_READY
@@ -2271,8 +2325,16 @@ async def analyze_structure(request: Request):
     transcript_text = (body.get("transcript") or "").strip()
     label           = (body.get("label") or "Transcript").strip()
     mode            = (body.get("mode") or "structured").strip()
+    source_key      = (body.get("source_key") or "").strip()
     if not transcript_text:
         return JSONResponse(content={"error": "transcript required"}, status_code=400)
+
+    # Cache check
+    if source_key:
+        cached = await _get_cached_narrative(source_key, mode)
+        if cached:
+            cached["cached"] = True
+            return JSONResponse(content=cached)
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -2361,6 +2423,9 @@ Return JSON:
                 raw = raw[4:]
         result = _json.loads(raw.strip())
         result["mode"] = mode
+        result["cached"] = False
+        if source_key:
+            await _store_narrative(source_key, mode, label, result)
         return JSONResponse(content=result)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -3520,6 +3585,8 @@ function onFileSelect(input) {
   const zone = document.getElementById('upload-zone');
   zone.style.borderColor = 'var(--accent)';
   zone.style.background = 'var(--accent-light)';
+  // Build file key for cache lookup: name + size + lastModified
+  _extFileKey = `${file.name}:${file.size}:${file.lastModified}`;
 }
 
 function _isTextFile(file) {
@@ -3582,6 +3649,13 @@ function checkShowJudge() {
 // ── Narrative structure analysis ──────────────────────────────────────────────
 // _narrativeResults: { 'curia:structured': {label, result}, 'curia:open': ..., 'external:structured': ..., ... }
 const _narrativeResults = {};
+let _extFileKey = '';  // set when a file is selected
+
+function _buildSourceKey(side) {
+  if (side === 'curia' && curiaEpisode?.id) return `episode:${curiaEpisode.id}`;
+  if (side === 'external' && _extFileKey) return `file:${_extFileKey}`;
+  return '';
+}
 
 async function analyzeStructure(side, mode) {
   const btnId = `analyze-${side}-${mode}-btn`;
@@ -3604,15 +3678,18 @@ async function analyzeStructure(side, mode) {
     return;
   }
 
+  const source_key = _buildSourceKey(side);
+
   try {
     const res = await fetch('/api/compare/analyze-structure', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({transcript: text, label, mode})
+      body: JSON.stringify({transcript: text, label, mode, source_key})
     });
     const result = await res.json();
     _narrativeResults[`${side}:${mode}`] = {side, label, mode, result};
     renderNarrativePanels();
+    if (btn) btn.title = result.cached ? 'Loaded from cache' : 'Fresh analysis';
   } catch(e) { /* silent */ }
   if (btn) { btn.disabled = false; btn.textContent = mode === 'open' ? 'Open' : 'Structured'; }
 }
@@ -3625,6 +3702,9 @@ function _buildNarrativeCard(entry) {
   const modeLabel = mode === 'open'
     ? `<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">open</span>`
     : `<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:${colorVar}15;color:${colorVar}">structured</span>`;
+  const cacheLabel = result.cached
+    ? `<span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--good-bg);color:var(--good)">cached</span>`
+    : '';
 
   const segs = (result.segments || []).map(s => `
     <div style="padding:11px 0;border-bottom:1px solid var(--border)">
@@ -3640,6 +3720,7 @@ function _buildNarrativeCard(entry) {
     <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
       <span style="font-size:13px;font-weight:700;color:${colorVar}">${esc(label)}</span>
       ${modeLabel}
+      ${cacheLabel}
       <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(result.arc_pattern||'')}</span>
     </div>
     <div style="padding:10px 18px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6">${esc(result.arc_description||'')}</div>
