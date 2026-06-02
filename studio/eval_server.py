@@ -2347,7 +2347,42 @@ Your job is to identify the natural narrative structure of a transcript — not 
 Find where the story's intention shifts. Each boundary is where the listener is being asked to feel or think something differently.
 Return only valid JSON, no prose."""
 
-    if mode == "open":
+    if mode == "evaluate":
+        human = f"""You are analyzing the narrative structure of a podcast transcript. Your job is to reverse-engineer the structural logic — not evaluate content quality, just structure.
+
+Read the full transcript carefully and answer the following 8 questions. Return a single JSON object with the exact keys shown.
+
+TRANSCRIPT ({label}):
+{transcript_text[:7000]}
+
+Return this JSON (fill every field — no nulls, use "unclear" if genuinely uncertain):
+{{
+  "segment_mapping": [
+    {{
+      "segment": 1,
+      "role": "what this segment is doing narratively",
+      "position": "0–20% of transcript",
+      "transition": "how it moves into the next segment"
+    }}
+  ],
+  "opening": {{
+    "first_sentence": "exact first sentence or very close paraphrase",
+    "type": "one of: claim | question | scene | fact | contrast | other",
+    "time_to_clarity": "how long before you know what the episode is about"
+  }},
+  "closing": {{
+    "description": "how it ends — exact words or close paraphrase",
+    "type": "one of: summarize | reflect | open_question | take_position | trail_off",
+    "energy": "one of: up | down | flat"
+  }},
+  "world_knowledge": "Does the host stay strictly inside the source material or bring in outside connections? If outside knowledge appears, at what point and is it labeled or blended?",
+  "fact_opinion": "Does the episode distinguish between factual claims and editorial opinion? How — explicitly flagged, tonal shift, or not at all?",
+  "pacing": "Roughly how many distinct beats or ideas per minute? Does it re-hook mid-episode or assume you're staying? Where does attention risk dipping?",
+  "format_contract": "One sentence: what was this episode's implicit promise to the listener? What job was it hired to do?",
+  "limitations": "What listener intent would this structure fail to serve? What would a user want that this format could not deliver?"
+}}"""
+
+    elif mode == "open":
         human = f"""Read this transcript and find where the narrative intention shifts.
 
 Do NOT use standard labels (Hook, Stakes, etc.) or podcast/essay terminology.
@@ -2410,9 +2445,12 @@ Return JSON:
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
+        # Evaluate mode needs more depth — use Sonnet; structured/open are fine on Haiku
+        model = "claude-sonnet-4-6" if mode == "evaluate" else "claude-haiku-4-5-20251001"
+        max_tok = 2400 if mode == "evaluate" else 1400
         msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1400,
+            model=model,
+            max_tokens=max_tok,
             system=system,
             messages=[{"role": "user", "content": human}],
         )
@@ -2627,6 +2665,11 @@ select:focus{outline:none;border-color:var(--accent)}
 .transcript-block{font-size:13px;line-height:1.9;color:var(--text);max-height:420px;overflow-y:auto}
 
 /* ── Prompt lab sidebar ── */
+.analysis-mode-btn{padding:5px 12px;font-size:11px;font-weight:500;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;transition:all .12s}
+.analysis-mode-btn:hover{border-color:var(--border-strong);color:var(--text)}
+.analysis-mode-btn.selected-structured{background:#EFF6FF;border-color:var(--blue);color:var(--blue)}
+.analysis-mode-btn.selected-open{background:#f3f0ed;border-color:var(--border-strong);color:var(--text)}
+.analysis-mode-btn.selected-evaluate{background:var(--accent-light);border-color:var(--accent);color:var(--accent)}
 .plab-run{padding:9px 10px;border-radius:7px;cursor:pointer;margin-bottom:2px;transition:background .12s;border:1px solid transparent}
 .plab-run:hover{background:var(--bg)}
 .plab-run.slot-a{background:var(--blue-bg);border-color:#bfdbfe}
@@ -2949,9 +2992,13 @@ select:focus{outline:none;border-color:var(--accent)}
       <div class="card" id="ext-curia-card" style="display:none">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="col-label col-a" id="curia-col-label" style="border-bottom:none;padding-bottom:0">Curia</div>
-          <div style="display:flex;gap:6px;margin:10px 16px">
-            <button class="btn-secondary" id="analyze-curia-structured-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('curia','structured')">Structured</button>
-            <button class="btn-secondary" id="analyze-curia-open-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('curia','open')">Open</button>
+          <div style="padding:10px 16px 12px">
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <button class="analysis-mode-btn" id="mode-curia-structured" data-side="curia" data-mode="structured" onclick="selectAnalysisMode('curia','structured')">Structured</button>
+              <button class="analysis-mode-btn" id="mode-curia-open" data-side="curia" data-mode="open" onclick="selectAnalysisMode('curia','open')">Open</button>
+              <button class="analysis-mode-btn" id="mode-curia-evaluate" data-side="curia" data-mode="evaluate" onclick="selectAnalysisMode('curia','evaluate')">Evaluate</button>
+            </div>
+            <button class="btn-primary" id="run-curia-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('curia', _selectedMode['curia'])">Run analysis →</button>
           </div>
         </div>
         <div class="col-body" id="curia-transcript-body"></div>
@@ -2959,9 +3006,13 @@ select:focus{outline:none;border-color:var(--accent)}
       <div class="card" id="ext-external-card" style="display:none">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="col-label col-b" id="ext-col-label" style="border-bottom:none;padding-bottom:0">External</div>
-          <div style="display:flex;gap:6px;margin:10px 16px">
-            <button class="btn-secondary" id="analyze-ext-structured-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('external','structured')">Structured</button>
-            <button class="btn-secondary" id="analyze-ext-open-btn" style="padding:5px 12px;font-size:11px" onclick="analyzeStructure('external','open')">Open</button>
+          <div style="padding:10px 16px 12px">
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <button class="analysis-mode-btn" id="mode-external-structured" data-side="external" data-mode="structured" onclick="selectAnalysisMode('external','structured')">Structured</button>
+              <button class="analysis-mode-btn" id="mode-external-open" data-side="external" data-mode="open" onclick="selectAnalysisMode('external','open')">Open</button>
+              <button class="analysis-mode-btn" id="mode-external-evaluate" data-side="external" data-mode="evaluate" onclick="selectAnalysisMode('external','evaluate')">Evaluate</button>
+            </div>
+            <button class="btn-primary" id="run-external-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('external', _selectedMode['external'])">Run analysis →</button>
           </div>
         </div>
         <div class="col-body" id="ext-transcript-body"></div>
@@ -3650,6 +3701,24 @@ function checkShowJudge() {
 // _narrativeResults: { 'curia:structured': {label, result}, 'curia:open': ..., 'external:structured': ..., ... }
 const _narrativeResults = {};
 let _extFileKey = '';  // set when a file is selected
+const _selectedMode = {curia: null, external: null};
+
+function selectAnalysisMode(side, mode) {
+  _selectedMode[side] = mode;
+  // Update button styles
+  ['structured','open','evaluate'].forEach(m => {
+    const btn = document.getElementById(`mode-${side}-${m}`);
+    if (btn) {
+      btn.className = 'analysis-mode-btn' + (m === mode ? ` selected-${mode}` : '');
+    }
+  });
+  // Show run button
+  const runBtn = document.getElementById(`run-${side}-btn`);
+  if (runBtn) {
+    runBtn.style.display = '';
+    runBtn.textContent = mode === 'evaluate' ? 'Run evaluation →' : 'Run analysis →';
+  }
+}
 
 function _buildSourceKey(side) {
   if (side === 'curia' && curiaEpisode?.id) return `episode:${curiaEpisode.id}`;
@@ -3658,9 +3727,8 @@ function _buildSourceKey(side) {
 }
 
 async function analyzeStructure(side, mode) {
-  const btnId = `analyze-${side}-${mode}-btn`;
-  const btn = document.getElementById(btnId);
-  if (btn) { btn.disabled = true; btn.textContent = '↻'; }
+  const runBtn = document.getElementById(`run-${side}-btn`);
+  if (runBtn) { runBtn.disabled = true; runBtn.textContent = '↻ Running…'; }
 
   let text = '';
   let label = '';
@@ -3674,7 +3742,7 @@ async function analyzeStructure(side, mode) {
   }
 
   if (!text.trim()) {
-    if (btn) { btn.disabled = false; btn.textContent = mode === 'open' ? 'Open' : 'Structured'; }
+    if (runBtn) { runBtn.disabled = false; runBtn.textContent = mode === 'evaluate' ? 'Run evaluation →' : 'Run analysis →'; }
     return;
   }
 
@@ -3689,9 +3757,9 @@ async function analyzeStructure(side, mode) {
     const result = await res.json();
     _narrativeResults[`${side}:${mode}`] = {side, label, mode, result};
     renderNarrativePanels();
-    if (btn) btn.title = result.cached ? 'Loaded from cache' : 'Fresh analysis';
+    if (runBtn) runBtn.title = result.cached ? 'Loaded from cache' : 'Fresh analysis';
   } catch(e) { /* silent */ }
-  if (btn) { btn.disabled = false; btn.textContent = mode === 'open' ? 'Open' : 'Structured'; }
+  if (runBtn) { runBtn.disabled = false; runBtn.textContent = mode === 'evaluate' ? 'Run evaluation →' : 'Run analysis →'; }
 }
 
 function _buildNarrativeCard(entry) {
@@ -3699,9 +3767,59 @@ function _buildNarrativeCard(entry) {
   if (result.error) return `<div class="card" style="padding:16px;color:var(--bad);font-size:13px">Error: ${esc(result.error)}</div>`;
 
   const colorVar = side === 'curia' ? 'var(--blue)' : 'var(--purple)';
-  const modeLabel = mode === 'open'
-    ? `<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">open</span>`
-    : `<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:${colorVar}15;color:${colorVar}">structured</span>`;
+  const modeColors = {structured: colorVar, open: 'var(--subtle)', evaluate: 'var(--accent)'};
+  const modeBgs   = {structured: `${colorVar}15`, open: '#f3f0ed', evaluate: 'var(--accent-light)'};
+  const modeLabel = `<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:10px;background:${modeBgs[mode]||modeBgs.structured};color:${modeColors[mode]||colorVar}">${mode}</span>`;
+
+  // Evaluate mode gets a different layout
+  if (mode === 'evaluate') {
+    const sections = [
+      {key: 'opening', label: 'Opening'},
+      {key: 'closing', label: 'Closing'},
+      {key: 'world_knowledge', label: 'World knowledge vs source'},
+      {key: 'fact_opinion', label: 'Fact vs opinion'},
+      {key: 'pacing', label: 'Pacing'},
+      {key: 'format_contract', label: 'Format contract'},
+      {key: 'limitations', label: 'Limitations'},
+    ];
+    const cacheLabel2 = result.cached ? `<span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--good-bg);color:var(--good)">cached</span>` : '';
+
+    // Segment mapping table
+    const segs = (result.segment_mapping || []).map((s,i) => `
+      <div style="padding:9px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+          <span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--accent-light);color:var(--accent)">Seg ${s.segment||i+1}</span>
+          <span style="font-size:10px;color:var(--subtle)">${esc(s.position||'')}</span>
+        </div>
+        <div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:2px">${esc(s.role||'')}</div>
+        <div style="font-size:11px;color:var(--muted)">↳ ${esc(s.transition||'')}</div>
+      </div>`).join('');
+
+    const prose = sections.map(({key, label: lbl}) => {
+      let val = result[key];
+      if (typeof val === 'object' && val !== null) {
+        val = Object.entries(val).map(([k,v]) => `<span style="font-weight:600">${esc(k)}:</span> ${esc(String(v))}`).join(' &nbsp;·&nbsp; ');
+      } else {
+        val = esc(String(val || ''));
+      }
+      return `<div style="padding:11px 0;border-bottom:1px solid var(--border)">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--subtle);margin-bottom:4px">${esc(lbl)}</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.6">${val}</div>
+      </div>`;
+    }).join('');
+
+    return `<div class="card" style="margin-bottom:12px">
+      <div style="padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+        <span style="font-size:13px;font-weight:700;color:${colorVar}">${esc(label)}</span>
+        ${modeLabel} ${cacheLabel2}
+      </div>
+      ${segs ? `<div style="padding:0 18px;border-bottom:1px solid var(--border)">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--subtle);padding:10px 0 4px">Segments</div>
+        ${segs}
+      </div>` : ''}
+      <div style="padding:0 18px">${prose}</div>
+    </div>`;
+  }
   const cacheLabel = result.cached
     ? `<span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--good-bg);color:var(--good)">cached</span>`
     : '';
