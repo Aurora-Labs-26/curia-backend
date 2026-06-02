@@ -11,6 +11,7 @@ Currently supports:
   - edge_tts           Microsoft Edge TTS (free, no API key required)
   - openai_tts         OpenAI Text-to-Speech API
   - cartesia           Cartesia TTS API
+  - hume               Hume AI Octave TTS
 
 Stub fallback when no API key for the configured provider is set: writes a
 1-second silent WAV per line so the pipeline runs end-to-end.
@@ -53,6 +54,11 @@ def _write_wav_from_pcm(pcm_bytes: bytes, sample_rate: int, output_path: str) ->
         w.setsampwidth(2)             # 16-bit
         w.setframerate(sample_rate)
         w.writeframes(pcm_bytes)
+
+
+def _write_bytes(path: str, data: bytes) -> None:
+    with open(path, "wb") as f:
+        f.write(data)
 
 
 def _write_silent_wav(output_path: str, duration_seconds: float = 1.0) -> None:
@@ -154,7 +160,7 @@ class TTSAdapter:
     @property
     def output_format(self) -> str:
         """Returns 'mp3' for providers that write MP3, 'wav' for everything else."""
-        if self.provider.type == "edge_tts":
+        if self.provider.type in ("edge_tts", "hume"):
             return "mp3"
         if self.provider.type == "openai_tts":
             fmt = self.settings.get("response_format", "wav")
@@ -223,6 +229,8 @@ class TTSAdapter:
                 self._synthesize_openai_tts(text, output_path, api_key)
             elif self.provider.type == "cartesia":
                 self._synthesize_cartesia(text, output_path, api_key)
+            elif self.provider.type == "hume":
+                self._synthesize_hume(text, output_path, api_key)
             elif self.provider.type == "edge_tts":
                 self._synthesize_edge_tts(text, output_path)
             else:
@@ -289,6 +297,8 @@ class TTSAdapter:
                 await self._async_openai_tts(text, output_path, api_key)
             elif self.provider.type == "cartesia":
                 await self._async_cartesia(text, output_path, api_key)
+            elif self.provider.type == "hume":
+                await self._async_hume(text, output_path, api_key)
             elif self.provider.type == "xai":
                 await self._async_xai(text, output_path, api_key)
             else:
@@ -583,6 +593,35 @@ class TTSAdapter:
         if output_path != mp3_path:
             shutil.move(mp3_path, output_path)
 
+    async def _async_hume(self, text: str, output_path: str, api_key: str) -> None:
+        base_url = (self.provider.base_url or "https://api.hume.ai").rstrip("/")
+        url = f"{base_url}/v0/tts/file"
+        output_fmt = self.settings.get("output_format", "mp3")
+        utterance: dict = {"text": text, "voice": {"name": self.voice_id}}
+        description = self.settings.get("description")
+        if description:
+            utterance["description"] = description[:1000]
+        body: dict = {
+            "utterances": [utterance],
+            "format": {"type": output_fmt},
+        }
+        gen_id = getattr(self, "_hume_generation_id", None)
+        if gen_id:
+            body["context"] = {"generation_id": gen_id}
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                params={"api_key": api_key},
+                headers={"Content-Type": "application/json"},
+                json=body,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Hume TTS error {resp.status_code}: {resp.text[:300]}")
+        new_gen_id = resp.headers.get("x-hume-generation-id")
+        if new_gen_id:
+            self._hume_generation_id = new_gen_id
+        await asyncio.to_thread(_write_bytes, output_path, resp.content)
+
     async def _async_xai(self, text: str, output_path: str, api_key: str) -> None:
         endpoint_path = self.settings.get("endpoint_path")
         if not endpoint_path:
@@ -735,6 +774,41 @@ class TTSAdapter:
             raise
         except Exception as e:
             raise RuntimeError(f"Cartesia TTS request failed: {e}") from e
+
+    def _synthesize_hume(self, text: str, output_path: str, api_key: str) -> None:
+        base_url = (self.provider.base_url or "https://api.hume.ai").rstrip("/")
+        url = f"{base_url}/v0/tts/file"
+        output_fmt = self.settings.get("output_format", "mp3")
+        utterance: dict = {"text": text, "voice": {"name": self.voice_id}}
+        description = self.settings.get("description")
+        if description:
+            utterance["description"] = description[:1000]
+        body: dict = {
+            "utterances": [utterance],
+            "format": {"type": output_fmt},
+        }
+        gen_id = getattr(self, "_hume_generation_id", None)
+        if gen_id:
+            body["context"] = {"generation_id": gen_id}
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    url,
+                    params={"api_key": api_key},
+                    headers={"Content-Type": "application/json"},
+                    json=body,
+                )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Hume TTS error {resp.status_code}: {resp.text[:300]}")
+            new_gen_id = resp.headers.get("x-hume-generation-id")
+            if new_gen_id:
+                self._hume_generation_id = new_gen_id
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Hume TTS request failed: {e}") from e
 
     def _synthesize_edge_tts(self, text: str, output_path: str) -> None:
         """Microsoft Edge TTS — free, no API key required. Outputs MP3 directly."""

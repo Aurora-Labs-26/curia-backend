@@ -7,6 +7,11 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-05-29 · Arihant + Claude (claude-opus-4-6)
 
 ### Feature
+Hume AI Octave TTS provider — active for all speakers.
+- **`core/llm_config/schema.py`** — added `"hume"` to `ProviderType` literal
+- **`core/llm_config/adapters/tts.py`** — added `_synthesize_hume` (sync) and `_async_hume` (async) with `generation_id` voice consistency and `description` emotional direction; added `_write_bytes` helper; updated dispatch chains and `output_format`
+- **`config/models.yaml`** — added `hume` provider (`HUME_API_KEY`), `hume-octave` model alias; switched speaker bindings from `smallest-lightning` to `hume-octave` (kenji→KORA, arjun→DACHER, emeka→AURA)
+
 Parallel TTS synthesis — segment-based v2 pipeline with concurrent HTTP calls.
 - **`studio/generator.py`** — rewrote `synthesize_and_stitch_v2` to fire all segment TTS requests in parallel via `ThreadPoolExecutor` (configurable via `CURIA_TTS_PARALLEL`, default 4); returns `tts_timings` for downstream compat; `process_episode` now calls v2 instead of v1
 
