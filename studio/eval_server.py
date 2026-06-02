@@ -2264,6 +2264,72 @@ async def compare_judge(request: Request):
     return JSONResponse(content=result)
 
 
+@app.post("/api/compare/analyze-structure")
+async def analyze_structure(request: Request):
+    """Unsupervised narrative structure analysis for a single transcript."""
+    body = await request.json()
+    transcript_text = (body.get("transcript") or "").strip()
+    label           = (body.get("label") or "Transcript").strip()
+    if not transcript_text:
+        return JSONResponse(content={"error": "transcript required"}, status_code=400)
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return JSONResponse(content={"error": "ANTHROPIC_API_KEY not set"}, status_code=500)
+
+    import anthropic
+
+    system = """You are an expert narrative analyst specializing in audio content and podcasts.
+Your job is to identify the natural narrative structure of a transcript — not the topic, but what each section is *doing* to the listener narratively.
+Find where the story's intention shifts. Each boundary is where the listener is being asked to feel or think something different.
+Return only valid JSON, no prose."""
+
+    human = f"""Analyze the narrative structure of this transcript. Find 4–8 natural narrative segments.
+
+For each segment:
+- Identify where it starts (approximate line or position as fraction e.g. "0–15%" of transcript)
+- Give it a role label. Use from this taxonomy where it fits, or create your own label if none fit:
+  Hook | Context | Stakes | Mechanism | Complication | Pivot | Resolution | Outro | other custom label
+- Write one sentence describing what this segment is doing to the listener (not what it's about — what it's *doing*)
+- Quote 1 short sentence from the segment as an anchor
+
+Also identify the overall arc pattern (e.g. "revelation arc", "problem-solution", "journey", "argument", "portrait", etc.) and write 1–2 sentences describing the shape of the whole piece.
+
+TRANSCRIPT ({label}):
+{transcript_text[:6000]}
+
+Return JSON:
+{{
+  "arc_pattern": "...",
+  "arc_description": "1-2 sentences on the overall narrative shape",
+  "segments": [
+    {{
+      "position": "0-20%",
+      "role": "Hook",
+      "function": "one sentence — what it does to the listener",
+      "anchor_quote": "short quote from segment"
+    }}
+  ]
+}}"""
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            system=system,
+            messages=[{"role": "user", "content": human}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return JSONResponse(content=_json.loads(raw.strip()))
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 @app.post("/api/compare/feedback")
 async def compare_feedback(request: Request):
     body = await request.json()
@@ -2746,63 +2812,73 @@ select:focus{outline:none;border-color:var(--accent)}
 
 <!-- ── Tab: vs External ── -->
 <div class="tab-panel" id="tab-external">
-  <div class="section-eyebrow">Pairwise comparison</div>
-  <h2 class="section-title">Curia vs External</h2>
-  <p class="section-sub">Upload an MP3 from NotebookLM or another tool. We transcribe it, run an LLM judge, and let you record your verdict.</p>
+  <div class="section-eyebrow">Analysis &amp; comparison</div>
+  <h2 class="section-title">Transcript Analysis</h2>
+  <p class="section-sub">Load a Curia episode, upload an external transcript (MP3 or text file), or both. Analyze narrative structure independently or compare side by side.</p>
 
-  <!-- Episode picker + upload -->
+  <!-- Pickers row -->
   <div class="ext-grid">
     <div class="card episode-picker-card">
-      <div class="episode-picker-label">Select episode</div>
+      <div class="episode-picker-label">Curia episode (optional)</div>
       <select id="episode-select" onchange="onEpisodeSelect()">
-        <option value="">Loading episodes…</option>
+        <option value="">— or skip if analyzing external only —</option>
       </select>
     </div>
     <div class="card" style="padding:16px">
-      <div class="episode-picker-label">Upload external MP3</div>
+      <div class="episode-picker-label" style="margin-bottom:8px">External transcript (optional)</div>
       <div class="upload-zone" id="upload-zone">
-        <input type="file" id="mp3-file" accept="audio/*,video/mp4" onchange="onFileSelect(this)">
+        <input type="file" id="mp3-file" accept="audio/*,video/mp4,text/plain,.txt,.md" onchange="onFileSelect(this)">
         <div class="upload-zone-icon">🎙</div>
-        <div class="upload-zone-text">Drop MP3 here or click to upload</div>
-        <div class="upload-zone-sub">NotebookLM, Wondercraft, etc.</div>
+        <div class="upload-zone-text">MP3 or text file (.txt)</div>
+        <div class="upload-zone-sub">NotebookLM, Wondercraft, plain transcript…</div>
         <div class="upload-filename" id="upload-filename"></div>
       </div>
       <div style="margin-top:10px;display:flex;gap:8px">
         <input type="text" id="ext-label" placeholder='Label (e.g. "NotebookLM")' style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-        <button class="btn-primary" id="transcribe-btn" onclick="transcribeAudio()" disabled>Transcribe →</button>
+        <button class="btn-primary" id="transcribe-btn" onclick="transcribeAudio()" disabled>Load →</button>
       </div>
     </div>
   </div>
 
   <div class="status-bar" id="ext-status"></div>
 
-  <!-- Side-by-side transcripts -->
-  <div class="compare-cols" id="ext-transcripts" style="display:none">
-    <div class="card">
-      <div class="col-label col-a" id="curia-col-label">Curia</div>
-      <div class="col-body" id="curia-transcript-body">
-        <div class="empty-hint"><div class="empty-icon">📄</div>Select an episode above</div>
+  <!-- Transcripts — each shown independently, side by side when both loaded -->
+  <div id="ext-transcripts" style="display:none;margin-bottom:24px">
+    <div id="ext-transcript-cols" style="display:grid;gap:16px">
+      <div class="card" id="ext-curia-card" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="col-label col-a" id="curia-col-label" style="border-bottom:none;padding-bottom:0">Curia</div>
+          <button class="btn-primary" id="analyze-curia-btn" style="margin:12px 16px;padding:6px 14px;font-size:12px" onclick="analyzeStructure('curia')">Analyze narrative →</button>
+        </div>
+        <div class="col-body" id="curia-transcript-body"></div>
       </div>
-    </div>
-    <div class="card">
-      <div class="col-label col-b" id="ext-col-label">External</div>
-      <div class="col-body" id="ext-transcript-body">
-        <div class="empty-hint"><div class="empty-icon">🎙</div>Upload and transcribe an MP3 above</div>
+      <div class="card" id="ext-external-card" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="col-label col-b" id="ext-col-label" style="border-bottom:none;padding-bottom:0">External</div>
+          <button class="btn-primary" id="analyze-ext-btn" style="margin:12px 16px;padding:6px 14px;font-size:12px" onclick="analyzeStructure('external')">Analyze narrative →</button>
+        </div>
+        <div class="col-body" id="ext-transcript-body"></div>
       </div>
     </div>
   </div>
 
-  <!-- Judge panel -->
+  <!-- Narrative structure panels — one per loaded transcript -->
+  <div id="narrative-panels" style="display:none;margin-bottom:24px">
+    <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle);margin-bottom:12px">Narrative Structure</div>
+    <div id="narrative-cols" style="display:grid;gap:16px"></div>
+  </div>
+
+  <!-- Judge panel (only when both loaded) -->
   <div class="card judge-card" id="judge-card" style="display:none">
     <div class="judge-header">
       <div>
         <div class="judge-title">LLM Judge</div>
-        <div class="judge-subtitle">Scores both transcripts on 5 axes using Claude</div>
+        <div class="judge-subtitle">Scores both transcripts on 5 axes — requires both loaded</div>
       </div>
       <button class="btn-primary" id="judge-btn" onclick="runJudge()">Run judge →</button>
     </div>
     <div class="judge-body" id="judge-body">
-      <div class="empty-hint" style="padding:20px 0">Judge hasn't run yet. Both transcripts must be loaded first.</div>
+      <div class="empty-hint" style="padding:20px 0">Load both transcripts to run the judge.</div>
     </div>
   </div>
 
@@ -3348,19 +3424,13 @@ async function onEpisodeSelect() {
 
   const lines = Array.isArray(curiaEpisode.transcript) ? curiaEpisode.transcript : [];
   const bodyEl = document.getElementById('curia-transcript-body');
-  if (lines.length) {
-    bodyEl.innerHTML = lines.map(l =>
-      `<div class="transcript-line">
-        <div class="transcript-text">${esc(l.text||'')}</div>
-      </div>`
-    ).join('');
-  } else {
-    bodyEl.innerHTML = `<div class="empty-hint">No transcript available for this episode.</div>`;
-  }
+  bodyEl.innerHTML = lines.length
+    ? lines.map(l => `<div class="transcript-line"><div class="transcript-text">${esc(l.text||'')}</div></div>`).join('')
+    : `<div class="empty-hint">No transcript available.</div>`;
 
   const label = document.getElementById('episode-select').selectedOptions[0]?.text || 'Curia';
   document.getElementById('curia-col-label').textContent = 'Curia — ' + label.split(' · ')[0];
-  document.getElementById('ext-transcripts').style.display = 'grid';
+  _showExtCard('curia', true);
   checkShowJudge();
 }
 
@@ -3369,33 +3439,45 @@ function onFileSelect(input) {
   if (!file) return;
   document.getElementById('upload-filename').textContent = file.name;
   document.getElementById('transcribe-btn').disabled = false;
+  document.getElementById('transcribe-btn').textContent = _isTextFile(file) ? 'Load text →' : 'Transcribe →';
   const zone = document.getElementById('upload-zone');
   zone.style.borderColor = 'var(--accent)';
   zone.style.background = 'var(--accent-light)';
 }
 
+function _isTextFile(file) {
+  return file.type === 'text/plain' || /\.(txt|md)$/i.test(file.name);
+}
+
 async function transcribeAudio() {
   const fileInput = document.getElementById('mp3-file');
   if (!fileInput.files[0]) return;
-  const label = document.getElementById('ext-label').value.trim() || fileInput.files[0].name.replace(/\.[^.]+$/, '');
+  const file = fileInput.files[0];
+  const label = document.getElementById('ext-label').value.trim() || file.name.replace(/\.[^.]+$/, '');
   externalLabel = label;
-
   document.getElementById('transcribe-btn').disabled = true;
-  setExtStatus('running', 'Transcribing via Groq Whisper… this may take a minute');
-
-  const fd = new FormData();
-  fd.append('file', fileInput.files[0]);
 
   try {
-    const res = await fetch('/api/compare/transcribe', {method:'POST', body:fd});
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    externalTranscript = data.transcript;
-    setExtStatus('done', 'Transcription complete');
+    if (_isTextFile(file)) {
+      // Text file — read client-side, no transcription needed
+      setExtStatus('running', 'Reading text file…');
+      externalTranscript = await file.text();
+      setExtStatus('done', 'Text loaded');
+    } else {
+      setExtStatus('running', 'Transcribing… this may take a minute');
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/compare/transcribe', {method:'POST', body:fd});
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      externalTranscript = data.transcript;
+      setExtStatus('done', `Transcription complete (${data.provider || 'groq'})`);
+    }
+
     document.getElementById('ext-transcript-body').innerHTML =
       `<div style="font-size:13px;line-height:1.9;white-space:pre-wrap;color:var(--text)">${esc(externalTranscript)}</div>`;
     document.getElementById('ext-col-label').textContent = 'External — ' + label;
-    document.getElementById('ext-transcripts').style.display = 'grid';
+    _showExtCard('external', true);
     checkShowJudge();
   } catch(e) {
     setExtStatus('error', e.message);
@@ -3403,11 +3485,97 @@ async function transcribeAudio() {
   }
 }
 
+function _showExtCard(side, show) {
+  const cardId = side === 'curia' ? 'ext-curia-card' : 'ext-external-card';
+  document.getElementById(cardId).style.display = show ? '' : 'none';
+  document.getElementById('ext-transcripts').style.display = '';
+  // Switch to two-column grid when both are loaded
+  const both = curiaEpisode && externalTranscript;
+  document.getElementById('ext-transcript-cols').style.gridTemplateColumns = both ? '1fr 1fr' : '1fr';
+}
+
 function checkShowJudge() {
   const hasEp = !!curiaEpisode;
   const hasExt = !!externalTranscript;
-  document.getElementById('judge-card').style.display = (hasEp || hasExt) ? '' : 'none';
-  document.getElementById('feedback-card').style.display = (hasEp || hasExt) ? '' : 'none';
+  // Judge requires both; feedback requires both; narrative analyze is per-transcript (handled by buttons)
+  document.getElementById('judge-card').style.display = (hasEp && hasExt) ? '' : 'none';
+  document.getElementById('feedback-card').style.display = (hasEp && hasExt) ? '' : 'none';
+}
+
+// ── Narrative structure analysis ──────────────────────────────────────────────
+const _narrativeResults = {};
+
+async function analyzeStructure(side) {
+  const btnId = side === 'curia' ? 'analyze-curia-btn' : 'analyze-ext-btn';
+  const btn = document.getElementById(btnId);
+  btn.disabled = true;
+  btn.textContent = '↻ Analyzing…';
+
+  let text = '';
+  let label = '';
+  if (side === 'curia' && curiaEpisode) {
+    const lines = Array.isArray(curiaEpisode.transcript) ? curiaEpisode.transcript : [];
+    text = lines.map(l => l.text || '').join('\n\n');
+    label = document.getElementById('curia-col-label').textContent;
+  } else if (side === 'external') {
+    text = externalTranscript;
+    label = externalLabel || 'External';
+  }
+
+  if (!text.trim()) {
+    btn.disabled = false;
+    btn.textContent = 'Analyze narrative →';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/compare/analyze-structure', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({transcript: text, label})
+    });
+    const result = await res.json();
+    _narrativeResults[side] = {label, result};
+    renderNarrativePanels();
+    btn.textContent = '↺ Re-analyze';
+  } catch(e) {
+    btn.textContent = 'Analyze narrative →';
+  }
+  btn.disabled = false;
+}
+
+function renderNarrativePanels() {
+  const container = document.getElementById('narrative-cols');
+  const sides = Object.keys(_narrativeResults);
+  if (!sides.length) return;
+
+  document.getElementById('narrative-panels').style.display = '';
+  container.style.gridTemplateColumns = sides.length > 1 ? '1fr 1fr' : '1fr';
+
+  container.innerHTML = sides.map(side => {
+    const {label, result} = _narrativeResults[side];
+    if (result.error) return `<div class="card" style="padding:20px;color:var(--bad);font-size:13px">Error: ${esc(result.error)}</div>`;
+
+    const colorVar = side === 'curia' ? 'var(--blue)' : 'var(--purple)';
+    const segs = (result.segments || []).map((s, i) => `
+      <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="font-size:10px;font-weight:700;padding:1px 8px;border-radius:10px;background:${colorVar}20;color:${colorVar}">${esc(s.role)}</span>
+          <span style="font-size:10px;color:var(--subtle)">${esc(s.position || '')}</span>
+        </div>
+        <div style="font-size:13px;color:var(--text);margin-bottom:4px">${esc(s.function || '')}</div>
+        ${s.anchor_quote ? `<div style="font-size:11px;color:var(--muted);font-style:italic;padding-left:10px;border-left:2px solid var(--border)">"${esc(s.anchor_quote)}"</div>` : ''}
+      </div>`).join('');
+
+    return `<div class="card">
+      <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:8px">
+        <span style="font-size:13px;font-weight:700;color:${colorVar}">${esc(label)}</span>
+        <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(result.arc_pattern || '')}</span>
+      </div>
+      <div style="padding:12px 18px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6">${esc(result.arc_description || '')}</div>
+      <div style="padding:0 18px">${segs}</div>
+    </div>`;
+  }).join('');
 }
 
 async function runJudge() {
