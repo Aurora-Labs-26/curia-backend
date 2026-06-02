@@ -2990,32 +2990,40 @@ select:focus{outline:none;border-color:var(--accent)}
   <div id="ext-transcripts" style="display:none;margin-bottom:24px">
     <div id="ext-transcript-cols" style="display:grid;gap:16px">
       <div class="card" id="ext-curia-card" style="display:none">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <div class="col-label col-a" id="curia-col-label" style="border-bottom:none;padding-bottom:0">Curia</div>
-          <div style="padding:10px 16px 12px">
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <button class="analysis-mode-btn" id="mode-curia-structured" data-side="curia" data-mode="structured" onclick="selectAnalysisMode('curia','structured')">Structured</button>
-              <button class="analysis-mode-btn" id="mode-curia-open" data-side="curia" data-mode="open" onclick="selectAnalysisMode('curia','open')">Open</button>
-              <button class="analysis-mode-btn" id="mode-curia-evaluate" data-side="curia" data-mode="evaluate" onclick="selectAnalysisMode('curia','evaluate')">Evaluate</button>
-            </div>
-            <button class="btn-primary" id="run-curia-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('curia', _selectedMode['curia'])">Run analysis →</button>
+        <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)">
+          <div class="col-label col-a" id="curia-col-label" style="border-bottom:none;padding-bottom:14px">Curia</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:10px 16px 10px">
+            <button onclick="toggleTranscript('curia')" id="toggle-curia-transcript"
+              style="padding:3px 10px;font-size:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer">Hide transcript</button>
           </div>
         </div>
         <div class="col-body" id="curia-transcript-body"></div>
+        <div style="border-top:1px solid var(--border);padding:10px 16px 12px">
+          <div style="display:flex;gap:6px;margin-bottom:8px">
+            <button class="analysis-mode-btn" id="mode-curia-structured" data-side="curia" data-mode="structured" onclick="selectAnalysisMode('curia','structured')">Structured</button>
+            <button class="analysis-mode-btn" id="mode-curia-open" data-side="curia" data-mode="open" onclick="selectAnalysisMode('curia','open')">Open</button>
+            <button class="analysis-mode-btn" id="mode-curia-evaluate" data-side="curia" data-mode="evaluate" onclick="selectAnalysisMode('curia','evaluate')">Evaluate</button>
+          </div>
+          <button class="btn-primary" id="run-curia-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('curia', _selectedMode['curia'])">Run analysis →</button>
+        </div>
       </div>
       <div class="card" id="ext-external-card" style="display:none">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <div class="col-label col-b" id="ext-col-label" style="border-bottom:none;padding-bottom:0">External</div>
-          <div style="padding:10px 16px 12px">
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <button class="analysis-mode-btn" id="mode-external-structured" data-side="external" data-mode="structured" onclick="selectAnalysisMode('external','structured')">Structured</button>
-              <button class="analysis-mode-btn" id="mode-external-open" data-side="external" data-mode="open" onclick="selectAnalysisMode('external','open')">Open</button>
-              <button class="analysis-mode-btn" id="mode-external-evaluate" data-side="external" data-mode="evaluate" onclick="selectAnalysisMode('external','evaluate')">Evaluate</button>
-            </div>
-            <button class="btn-primary" id="run-external-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('external', _selectedMode['external'])">Run analysis →</button>
+        <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)">
+          <div class="col-label col-b" id="ext-col-label" style="border-bottom:none;padding-bottom:14px">External</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:10px 16px 10px">
+            <button onclick="toggleTranscript('external')" id="toggle-external-transcript"
+              style="padding:3px 10px;font-size:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer">Hide transcript</button>
           </div>
         </div>
         <div class="col-body" id="ext-transcript-body"></div>
+        <div style="border-top:1px solid var(--border);padding:10px 16px 12px">
+          <div style="display:flex;gap:6px;margin-bottom:8px">
+            <button class="analysis-mode-btn" id="mode-external-structured" data-side="external" data-mode="structured" onclick="selectAnalysisMode('external','structured')">Structured</button>
+            <button class="analysis-mode-btn" id="mode-external-open" data-side="external" data-mode="open" onclick="selectAnalysisMode('external','open')">Open</button>
+            <button class="analysis-mode-btn" id="mode-external-evaluate" data-side="external" data-mode="evaluate" onclick="selectAnalysisMode('external','evaluate')">Evaluate</button>
+          </div>
+          <button class="btn-primary" id="run-external-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('external', _selectedMode['external'])">Run analysis →</button>
+        </div>
       </div>
     </div>
   </div>
@@ -4044,6 +4052,19 @@ async function loadHistory() {
     </div>`;
   }).join('');
   el.innerHTML = `<div style="border-top:1px solid var(--border)">${rows}</div>`;
+}
+
+function toggleTranscript(side) {
+  const bodyId = side === 'curia' ? 'curia-transcript-body' : 'ext-transcript-body';
+  const btnId  = `toggle-${side}-transcript`;
+  const body   = document.getElementById(bodyId);
+  const btn    = document.getElementById(btnId);
+  if (!body || !btn) return;
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? '' : 'none';
+  btn.textContent = hidden ? 'Hide transcript' : 'Show transcript';
+  btn.style.color = hidden ? 'var(--muted)' : 'var(--accent)';
+  btn.style.borderColor = hidden ? 'var(--border)' : 'var(--accent)';
 }
 
 // Boot
