@@ -1757,7 +1757,8 @@ async def get_job(job_id: str):
     return JSONResponse(content=job)
 
 
-async def _run_transcript_step(job_id: str, transcript_prompt_override: str | None = None):
+async def _run_transcript_step(job_id: str, transcript_prompt_override: str | None = None,
+                               briefing_override: str | None = None):
     """Generate transcript from stored job state (briefing + outline). Skips audio for speed."""
     from core.db.connection import db_execute
     from studio.generator import generate_transcript
@@ -1766,7 +1767,7 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
     job = await _load_job(job_id)
     if not job:
         raise RuntimeError("Job not found")
-    briefing   = job.get("briefing") or ""
+    briefing   = briefing_override or job.get("briefing") or ""
     outline    = job.get("outline") or {}
     show_name  = job.get("show_name") or "clarity_engine"
     source_id  = job.get("source_id") or ""
@@ -2192,6 +2193,7 @@ async def compare_run_transcript(request: Request):
     job_id_a     = (body.get("job_a") or "").strip()
     job_id_b     = (body.get("job_b") or "").strip()
     transcript_b = body.get("transcript_prompt_b") or None
+    briefing_b   = body.get("briefing_b") or None
     if not job_id_a or not job_id_b:
         return JSONResponse(content={"error": "job_a and job_b required"}, status_code=400)
 
@@ -2203,7 +2205,8 @@ async def compare_run_transcript(request: Request):
         except Exception:
             pass
         try:
-            ep_b = await _run_transcript_step(job_id_b, transcript_prompt_override=transcript_b)
+            ep_b = await _run_transcript_step(job_id_b, transcript_prompt_override=transcript_b,
+                                               briefing_override=briefing_b)
         except Exception:
             pass
         await _update_compare_run_episodes(job_id_a, job_id_b, ep_a, ep_b)
@@ -3061,12 +3064,24 @@ select:focus{outline:none;border-color:var(--accent)}
     </div>
 
     <!-- Phase 2 bar -->
-    <div id="phase2-bar" style="display:none;margin-bottom:20px;padding:14px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);align-items:center;justify-content:space-between;gap:16px">
-      <div>
-        <div style="font-size:13px;font-weight:600;color:var(--text)">Outlines ready</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">Review outlines above, then generate transcripts</div>
+    <div id="phase2-bar" style="display:none;margin-bottom:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">Outlines ready</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">Review outlines above, then generate transcripts</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn-secondary" id="briefing-toggle-btn" onclick="toggleBriefingEdit()">Edit B briefing ↓</button>
+          <button class="btn-primary" id="transcript-btn" onclick="runTranscripts()">Generate transcripts →</button>
+        </div>
       </div>
-      <button class="btn-primary" id="transcript-btn" onclick="runTranscripts()">Generate transcripts →</button>
+      <div id="briefing-edit-panel" style="display:none;padding:0 18px 14px;border-top:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:12px 0 6px">B — Briefing JSON (edit format_config to change voice style + rules)</div>
+        <textarea id="briefing-b-override"
+          style="width:100%;height:320px;background:#0a0a0a;border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;font-family:ui-monospace,monospace;padding:10px 12px;resize:vertical;outline:none;line-height:1.6"
+          placeholder="Loading briefing…"
+          oninput="this.dataset.modified='1'"></textarea>
+      </div>
     </div>
 
     <!-- Results columns -->
@@ -3506,6 +3521,35 @@ function _getTranscriptPromptB() {
   const ta = document.getElementById('transcript-override');
   return (ta.dataset.modified && ta.value.trim()) ? ta.value.trim() : null;
 }
+function _getBriefingB() {
+  const ta = document.getElementById('briefing-b-override');
+  return (ta && ta.dataset.modified && ta.value.trim()) ? ta.value.trim() : null;
+}
+
+async function toggleBriefingEdit() {
+  const panel = document.getElementById('briefing-edit-panel');
+  const btn   = document.getElementById('briefing-toggle-btn');
+  const isOpen = panel.style.display !== 'none';
+  if (isOpen) {
+    panel.style.display = 'none';
+    btn.textContent = 'Edit B briefing ↓';
+  } else {
+    panel.style.display = 'block';
+    btn.textContent = 'Hide briefing ↑';
+    const ta = document.getElementById('briefing-b-override');
+    if (!ta.dataset.loaded && _fmtJobB) {
+      ta.value = 'Loading…';
+      try {
+        const res  = await fetch('/api/jobs/' + _fmtJobB);
+        const data = await res.json();
+        ta.value = data.briefing ? JSON.stringify(JSON.parse(data.briefing), null, 2) : (data.briefing || '');
+      } catch(e) {
+        ta.value = '';
+      }
+      ta.dataset.loaded = '1';
+    }
+  }
+}
 
 async function runPromptCompare() {
   const url = document.getElementById('fmt-url').value.trim();
@@ -3572,6 +3616,7 @@ async function runTranscripts() {
     body: JSON.stringify({
       job_a: _fmtJobA, job_b: _fmtJobB,
       transcript_prompt_b: _getTranscriptPromptB(),
+      briefing_b: _getBriefingB(),
     })
   });
 
