@@ -35,7 +35,7 @@ from core.db.connection import db_execute, db_fetchrow, db_query
 from core.kb import UserKB, load_kb
 from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
-from core.prompts.transcript import generate_transcript as _transcript_module
+from core.prompts.transcript import generate_transcript as _transcript_module, TRANSCRIPT_EXAMPLES
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
 from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
 from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
@@ -153,10 +153,11 @@ def generate_transcript(
     _start = _time.time()
     with dspy.context(lm=resolve.llm("transcript", show=show_name)):
         prediction = _transcript_module(
-            briefing=briefing,
-            outline=json.dumps(outline, indent=2),
-            speaker_definition=speaker_definition,
-            quality_guidelines=TRANSCRIPT_GUIDELINES_V1,
+            briefing=f"<briefing>\n{briefing}\n</briefing>",
+            speaker=f"<speaker>\n{speaker_definition}\n</speaker>",
+            outline=f"<outline>\n{json.dumps(outline, indent=2)}\n</outline>",
+            quality_constraints=f"<constraints>\n{TRANSCRIPT_GUIDELINES_V1}\n</constraints>",
+            examples=f"<examples>\n{TRANSCRIPT_EXAMPLES}\n</examples>",
         )
     _elapsed = _time.time() - _start
     raw = prediction.transcript_json.strip()

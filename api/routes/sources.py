@@ -38,7 +38,7 @@ async def create_source(
     Worker scrapes + transforms + embeds; status moves queued → scraping → ... → ready.
     """
     url_str = str(req.url)
-    logger.info(f"[create_source] url={url_str[-40:]} auto_generate={req.auto_generate}")
+    logger.info(f"[create_source] url={url_str[-40:]} standalone={req.standalone}")
     source_id = await get_or_create_source(url=url_str, user_id=user_id)
 
     # Fetch the row's status to decide whether to enqueue a fresh job.
@@ -74,7 +74,7 @@ async def create_source(
                     "source_id": source_id,
                     "user_id": user_id,
                     "url": url_str,
-                    "auto_generate": req.auto_generate,
+                    "standalone": req.standalone,
                 },
                 user_id=user_id,
             )

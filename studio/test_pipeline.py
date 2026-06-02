@@ -25,7 +25,7 @@ from shows.prompts import BRIEFING_PROMPTS  # legacy template — see render_bri
 from intelligence.selector import select_episode_sources
 from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
-from core.prompts.transcript import generate_transcript as _transcript_module
+from core.prompts.transcript import generate_transcript as _transcript_module, TRANSCRIPT_EXAMPLES
 
 # --- Config ---
 SHOW_NAME = "last_correspondence"
@@ -68,9 +68,11 @@ def generate_transcript(briefing: str, outline: dict, show_name: str) -> list[di
     )
     with dspy.context(lm=resolve.llm("transcript", show=show_name)):
         prediction = _transcript_module(
-            briefing=briefing,
-            outline=json.dumps(outline, indent=2),
-            speaker_definition=speaker_definition,
+            briefing=f"<briefing>\n{briefing}\n</briefing>",
+            speaker=f"<speaker>\n{speaker_definition}\n</speaker>",
+            outline=f"<outline>\n{json.dumps(outline, indent=2)}\n</outline>",
+            quality_constraints="<constraints></constraints>",
+            examples=f"<examples>\n{TRANSCRIPT_EXAMPLES}\n</examples>",
         )
     raw = prediction.transcript_json.strip()
     if raw.startswith("```"):

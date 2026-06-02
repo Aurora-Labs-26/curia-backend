@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 class CreateSourceRequest(BaseModel):
     url: HttpUrl
-    auto_generate: bool = True  # False when the caller (share sheet) will trigger generation explicitly
+    standalone: bool = True  # True = evaluate this source alone; False = run full cluster pipeline
 
 
 class SourceSummary(BaseModel):

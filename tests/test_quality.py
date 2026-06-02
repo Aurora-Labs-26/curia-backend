@@ -25,10 +25,10 @@ def test_transcript_guidelines_mention_key_rules():
     assert "format" in g.lower()
 
 
-def test_transcript_prompt_includes_quality_guidelines_field():
-    """GenerateTranscript DSPy Signature should have quality_guidelines input."""
+def test_transcript_prompt_includes_quality_constraints_field():
+    """GenerateTranscript DSPy Signature should have quality_constraints input."""
     from core.prompts.transcript import GenerateTranscript
     # DSPy Signature classes are Pydantic models; fields appear in model_fields
-    assert "quality_guidelines" in GenerateTranscript.model_fields, (
-        "GenerateTranscript is missing the 'quality_guidelines' input field"
+    assert "quality_constraints" in GenerateTranscript.model_fields, (
+        "GenerateTranscript is missing the 'quality_constraints' input field"
     )
