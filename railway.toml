@@ -1,2 +1,14 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Railway deployment config — API service
+#
+# Worker services: create in Railway dashboard, same repo, start command:
+#   python -m worker.main
+#
+# Recommended env vars:
+#   API:    CURIA_DB_POOL_MAX=8   CURIA_DB_POOL_MIN=2
+#   Worker: CURIA_DB_POOL_MAX=5   CURIA_DB_POOL_MIN=1
+#   (1 API × 8 + 2 Workers × 5 = 18 connections max)
+# ─────────────────────────────────────────────────────────────────────────────
+
 [deploy]
 startCommand = "bash scripts/start.sh"

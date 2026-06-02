@@ -4,6 +4,26 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-05-29 · Arihant + Claude (claude-opus-4-6)
+
+### Feature
+Parallel TTS synthesis — segment-based v2 pipeline with concurrent HTTP calls.
+- **`studio/generator.py`** — rewrote `synthesize_and_stitch_v2` to fire all segment TTS requests in parallel via `ThreadPoolExecutor` (configurable via `CURIA_TTS_PARALLEL`, default 4); returns `tts_timings` for downstream compat; `process_episode` now calls v2 instead of v1
+
+### Refactor
+Multi-worker Railway architecture — API + 2 workers for throughput and reliability.
+- **`core/db/connection.py`** — pool size configurable via `CURIA_DB_POOL_MAX` / `CURIA_DB_POOL_MIN` env vars (defaults unchanged: 2/10); keeps total connections under Railway Postgres limits with multiple services
+- **`api/main.py`** — stale job reaper: runs once on boot + every 5 min background task to recover jobs stuck in 'running' from crashed workers
+
+### Test
+15 new tests for parallel TTS and multi-worker infrastructure.
+- **`tests/test_parallel_tts.py`** — 7 tests: output path/timings shape, ordering, segment merging, concurrent execution verified via overlap detection, CURIA_TTS_PARALLEL env var, single-line edge case
+- **`tests/test_infra.py`** — 8 tests: configurable pool size defaults and overrides, reap_stale count correctness, API reaper loop exists, worker main is async, worker calls reap_stale on boot
+- **`worker/main.py`** — reaps stale jobs on startup before entering poll loop
+- **`railway.toml`** — documented worker service setup (separate Railway service, 2 replicas, pool sizing)
+
+---
+
 ## 2026-05-30 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Migration

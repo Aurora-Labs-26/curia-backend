@@ -103,13 +103,15 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
+        max_size = int(os.getenv("CURIA_DB_POOL_MAX", "10"))
+        min_size = int(os.getenv("CURIA_DB_POOL_MIN", "2"))
         _pool = await asyncpg.create_pool(
             DATABASE_URL,
-            min_size=2,
-            max_size=10,
+            min_size=min_size,
+            max_size=max_size,
             init=_init_connection,
         )
-        logger.info(f"Postgres pool created → {_safe_url(DATABASE_URL)}")
+        logger.info(f"Postgres pool created (min={min_size}, max={max_size}) → {_safe_url(DATABASE_URL)}")
     return _pool
 
 

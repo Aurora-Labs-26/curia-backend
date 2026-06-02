@@ -37,8 +37,24 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         return response
 
 
+async def _reap_stale_jobs_loop() -> None:
+    """Periodic background task: recover jobs stuck in 'running' from crashed workers."""
+    import asyncio
+    from core.queue import reap_stale
+    while True:
+        try:
+            reaped = await reap_stale(stale_after_minutes=30)
+            if reaped:
+                logger.info(f"[reaper] recovered {reaped} stale jobs")
+        except Exception as e:
+            logger.warning(f"[reaper] error: {e}")
+        await asyncio.sleep(300)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
     # Logging setup — must happen before anything else
     from core.logging import setup_logging
     from core.prompt_watcher import init_prompt_hashes
@@ -54,10 +70,22 @@ async def lifespan(app: FastAPI):
     from core.firebase import init_firebase
     init_firebase()
 
+    # Reap stale jobs on boot, then periodically
+    from core.queue import reap_stale
+    try:
+        reaped = await reap_stale(stale_after_minutes=30)
+        if reaped:
+            logger.info(f"[api] recovered {reaped} stale jobs on boot")
+    except Exception as e:
+        logger.warning(f"[api] stale reap on boot failed: {e}")
+
+    reaper_task = asyncio.create_task(_reap_stale_jobs_loop())
+
     logger.info("[api] startup complete")
     try:
         yield
     finally:
+        reaper_task.cancel()
         await close_pool()
         logger.info("[api] shutdown complete")
 

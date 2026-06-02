@@ -404,11 +404,16 @@ def synthesize_and_stitch_v2(
     show_name: str,
     output_path: str,
     speaker_override: str | None = None,
-) -> str:
+) -> tuple[str, list[dict]]:
     """
-    Segment-based synthesis — merges same-speaker lines into paragraphs,
-    makes far fewer TTS calls, and produces more natural prosody.
+    Segment-based synthesis with parallel TTS calls.
+
+    Merges same-speaker lines into paragraphs, fires all TTS requests
+    concurrently via a thread pool, then stitches in order.
+
+    Returns (output_path, tts_timings) — same interface as v1.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from core.audio.stitcher import prepare_segments
 
     profile = SHOW_PROFILES[show_name]
@@ -419,26 +424,46 @@ def synthesize_and_stitch_v2(
 
     bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
     gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
+    max_workers = int(os.getenv("CURIA_TTS_PARALLEL", "4"))
 
     segments = prepare_segments(transcript)
     logger.info(
         f"Synthesizing {len(transcript)} lines as {len(segments)} segments "
-        f"(bitrate={bitrate}, gap={gap_ms}ms)..."
+        f"(parallel={max_workers}, bitrate={bitrate}, gap={gap_ms}ms)..."
     )
-    clips = []
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Resolve speakers and build work items
+        work = []
         for i, seg in enumerate(segments):
             raw_speaker = seg["speaker"]
             if raw_speaker not in allowed_speakers:
                 raw_speaker = next(iter(allowed_speakers))
             clip_path = os.path.join(tmpdir, f"segment_{i:04d}.wav")
-            logger.info(f"  [{i+1}/{len(segments)}] {raw_speaker}: {seg['text'][:60]}...")
-            fmt = synthesize_line_by_speaker(seg["text"], raw_speaker, clip_path)
+            work.append((i, raw_speaker, seg["text"], clip_path))
+
+        # Fire all TTS calls in parallel
+        results: dict[int, tuple[str, str]] = {}  # idx -> (clip_path, fmt)
+
+        def _synth(idx, speaker, text, path):
+            logger.info(f"  [{idx+1}/{len(work)}] {speaker}: {text[:60]}...")
+            fmt = synthesize_line_by_speaker(text, speaker, path)
+            return idx, path, fmt
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_synth, *w) for w in work]
+            for fut in as_completed(futures):
+                idx, path, fmt = fut.result()
+                results[idx] = (path, fmt)
+
+        # Load clips in order
+        clips = []
+        for i in range(len(segments)):
+            path, fmt = results[i]
             if fmt == "mp3":
-                clips.append(AudioSegment.from_mp3(clip_path))
+                clips.append(AudioSegment.from_mp3(path))
             else:
-                clips.append(AudioSegment.from_wav(clip_path))
+                clips.append(AudioSegment.from_wav(path))
 
         logger.info("Stitching segments...")
         gap = AudioSegment.silent(duration=gap_ms)
@@ -487,8 +512,22 @@ def synthesize_and_stitch_v2(
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), intro_offset={intro_offset_ms}ms")
-    return output_path, intro_offset_ms
+    # Build tts_timings from segments (same shape as v1 for downstream compat)
+    tts_timings: list[dict] = []
+    cursor_ms = intro_offset_ms
+    for i, (clip, seg) in enumerate(zip(clips, segments)):
+        clip_ms = len(clip)
+        tts_timings.append({
+            "line_index": i,
+            "start_ms": cursor_ms,
+            "end_ms": cursor_ms + clip_ms,
+            "speaker": seg["speaker"],
+            "text": seg["text"],
+        })
+        cursor_ms += clip_ms + gap_ms
+
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), {len(tts_timings)} segment timings")
+    return output_path, tts_timings
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +807,7 @@ async def process_episode(episode_id: str) -> None:
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
         _, tts_timings = await loop.run_in_executor(
-            None, synthesize_and_stitch,
+            None, synthesize_and_stitch_v2,
             transcript, show_name, audio_path, speaker_override,
         )
 

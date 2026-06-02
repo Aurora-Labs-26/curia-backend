@@ -168,6 +168,15 @@ async def main() -> None:
     logger.info(f"[worker] starting id={worker_id} host={hostname} pid={os.getpid()}")
     _install_signal_handlers()
 
+    # Reap stale jobs from crashed workers on startup
+    from core.queue import reap_stale
+    try:
+        reaped = await reap_stale(stale_after_minutes=30)
+        if reaped:
+            logger.info(f"[worker] recovered {reaped} stale jobs on boot")
+    except Exception as e:
+        logger.warning(f"[worker] stale reap on boot failed: {e}")
+
     while not _shutdown.is_set():
         try:
             processed = await _process_one(worker_id)
