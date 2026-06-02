@@ -2417,14 +2417,29 @@ Return JSON:
     else:
         human = f"""Analyze the narrative structure of this transcript. Find 4–8 natural narrative segments.
 
-For each segment:
-- Identify where it sits (approximate % range, e.g. "0–20%")
-- Give it a role label. Use from this taxonomy where it fits, or create your own label if none fit:
-  Hook | Context | Stakes | Mechanism | Complication | Pivot | Resolution | Outro
-- Write one sentence describing what this segment is doing to the listener (not what it's about — what it's *doing*)
-- Quote 1 short sentence from the segment as an anchor
+Use the taxonomy below to label each segment. Pick the label that best describes what the segment is *doing*. If none fit cleanly, combine two (e.g. "Hook + Stakes") or invent a label — but default to this list first.
 
-Also identify the overall arc pattern (e.g. "revelation arc", "problem-solution", "journey", "argument", "portrait") and write 1–2 sentences on the shape of the whole piece.
+TAXONOMY:
+- Hook: the opening move that earns the next 30 seconds — provocative claim, unexpected fact, concrete scene, or unresolved question. Job: make the listener unable to stop.
+- Stakes: why this matters, who is affected. Without stakes, information is trivia.
+- Mechanism: the how/why beneath the what — not "X happened" but "X happened because of this underlying force."
+- Example/Anchor: a concrete instance that makes an abstract idea tangible. The mechanism lives in your head; the example makes it stick.
+- Tension: two forces in conflict with no obvious resolution. The engine that keeps a piece moving.
+- Counterpoint: the strongest version of the opposing view — steelmanned, not dismissed.
+- Turn: the moment the piece goes somewhere unexpected. Changes direction. Good writing has at least one.
+- Reframe: showing the same thing from a different angle such that it looks fundamentally different. Not a conclusion — a lens shift.
+- Payoff: the moment the tension introduced earlier gets resolved or deepened. Every hook promises a payoff.
+- Landing: how the piece ends — summary (weakest), reflection, open question, position taken, or a resonant detail.
+
+Note: for audio episodes, Hook / Tension / Turn / Landing are the four that define whether a piece has a shape or just has content. Flag if any are missing.
+
+For each segment:
+- Where it sits (approximate % range)
+- Role label from the taxonomy above
+- One sentence: what it does to the listener
+- One short quoted sentence as an anchor
+
+Also name the overall arc pattern and write 1–2 sentences on the shape of the whole piece.
 
 TRANSCRIPT ({label}):
 {transcript_text[:6000]}
@@ -2433,6 +2448,7 @@ Return JSON:
 {{
   "arc_pattern": "...",
   "arc_description": "1-2 sentences on the overall narrative shape",
+  "missing_elements": ["list any of Hook/Tension/Turn/Landing that are absent or weak"],
   "segments": [
     {{
       "position": "0-20%",
@@ -3849,7 +3865,10 @@ function _buildNarrativeCard(entry) {
       ${cacheLabel}
       <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(result.arc_pattern||'')}</span>
     </div>
-    <div style="padding:10px 18px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6">${esc(result.arc_description||'')}</div>
+    <div style="padding:10px 18px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6">
+      ${esc(result.arc_description||'')}
+      ${(result.missing_elements?.length) ? `<div style="margin-top:6px;font-size:11px;color:var(--bad)">Missing or weak: ${result.missing_elements.map(e => esc(e)).join(', ')}</div>` : ''}
+    </div>
     <div style="padding:0 18px">${segs}</div>
   </div>`;
 }
