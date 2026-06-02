@@ -167,6 +167,56 @@ EXPLORATION_ENGINE_PROFILE = EpisodeProfile(
 
 
 # ---------------------------------------------------------------------------
+# Two-host speaker config — Kenji (explainer) + Arjun (skeptic)
+# ---------------------------------------------------------------------------
+
+CROSSFIRE_SPEAKERS = SpeakerProfile(
+    name="crossfire",
+    speakers=[
+        Speaker(
+            name="kenji",
+            backstory=(
+                "Former wire journalist who reported from three continents. "
+                "Stepped back to think more carefully about what he was actually witnessing. "
+                "In this show, he builds the case — he's the one who found the material and wants to make it land."
+            ),
+            speech_patterns=(
+                "Keeps sentences tight. "
+                "Prefers one idea per line. "
+                "Builds arguments with concrete details before stating the conclusion. "
+                "Uses contrast sparingly but sharply. "
+                "When challenged, responds with evidence rather than deflection."
+            ),
+        ),
+        Speaker(
+            name="arjun",
+            backstory=(
+                "Economist turned essayist. Spent a decade in policy before deciding "
+                "the interesting questions were upstream of any policy solution. "
+                "In this show, he's the skeptic — harder to convince, asks the uncomfortable questions."
+            ),
+            speech_patterns=(
+                "Asks pointed questions. "
+                "Sits with tension before resolving it. "
+                "Occasionally impatient with vague claims — pushes for specifics. "
+                "Concedes clearly when convinced, doesn't hedge. "
+                "Ends challenges with an open question rather than a counterstatement."
+            ),
+        ),
+    ],
+)
+
+CROSSFIRE_PROFILE = EpisodeProfile(
+    name="crossfire",
+    format_name="crossfire",
+    language="en-US",
+    speaker_config=CROSSFIRE_SPEAKERS,
+    intro_audio_path=_AUDIO_INTRO,
+    outro_audio_path=_AUDIO_OUTRO,
+)
+
+
+# ---------------------------------------------------------------------------
 # Registries
 # ---------------------------------------------------------------------------
 
@@ -175,6 +225,7 @@ SHOW_PROFILES = {
     "clarity_engine": CLARITY_ENGINE_PROFILE,
     "momentum_loop": MOMENTUM_LOOP_PROFILE,
     "exploration_engine": EXPLORATION_ENGINE_PROFILE,
+    "crossfire": CROSSFIRE_PROFILE,
 }
 
 SPEAKER_PROFILES = {

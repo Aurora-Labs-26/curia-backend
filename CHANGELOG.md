@@ -4,6 +4,38 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-02 · Arihant + Claude (claude-opus-4-6)
+
+### Feature
+Two-host "crossfire" format — three-call pipeline (Host A builds case, Host B reacts to A's words, Merger interleaves into natural dialogue).
+- **`prompts/transcript_host_a.txt`** (new) — explainer/advocate prompt: builds the argument, 60% of lines, no intro/outro
+- **`prompts/transcript_host_b.txt`** (new) — skeptic/challenger prompt: reacts to Host A's actual transcript, pushback + questions, 40% of lines
+- **`prompts/transcript_merge.txt`** (new) — interleaves A+B into natural dialogue, adds intro/outro, crossover moments, cuts redundancy, enforces pacing
+- **`core/prompts/transcript_two_host.py`** (new) — three DSPy signatures (GenerateHostA, GenerateHostB, MergeDialogue) with Predict singletons
+- **`studio/formats.py`** — new `crossfire` FormatConfig: medium_fast pacing, oscillating energy, partial resolution, two-host rules (genuine disagreement, no domination, concession moments)
+- **`studio/shows/profiles.py`** — new `CROSSFIRE_SPEAKERS` (kenji=explainer + arjun=skeptic with role-specific backstories/patterns), new `CROSSFIRE_PROFILE` EpisodeProfile
+- **`studio/generator.py`** — new `generate_transcript_two_host()` with 3 sequential LLM calls (all Sonnet); `process_episode` auto-selects single vs two-host based on profile speaker count (2+ speakers + no speaker_override = two-host); re-roll logic works for both paths
+
+### Refactor
+Async TTS pipeline with connection reuse — replaces ThreadPoolExecutor + sync HTTP.
+- **`core/llm_config/adapters/tts.py`** — added `_get_async_client()` and `close_async_client()` to TTSAdapter for lazy shared `httpx.AsyncClient` across all async TTS calls (one TCP+TLS handshake per batch instead of per segment); updated all `_async_*` provider methods (hume, elevenlabs, openai, cartesia, smallest, google, xai) to use the shared client
+- **`studio/generator.py`** — added `synthesize_and_stitch_async()`: fires all segment TTS calls concurrently via `asyncio.gather` with shared connection, no thread pool, no max_workers cap; `process_episode` now calls it directly (was `run_in_executor(synthesize_and_stitch_v2)`); added `TTS_PHASE` timing log to worker output for before/after comparison
+
+### Feature
+Personalised transcript — host addresses listener by first name at natural points (intro, mid-episode, outro).
+- **`core/prompts/name_validator.py`** — new module: fetches user name from DB, extracts first name, validates with Haiku that it's a real name (skips if not)
+- **`studio/generator.py`** — `process_episode` resolves listener name before transcript generation; `generate_transcript` and `_format_listener_hints` accept and propagate `listener_name`; name injected into LISTENER CONTEXT block of speaker_definition
+- **`prompts/transcript.txt`** — added LISTENER NAME section: use name 2-3 times across episode at natural points (intro, mid-episode emphasis, outro sign-off); skip if no name provided
+- **`core/prompts/transcript.py`** — synced DSPy Signature docstring with .txt override for LISTENER NAME instructions
+
+### Test
+Comprehensive unit and integration test suite — 166 tests covering pure functions, schemas, API endpoints, and job queue.
+- **`tests/test_unit.py`** — 119 unit tests: URL normalization, named param converter, record prefix helpers, KB schema validation, format registry, show profiles, briefing builder, TTS text chunking, WAV helpers, PermanentError, API schemas, CurrentUser, job priority, storage helpers, constants
+- **`tests/test_integration_api.py`** — 47 API integration tests with mocked DB: health endpoint, auth & role gates (401/403), me/user profile, sources CRUD, episodes CRUD, jobs, admin (QA-only), ideas, generate-from-source, episode audio, request validation, CORS
+- **`tests/test_integration_queue.py`** — 21 job queue integration tests (require live Postgres, auto-skip otherwise): enqueue, dequeue, ack, fail with retry, fail permanently, reap stale, priority ordering, full lifecycle
+
+---
+
 ## 2026-05-29 · Arihant + Claude (claude-opus-4-6)
 
 ### Feature

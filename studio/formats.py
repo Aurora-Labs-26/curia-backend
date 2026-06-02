@@ -142,6 +142,32 @@ EXPLORATION_ENGINE = FormatConfig(
 )
 
 
+CROSSFIRE = FormatConfig(
+    name="crossfire",
+    pacing="medium_fast",
+    resolution_style="partial",
+    energy_curve="oscillating",
+    structure_pattern=["claim", "challenge", "evidence", "reframe", "tension"],
+    voice_style="conversational, combative but respectful",
+    rules=FormatRules(
+        must_do=[
+            "maintain genuine disagreement — do not converge to agreement too early",
+            "ground every claim in source primitives — no invented positions",
+            "let the strongest counterpoint land without immediately deflecting it",
+            "include at least one moment where a host concedes or shifts position",
+        ],
+        must_avoid=[
+            "performative disagreement — the friction must be real and substantive",
+            "one host dominating for more than 4-5 consecutive lines",
+            "resolving the central tension — leave the listener with something to sit with",
+            "summarizing what the other host just said before responding",
+        ]
+    ),
+    default_segment_count=6,
+    default_length_minutes=12,
+)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -151,6 +177,7 @@ FORMATS: dict[str, FormatConfig] = {
     "clarity_engine": CLARITY_ENGINE,
     "momentum_loop": MOMENTUM_LOOP,
     "exploration_engine": EXPLORATION_ENGINE,
+    "crossfire": CROSSFIRE,
 }
 
 
@@ -159,6 +186,7 @@ _SLUG_TO_BACKEND: dict[str, str] = {
     "sharp-take":   "clarity_engine",
     "live-wire":    "momentum_loop",
     "open-verdict": "exploration_engine",
+    "crossfire":    "crossfire",
 }
 
 

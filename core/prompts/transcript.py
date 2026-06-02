@@ -44,6 +44,12 @@ HOW TO SPEAK:
 - Never summarise what was just said
 - Apply the speaker's speech patterns subtly — from the SPEAKER block above
 
+LISTENER NAME (if provided in LISTENER CONTEXT):
+- If the listener's first name is provided, use it sparingly — 2 to 3 times across the full episode
+- Place the name where it feels warm and natural: once in the intro welcome, optionally once mid-episode, and once in the outro sign-off
+- Never cluster uses — spread them across the episode
+- If no name is provided in LISTENER CONTEXT, do not use any name
+
 LENGTH (hard constraint):
 - Read episode_constraints.target_lines from the briefing packet. This is the total number of JSON entries you must produce.
 - Read episode_constraints.target_lines_per_segment. Each outline segment should produce approximately this many lines.

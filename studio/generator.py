@@ -36,10 +36,16 @@ from core.kb import UserKB, load_kb
 from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
 from core.prompts.transcript import generate_transcript as _transcript_module
+from core.prompts.transcript_two_host import (
+    generate_host_a as _host_a_module,
+    generate_host_b as _host_b_module,
+    merge_dialogue as _merge_module,
+)
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
 from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
 from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
 from optimization.rubrics.judge import judge as _rubric_judge
+from core.prompts.name_validator import resolve_listener_name
 
 # Audio output dir — container-friendly. CURIA_AUDIO_DIR env var overrides.
 EPISODES_DIR = Path(os.getenv("CURIA_AUDIO_DIR", str(CURIA_ROOT / "data" / "audio")))
@@ -92,26 +98,27 @@ def generate_outline(briefing: str, show_name: str) -> dict:
     return outline
 
 
-def _format_listener_hints(kb: UserKB | None) -> str:
+def _format_listener_hints(kb: UserKB | None, listener_name: str | None = None) -> str:
     """KB-derived hints for the transcript LLM — appended to the speaker_definition."""
-    if kb is None:
-        return ""
     hints: list[str] = []
-    if kb.preferences.preferred_tone:
-        hints.append(f"Listener prefers a {kb.preferences.preferred_tone} register.")
-    if kb.preferences.tolerates_ambiguity == "high":
-        hints.append("Listener prefers unresolved endings; avoid tidy conclusions.")
-    elif kb.preferences.tolerates_ambiguity == "low":
-        hints.append("Listener prefers explicit takeaways; close segments cleanly.")
-    if kb.preferences.preferred_length_minutes:
-        hints.append(f"Target ~{kb.preferences.preferred_length_minutes} minutes total.")
-    if kb.dislikes.tones:
-        hints.append(f"Avoid these tones: {', '.join(kb.dislikes.tones)}.")
-    if kb.interests.current_obsession:
-        hints.append(
-            f"Listener is currently thinking about: {kb.interests.current_obsession}. "
-            "Lean toward connections that engage that thread when natural — never force it."
-        )
+    if listener_name:
+        hints.append(f"Listener's first name is {listener_name}.")
+    if kb is not None:
+        if kb.preferences.preferred_tone:
+            hints.append(f"Listener prefers a {kb.preferences.preferred_tone} register.")
+        if kb.preferences.tolerates_ambiguity == "high":
+            hints.append("Listener prefers unresolved endings; avoid tidy conclusions.")
+        elif kb.preferences.tolerates_ambiguity == "low":
+            hints.append("Listener prefers explicit takeaways; close segments cleanly.")
+        if kb.preferences.preferred_length_minutes:
+            hints.append(f"Target ~{kb.preferences.preferred_length_minutes} minutes total.")
+        if kb.dislikes.tones:
+            hints.append(f"Avoid these tones: {', '.join(kb.dislikes.tones)}.")
+        if kb.interests.current_obsession:
+            hints.append(
+                f"Listener is currently thinking about: {kb.interests.current_obsession}. "
+                "Lean toward connections that engage that thread when natural — never force it."
+            )
     if not hints:
         return ""
     return "\n\nLISTENER CONTEXT (apply subtly, do not address them directly):\n" + "\n".join(
@@ -125,11 +132,12 @@ def generate_transcript(
     show_name: str,
     user_kb: UserKB | None = None,
     speaker_override: str | None = None,
+    listener_name: str | None = None,
 ) -> list[dict]:
     profile = SHOW_PROFILES[show_name]
     import time as _time
     llm_log = logger.bind(log_type="llm")
-    logger.info(f"Generating transcript (show={show_name})...")
+    logger.info(f"Generating transcript (show={show_name}, listener_name={listener_name})...")
 
     if speaker_override:
         if speaker_override not in SPEAKER_PROFILES:
@@ -146,7 +154,7 @@ def generate_transcript(
         f"Name: {speaker.name}\n"
         f"Backstory: {speaker.backstory}\n"
         f"Speech patterns: {speaker.speech_patterns}"
-        + _format_listener_hints(user_kb)
+        + _format_listener_hints(user_kb, listener_name)
     )
     # Resolver picks the right model: show-scoped binding overrides task default.
     llm_log.info(f"LLM_CALL_START | task=transcript show={show_name} briefing_len={len(briefing)}")
@@ -174,6 +182,122 @@ def generate_transcript(
         raise
     logger.info(f"Transcript: {len(transcript)} lines")
     return transcript
+
+
+def _parse_json_response(raw: str, label: str) -> list | dict:
+    """Strip markdown fences and parse JSON from an LLM response."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        logger.error(f"{label} JSON parse failed:\n{raw[:300]}")
+        raise
+
+
+def generate_transcript_two_host(
+    briefing: str,
+    outline: dict,
+    show_name: str,
+    user_kb: UserKB | None = None,
+    listener_name: str | None = None,
+) -> list[dict]:
+    """
+    Three-call two-host transcript pipeline:
+      1. Host A (explainer) builds the case
+      2. Host B (skeptic) reacts to Host A's actual words
+      3. Merger interleaves into natural dialogue with intro/outro
+
+    Returns the merged transcript as [{speaker, text}, ...].
+    """
+    import time as _time
+
+    profile = SHOW_PROFILES[show_name]
+    llm_log = logger.bind(log_type="llm")
+    logger.info(f"Generating two-host transcript (show={show_name})...")
+
+    speakers = profile.speaker_config.speakers
+    if len(speakers) < 2:
+        raise ValueError(
+            f"Two-host pipeline requires at least 2 speakers in profile '{show_name}', "
+            f"got {len(speakers)}"
+        )
+    speaker_a = speakers[0]
+    speaker_b = speakers[1]
+
+    speaker_a_def = (
+        f"Name: {speaker_a.name}\n"
+        f"Backstory: {speaker_a.backstory}\n"
+        f"Speech patterns: {speaker_a.speech_patterns}"
+        + _format_listener_hints(user_kb, listener_name)
+    )
+    speaker_b_def = (
+        f"Name: {speaker_b.name}\n"
+        f"Backstory: {speaker_b.backstory}\n"
+        f"Speech patterns: {speaker_b.speech_patterns}"
+    )
+    outline_json = json.dumps(outline, indent=2)
+
+    # ── Call 1: Host A ──────────────────────────────────────────────────
+    llm_log.info(f"LLM_CALL_START | task=transcript_host_a show={show_name}")
+    _t1 = _time.time()
+    with dspy.context(lm=resolve.llm("transcript", show=show_name)):
+        pred_a = _host_a_module(
+            briefing=briefing,
+            outline=outline_json,
+            speaker_definition=speaker_a_def,
+            quality_guidelines=TRANSCRIPT_GUIDELINES_V1,
+        )
+    _e1 = _time.time() - _t1
+    host_a_transcript = _parse_json_response(pred_a.host_a_json, "Host A")
+    llm_log.info(f"LLM_CALL_END | task=transcript_host_a duration={_e1:.2f}s lines={len(host_a_transcript)}")
+
+    # ── Call 2: Host B (reacts to A) ────────────────────────────────────
+    host_a_json_str = json.dumps(host_a_transcript, indent=2, ensure_ascii=False)
+    llm_log.info(f"LLM_CALL_START | task=transcript_host_b show={show_name}")
+    _t2 = _time.time()
+    with dspy.context(lm=resolve.llm("transcript", show=show_name)):
+        pred_b = _host_b_module(
+            briefing=briefing,
+            outline=outline_json,
+            speaker_definition=speaker_b_def,
+            host_a_transcript=host_a_json_str,
+            quality_guidelines=TRANSCRIPT_GUIDELINES_V1,
+        )
+    _e2 = _time.time() - _t2
+    host_b_transcript = _parse_json_response(pred_b.host_b_json, "Host B")
+    llm_log.info(f"LLM_CALL_END | task=transcript_host_b duration={_e2:.2f}s lines={len(host_b_transcript)}")
+
+    # ── Call 3: Merge ───────────────────────────────────────────────────
+    host_b_json_str = json.dumps(host_b_transcript, indent=2, ensure_ascii=False)
+    llm_log.info(f"LLM_CALL_START | task=transcript_merge show={show_name}")
+    _t3 = _time.time()
+    with dspy.context(lm=resolve.llm("transcript", show=show_name)):
+        pred_merge = _merge_module(
+            briefing=briefing,
+            outline=outline_json,
+            host_a_transcript=host_a_json_str,
+            host_b_transcript=host_b_json_str,
+            speaker_a_name=speaker_a.name.lower(),
+            speaker_b_name=speaker_b.name.lower(),
+        )
+    _e3 = _time.time() - _t3
+    merged = _parse_json_response(pred_merge.merged_json, "Merger")
+    llm_log.info(
+        f"LLM_CALL_END | task=transcript_merge duration={_e3:.2f}s "
+        f"lines={len(merged)} (A={len(host_a_transcript)}, B={len(host_b_transcript)}, merged={len(merged)})"
+    )
+
+    total = _e1 + _e2 + _e3
+    logger.info(
+        f"Two-host transcript complete: {len(merged)} lines in {total:.2f}s "
+        f"(A={_e1:.1f}s, B={_e2:.1f}s, merge={_e3:.1f}s)"
+    )
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +654,128 @@ def synthesize_and_stitch_v2(
     return output_path, tts_timings
 
 
+async def synthesize_and_stitch_async(
+    transcript: list[dict],
+    show_name: str,
+    output_path: str,
+    speaker_override: str | None = None,
+) -> tuple[str, list[dict]]:
+    """
+    Async TTS pipeline: concurrent requests with connection reuse.
+
+    Replaces synthesize_and_stitch_v2 (ThreadPoolExecutor + sync HTTP) with
+    asyncio.gather + shared httpx.AsyncClient. Same interface, same output.
+    """
+    import time as _time
+    from core.audio.stitcher import prepare_segments
+
+    profile = SHOW_PROFILES[show_name]
+    if speaker_override and speaker_override in SPEAKER_PROFILES:
+        speaker_name = speaker_override.lower()
+    else:
+        speaker_name = profile.speaker_config.speakers[0].name.lower()
+
+    bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
+    gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
+
+    segments = prepare_segments(transcript)
+    logger.info(
+        f"[async_tts] Synthesizing {len(transcript)} lines as {len(segments)} segments "
+        f"(speaker={speaker_name}, bitrate={bitrate}, gap={gap_ms}ms)..."
+    )
+
+    adapter = resolve.tts(speaker=speaker_name)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clip_paths = [os.path.join(tmpdir, f"seg_{i:04d}.{adapter.output_format}") for i in range(len(segments))]
+
+        async def _synth_one(idx: int) -> None:
+            seg = segments[idx]
+            logger.info(f"  [{idx+1}/{len(segments)}] {speaker_name}: {seg['text'][:60]}...")
+            await adapter.synthesize_async(text=seg["text"], output_path=clip_paths[idx])
+
+        # Fire all TTS calls concurrently — shared HTTP connection under the hood
+        tts_start = _time.time()
+        await asyncio.gather(*[_synth_one(i) for i in range(len(segments))])
+        tts_elapsed = _time.time() - tts_start
+        logger.info(f"[async_tts] All {len(segments)} segments synthesized in {tts_elapsed:.2f}s")
+
+        # Close the shared HTTP client
+        await adapter.close_async_client()
+
+        # Load clips in order (pydub, CPU-bound but fast)
+        clips = []
+        for path in clip_paths:
+            if adapter.output_format == "mp3":
+                clips.append(AudioSegment.from_mp3(path))
+            else:
+                clips.append(AudioSegment.from_wav(path))
+
+        logger.info("[async_tts] Stitching segments...")
+        gap = AudioSegment.silent(duration=gap_ms)
+        body = AudioSegment.empty()
+        for clip in clips:
+            body += clip + gap
+
+        intro = _load_optional_segment(profile.intro_audio_path, "intro")
+        outro = _load_optional_segment(profile.outro_audio_path, "outro")
+        music = _load_optional_segment(profile.music_audio_path, "music")
+
+        intro_offset_ms = 0
+
+        if intro is not None:
+            logger.info(f"  crossfading intro ({len(intro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            intro_gain = (episode_dbfs - intro.dBFS + INTRO_GAIN_DB) if intro.dBFS != float("-inf") else 0
+            intro = intro.apply_gain(intro_gain)
+            intro_full_clip = intro[:INTRO_FULL_MS]
+            intro_fade_clip = intro[INTRO_FULL_MS: INTRO_FULL_MS + INTRO_FADE_MS].fade_out(INTRO_FADE_MS)
+            body = intro_full_clip + body
+            body = body.overlay(intro_fade_clip, position=INTRO_FULL_MS)
+            intro_offset_ms = INTRO_FULL_MS
+
+        if outro is not None:
+            logger.info(f"  crossfading outro ({len(outro)/1000:.1f}s source)")
+            episode_dbfs = body.dBFS
+            outro_gain = (episode_dbfs - outro.dBFS + OUTRO_GAIN_DB) if outro.dBFS != float("-inf") else 0
+            outro = outro.apply_gain(outro_gain)
+            outro_fade_in = outro[:OUTRO_FADE_IN_MS].fade_in(OUTRO_FADE_IN_MS)
+            outro_full_clip = outro[OUTRO_FADE_IN_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS]
+            outro_fade_out = outro[OUTRO_FADE_IN_MS + OUTRO_FULL_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS + OUTRO_FADE_OUT_MS].fade_out(OUTRO_FADE_OUT_MS)
+            outro_ready = outro_fade_in + outro_full_clip + outro_fade_out
+            tts_end_pos = len(body)
+            outro_start_pos = tts_end_pos - OUTRO_FADE_IN_MS
+            tail_ms = OUTRO_FULL_MS + OUTRO_FADE_OUT_MS
+            body = body + AudioSegment.silent(duration=tail_ms)
+            body = body.overlay(outro_ready, position=max(0, outro_start_pos))
+
+        if music is not None:
+            logger.info(
+                f"  overlaying music ({len(music)/1000:.1f}s loop) "
+                f"at {profile.music_gain_db:+.1f} dB"
+            )
+            body = _overlay_music(body, music, profile.music_gain_db)
+
+        body.export(output_path, format="mp3", bitrate=bitrate)
+
+    # Build tts_timings
+    tts_timings: list[dict] = []
+    cursor_ms = intro_offset_ms
+    for i, (clip, seg) in enumerate(zip(clips, segments)):
+        clip_ms = len(clip)
+        tts_timings.append({
+            "line_index": i,
+            "start_ms": cursor_ms,
+            "end_ms": cursor_ms + clip_ms,
+            "speaker": seg["speaker"],
+            "text": seg["text"],
+        })
+        cursor_ms += clip_ms + gap_ms
+
+    logger.info(f"[async_tts] Audio exported: {output_path} ({len(body)/1000:.1f}s)")
+    return output_path, tts_timings
+
+
 # ---------------------------------------------------------------------------
 # Episode save + post-generation
 # ---------------------------------------------------------------------------
@@ -718,6 +964,13 @@ async def process_episode(episode_id: str) -> None:
         logger.warning(f"  could not load KB for {user_id}: {e}; proceeding without")
         user_kb = None
 
+    # Resolve listener name for personalised transcript (Haiku-validated)
+    try:
+        listener_name = await resolve_listener_name(user_id)
+    except Exception as e:
+        logger.warning(f"  could not resolve listener name for {user_id}: {e}; skipping")
+        listener_name = None
+
     try:
         # 1. Select sources (KB seeds editorial direction when none was provided)
         await _set_episode_status(episode_id, "selecting")
@@ -748,12 +1001,20 @@ async def process_episode(episode_id: str) -> None:
         )
         title = outline.get("title", show_name)
 
-        # 4. Generate transcript (sync DSPy call — offload to thread pool)
+        # 4. Generate transcript — pick single-host or two-host based on speaker count
         await _set_episode_status(episode_id, "transcribing")
-        transcript = await loop.run_in_executor(
-            None, generate_transcript,
-            briefing, outline, show_name, user_kb, speaker_override,
-        )
+        is_two_host = len(profile.speaker_config.speakers) >= 2 and speaker_override is None
+        if is_two_host:
+            logger.info(f"  two-host pipeline (speakers: {[s.name for s in profile.speaker_config.speakers]})")
+            transcript = await loop.run_in_executor(
+                None, generate_transcript_two_host,
+                briefing, outline, show_name, user_kb, listener_name,
+            )
+        else:
+            transcript = await loop.run_in_executor(
+                None, generate_transcript,
+                briefing, outline, show_name, user_kb, speaker_override, listener_name,
+            )
 
         judgment = await _rubric_judge(
             task="transcript",
@@ -776,10 +1037,16 @@ async def process_episode(episode_id: str) -> None:
             judgment_v1 = judgment
 
             # Generate v2
-            transcript_v2 = await loop.run_in_executor(
-                None, generate_transcript,
-                briefing, outline, show_name, user_kb, speaker_override,
-            )
+            if is_two_host:
+                transcript_v2 = await loop.run_in_executor(
+                    None, generate_transcript_two_host,
+                    briefing, outline, show_name, user_kb, listener_name,
+                )
+            else:
+                transcript_v2 = await loop.run_in_executor(
+                    None, generate_transcript,
+                    briefing, outline, show_name, user_kb, speaker_override, listener_name,
+                )
             judgment_v2 = await _rubric_judge(
                 task="transcript",
                 output=json.dumps(transcript_v2, ensure_ascii=False),
@@ -803,12 +1070,17 @@ async def process_episode(episode_id: str) -> None:
             f"floor_violations={len(judgment.floor_violations)})"
         )
 
-        # 5. Synthesize + stitch (sync TTS + pydub — offload to thread pool)
+        # 5. Synthesize + stitch (async TTS with connection reuse)
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        _, tts_timings = await loop.run_in_executor(
-            None, synthesize_and_stitch_v2,
+        import time as _tts_time
+        _tts_start = _tts_time.time()
+        _, tts_timings = await synthesize_and_stitch_async(
             transcript, show_name, audio_path, speaker_override,
+        )
+        _tts_elapsed = _tts_time.time() - _tts_start
+        worker_log.info(
+            f"TTS_PHASE | id={episode_id} duration={_tts_elapsed:.2f}s"
         )
 
         # 6. Persist results onto the existing row

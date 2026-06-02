@@ -156,6 +156,19 @@ class TTSAdapter:
         self.settings = settings
         self.voice_id = voice_id
         self._warned_stub = False
+        self._async_client: httpx.AsyncClient | None = None
+
+    async def _get_async_client(self) -> httpx.AsyncClient:
+        """Lazily create and reuse a single async HTTP client for connection pooling."""
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(timeout=60)
+        return self._async_client
+
+    async def close_async_client(self) -> None:
+        """Close the shared async client. Call after a batch of TTS calls."""
+        if self._async_client is not None:
+            await self._async_client.aclose()
+            self._async_client = None
 
     @property
     def output_format(self) -> str:
@@ -339,17 +352,17 @@ class TTSAdapter:
             "style": self.settings.get("style", 0.0),
             "use_speaker_boost": self.settings.get("use_speaker_boost", True),
         }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url,
-                params={"output_format": output_format},
-                headers={
-                    "xi-api-key": api_key,
-                    "Content-Type": "application/json",
-                    "Accept": "audio/pcm" if output_format.startswith("pcm_") else "audio/wav",
-                },
-                json={"text": text, "model_id": self.model.model_id, "voice_settings": voice_settings},
-            )
+        client = await self._get_async_client()
+        resp = await client.post(
+            url,
+            params={"output_format": output_format},
+            headers={
+                "xi-api-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/pcm" if output_format.startswith("pcm_") else "audio/wav",
+            },
+            json={"text": text, "model_id": self.model.model_id, "voice_settings": voice_settings},
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"ElevenLabs error {resp.status_code}: {resp.text[:300]}")
         if output_format.startswith("pcm_"):
@@ -368,12 +381,12 @@ class TTSAdapter:
             "response_format": self.settings.get("response_format", "wav"),
             "speed": self.settings.get("speed", 1.0),
         }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=body,
-            )
+        client = await self._get_async_client()
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=body,
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"OpenAI TTS error {resp.status_code}: {resp.text[:300]}")
         with open(output_path, "wb") as f:
@@ -392,16 +405,16 @@ class TTSAdapter:
                 "sample_rate": self.settings.get("sample_rate", 22050),
             },
         }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url,
-                headers={
-                    "X-API-Key": api_key,
-                    "Cartesia-Version": "2024-06-10",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
+        client = await self._get_async_client()
+        resp = await client.post(
+            url,
+            headers={
+                "X-API-Key": api_key,
+                "Cartesia-Version": "2024-06-10",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"Cartesia error {resp.status_code}: {resp.text[:300]}")
         with open(output_path, "wb") as f:
@@ -411,6 +424,7 @@ class TTSAdapter:
         base_url = (self.provider.base_url or "https://waves-api.smallest.ai").rstrip("/")
         endpoint = self.settings.get("endpoint_path", "/api/v1/lightning/get_speech")
         url = f"{base_url}{endpoint}"
+        client = await self._get_async_client()
         chunks = _chunk_text(text)
         if len(chunks) == 1:
             body = {
@@ -421,12 +435,11 @@ class TTSAdapter:
                 "speed": self.settings.get("speed", 1.0),
                 "add_wav_header": True,
             }
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json=body,
-                )
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            )
             if resp.status_code != 200:
                 raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
             with open(output_path, "wb") as f:
@@ -436,28 +449,27 @@ class TTSAdapter:
             from pydub import AudioSegment
             import tempfile, os
             combined = AudioSegment.empty()
-            async with httpx.AsyncClient(timeout=60) as client:
-                for chunk in chunks:
-                    body = {
-                        "voice_id": self.voice_id,
-                        "text": chunk,
-                        "language": self.settings.get("language", "en"),
-                        "sample_rate": int(self.settings.get("sample_rate", 22050)),
-                        "speed": self.settings.get("speed", 1.0),
-                        "add_wav_header": True,
-                    }
-                    resp = await client.post(
-                        url,
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                        json=body,
-                    )
-                    if resp.status_code != 200:
-                        raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        tmp.write(resp.content)
-                        tmp_path = tmp.name
-                    combined += AudioSegment.from_wav(tmp_path)
-                    os.unlink(tmp_path)
+            for chunk in chunks:
+                body = {
+                    "voice_id": self.voice_id,
+                    "text": chunk,
+                    "language": self.settings.get("language", "en"),
+                    "sample_rate": int(self.settings.get("sample_rate", 22050)),
+                    "speed": self.settings.get("speed", 1.0),
+                    "add_wav_header": True,
+                }
+                resp = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Smallest.ai error {resp.status_code}: {resp.text[:300]}")
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp.write(resp.content)
+                    tmp_path = tmp.name
+                combined += AudioSegment.from_wav(tmp_path)
+                os.unlink(tmp_path)
             combined.export(output_path, format="wav")
 
     async def _async_smallest_with_timings(
@@ -564,8 +576,8 @@ class TTSAdapter:
                 "pitch": self.settings.get("pitch", 0.0),
             },
         }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(url, params={"key": api_key}, headers={"Content-Type": "application/json"}, json=body)
+        client = await self._get_async_client()
+        resp = await client.post(url, params={"key": api_key}, headers={"Content-Type": "application/json"}, json=body)
         if resp.status_code != 200:
             raise RuntimeError(f"Google TTS error {resp.status_code}: {resp.text[:300]}")
         payload = resp.json()
@@ -608,13 +620,13 @@ class TTSAdapter:
         gen_id = getattr(self, "_hume_generation_id", None)
         if gen_id:
             body["context"] = {"generation_id": gen_id}
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url,
-                params={"api_key": api_key},
-                headers={"Content-Type": "application/json"},
-                json=body,
-            )
+        client = await self._get_async_client()
+        resp = await client.post(
+            url,
+            params={"api_key": api_key},
+            headers={"Content-Type": "application/json"},
+            json=body,
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"Hume TTS error {resp.status_code}: {resp.text[:300]}")
         new_gen_id = resp.headers.get("x-hume-generation-id")
@@ -635,12 +647,12 @@ class TTSAdapter:
             **{k: v for k, v in self.settings.items() if k not in ("endpoint_path", "audio_format")},
         }
         audio_format = self.settings.get("audio_format", "wav")
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=body,
-            )
+        client = await self._get_async_client()
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=body,
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"xAI TTS error {resp.status_code}: {resp.text[:300]}")
         if audio_format == "pcm":
