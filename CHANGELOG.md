@@ -4,6 +4,14 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-03 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Editable B briefing panel in compare UI — lets user override format_config (voice style + rules) before transcript generation.
+- **`studio/eval_server.py`** — "Edit B briefing ↓" toggle in phase2 bar loads B's briefing JSON into editable textarea; sends as `briefing_b` on transcript run; `_run_transcript_step` accepts `briefing_override` param; `/api/compare/run-transcript` reads and threads `briefing_b` through
+
+---
+
 ## 2026-06-01 · Aditya + Claude (claude-sonnet-4-6) [2]
 
 ### Feature
