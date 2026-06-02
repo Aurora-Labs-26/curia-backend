@@ -2329,28 +2329,43 @@ async def youtube_transcript(request: Request):
             data = resp.json()
         # Extract and clean plain text from segments
         import re as _re
-        segments = data.get("segments") or data.get("transcript") or []
-        if isinstance(segments, list):
-            # Sort by start time to guarantee order (overlapping window captions)
+
+        def _clean_segments(segs: list) -> str:
             try:
-                segments = sorted(segments, key=lambda s: s.get("start", 0) if isinstance(s, dict) else 0)
+                segs = sorted(segs, key=lambda s: s.get("start", 0) if isinstance(s, dict) else 0)
             except Exception:
                 pass
             parts = []
-            for s in segments:
+            for s in segs:
                 if not isinstance(s, dict):
                     continue
                 t = (s.get("text") or s.get("content") or "")
                 t = t.replace("\xa0", " ").replace("\n", " ")
                 t = " ".join(t.split()).strip()
-                # Filter non-speech markers: [Music], [Applause], (music), etc.
                 if _re.fullmatch(r'[\[\(][^\]\)]{0,30}[\]\)]', t):
                     continue
                 if t:
                     parts.append(t)
-            plain = " ".join(parts).strip()
+            return " ".join(parts).strip()
+
+        # API may return segments at top-level OR nested under a "transcript" object
+        segments = data.get("segments")
+        if isinstance(segments, list) and segments:
+            plain = _clean_segments(segments)
         else:
-            plain = str(segments).replace("\xa0", " ")
+            t = data.get("transcript")
+            if isinstance(t, str) and t.strip():
+                # Already a plain text string
+                plain = t.replace("\xa0", " ").strip()
+            elif isinstance(t, dict):
+                # Nested object — look for segments inside
+                plain = _clean_segments(t.get("segments") or [])
+                if not plain and t.get("text"):
+                    plain = str(t["text"]).replace("\xa0", " ").strip()
+            elif isinstance(t, list):
+                plain = _clean_segments(t)
+            else:
+                plain = ""
         return {
             "transcript": plain,
             "title": data.get("title") or "",
