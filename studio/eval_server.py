@@ -2875,7 +2875,26 @@ select:focus{outline:none;border-color:var(--accent)}
         <div class="judge-title">LLM Judge</div>
         <div class="judge-subtitle">Scores both transcripts on 5 axes — requires both loaded</div>
       </div>
-      <button class="btn-primary" id="judge-btn" onclick="runJudge()">Run judge →</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn-secondary" style="padding:6px 12px;font-size:12px" onclick="toggleJudgePrompt()">View prompt</button>
+        <button class="btn-primary" id="judge-btn" onclick="runJudge()">Run judge →</button>
+      </div>
+    </div>
+    <!-- Judge prompt — collapsed by default -->
+    <div id="judge-prompt-panel" style="display:none;border-bottom:1px solid var(--border);background:var(--bg)">
+      <div style="padding:12px 20px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle)">System prompt</div>
+      <pre style="padding:0 20px 12px;font-size:11px;font-family:'SF Mono',Menlo,monospace;line-height:1.65;color:var(--muted);white-space:pre-wrap;word-break:break-word">You are an expert podcast quality evaluator. You score two podcast transcripts against each other on specific axes.
+For each axis, give a score 1–5 for each transcript and a one-sentence rationale explaining the difference.
+Then give an overall winner (or "tie") and a 2–3 sentence summary of the key differences.
+Respond in JSON only.</pre>
+      <div style="padding:0 20px 4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--subtle)">Scoring axes</div>
+      <div style="padding:4px 20px 14px;font-size:12px;color:var(--muted);line-height:1.8">
+        <div><span style="font-weight:600;color:var(--text)">Source Fidelity</span> — Accurately represents the source. No hallucinations. Covers the key facts.</div>
+        <div><span style="font-weight:600;color:var(--text)">Naturalness</span> — Sounds like a real podcast monologue — conversational, not academic or essay-like.</div>
+        <div><span style="font-weight:600;color:var(--text)">Hook Quality</span> — The opening grabs attention. Doesn't start with preamble or self-introduction.</div>
+        <div><span style="font-weight:600;color:var(--text)">Coverage</span> — Hits the key insights and tensions from the source material.</div>
+        <div><span style="font-weight:600;color:var(--text)">Narrative Arc</span> — Builds toward something. Has momentum and direction, not just information delivery.</div>
+      </div>
     </div>
     <div class="judge-body" id="judge-body">
       <div class="empty-hint" style="padding:20px 0">Load both transcripts to run the judge.</div>
@@ -3034,28 +3053,36 @@ function assignSlot(idx, slot) {
   if (epId) loadEpisodeIntoColumn(epId, slot === 'a' ? 'a' : 'b');
 }
 
-async function loadExistingToSlot(slot) {
+async function loadExistingToSlot(slot, phase) {
+  // phase: 'outline' = show outline only (matching B during outline step)
+  //        'transcript' or undefined = show full episode
   if (!_existingEp) return;
-  const colId = slot === 'a' ? 'fmt-col-a' : 'fmt-col-b';
   document.getElementById('fmt-cols').style.display = 'grid';
   const container = document.getElementById(slot === 'a' ? 'fmt-result-a' : 'fmt-result-b');
   container.innerHTML = '';
   const div = document.createElement('div');
   const outline = _existingEp.outline || {};
   const lines = Array.isArray(_existingEp.transcript) ? _existingEp.transcript : [];
-  if (outline.title) {
+
+  if (outline.title || outline.thread || (outline.segments||[]).length) {
     div.innerHTML += `<div class="result-section">
-      <div class="result-section-label">Episode (production)</div>
-      <div class="result-title">${esc(outline.title)}</div>
+      <div class="result-section-label">Outline${phase === 'outline' ? ' (production / cached)' : ''}</div>
+      ${outline.title ? `<div class="result-title">${esc(outline.title)}</div>` : ''}
       ${outline.thread ? `<div class="result-thread">${esc(outline.thread)}</div>` : ''}
+      ${(outline.segments||[]).map((s,i)=>`
+        <div style="margin-bottom:6px;font-size:13px">
+          <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--subtle)">Seg ${s.segment||i+1}</span>
+          <span style="margin-left:8px">${esc(s.title||s.focus||s.purpose||'')}</span>
+        </div>`).join('')}
     </div>`;
   }
-  if (lines.length) {
+
+  if (phase !== 'outline' && lines.length) {
     const plainText = lines.map(l => l.text||'').join('\n\n');
     const copyId = 'copy-prod-' + slot;
     div.innerHTML += `<div class="result-section">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div class="result-section-label" style="margin-bottom:0">Transcript</div>
+        <div class="result-section-label" style="margin-bottom:0">Transcript (production / cached)</div>
         <button id="${copyId}" onclick="copyTranscript('${copyId}', \`${plainText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)"
           style="padding:3px 10px;font-size:11px;font-weight:500;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer">Copy</button>
       </div>
@@ -3169,12 +3196,12 @@ async function runPromptCompare() {
   if (fmtPollA) clearTimeout(fmtPollA);
   if (fmtPollB) clearTimeout(fmtPollB);
 
-  // If production episode exists, use it for column A (skip re-generation)
+  // If production episode exists, show its outline in column A (outline phase only)
   if (_existingEp) {
     _outlineDoneA = true;
-    loadExistingToSlot('a');
+    loadExistingToSlot('a', 'outline');
     document.getElementById('fmt-steps-a').innerHTML =
-      '<li class="step done"><span class="step-icon">✓</span><span>Using cached production episode</span></li>';
+      '<li class="step done"><span class="step-icon">✓</span><span>Outline from cached production episode</span></li>';
   }
 
   const res = await fetch('/api/compare/run-outline', {
@@ -3215,8 +3242,16 @@ async function runTranscripts() {
       transcript_prompt_b: _getTranscriptPromptB(),
     })
   });
-  // Skip A if using cached production episode
-  if (!_existingEp) pollFmtJob(_fmtJobA, 'a', 'transcript');
+
+  if (_existingEp) {
+    // Load cached full episode into A immediately — no pipeline needed
+    loadExistingToSlot('a', 'transcript');
+    document.getElementById('fmt-steps-a').innerHTML =
+      '<li class="step done"><span class="step-icon">✓</span><span>Transcript from cached production episode</span></li>';
+    document.getElementById('fmt-btn').disabled = false;
+  } else {
+    pollFmtJob(_fmtJobA, 'a', 'transcript');
+  }
   pollFmtJob(_fmtJobB, 'b', 'transcript');
 }
 
@@ -3576,6 +3611,14 @@ function renderNarrativePanels() {
       <div style="padding:0 18px">${segs}</div>
     </div>`;
   }).join('');
+}
+
+function toggleJudgePrompt() {
+  const panel = document.getElementById('judge-prompt-panel');
+  const btn = event.currentTarget;
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : '';
+  btn.textContent = visible ? 'View prompt' : 'Hide prompt';
 }
 
 async function runJudge() {
