@@ -2328,16 +2328,24 @@ async def youtube_transcript(request: Request):
             resp.raise_for_status()
             data = resp.json()
         # Extract and clean plain text from segments
+        import re as _re
         segments = data.get("segments") or data.get("transcript") or []
         if isinstance(segments, list):
+            # Sort by start time to guarantee order (overlapping window captions)
+            try:
+                segments = sorted(segments, key=lambda s: s.get("start", 0) if isinstance(s, dict) else 0)
+            except Exception:
+                pass
             parts = []
             for s in segments:
                 if not isinstance(s, dict):
                     continue
                 t = (s.get("text") or s.get("content") or "")
-                # Clean: non-breaking spaces → space, collapse whitespace/newlines
                 t = t.replace("\xa0", " ").replace("\n", " ")
                 t = " ".join(t.split()).strip()
+                # Filter non-speech markers: [Music], [Applause], (music), etc.
+                if _re.fullmatch(r'[\[\(][^\]\)]{0,30}[\]\)]', t):
+                    continue
                 if t:
                     parts.append(t)
             plain = " ".join(parts).strip()
