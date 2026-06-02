@@ -3158,7 +3158,13 @@ select:focus{outline:none;border-color:var(--accent)}
             <button class="analysis-mode-btn" id="mode-curia-open" data-side="curia" data-mode="open" onclick="selectAnalysisMode('curia','open')">Open</button>
             <button class="analysis-mode-btn" id="mode-curia-evaluate" data-side="curia" data-mode="evaluate" onclick="selectAnalysisMode('curia','evaluate')">Evaluate</button>
           </div>
-          <button class="btn-primary" id="run-curia-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('curia', _selectedMode['curia'])">Run analysis →</button>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:0">
+            <button class="btn-primary" id="run-curia-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('curia', _selectedMode['curia'])">Run analysis →</button>
+            <button id="view-prompt-curia" style="display:none;padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer" onclick="togglePromptView('curia')">View prompt</button>
+          </div>
+          <div id="prompt-view-curia" style="display:none;margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+            <pre style="padding:12px;font-size:10.5px;font-family:'SF Mono',Menlo,monospace;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--muted);max-height:280px;overflow-y:auto;margin:0"></pre>
+          </div>
         </div>
       </div>
       <div class="card" id="ext-external-card" style="display:none">
@@ -3176,7 +3182,13 @@ select:focus{outline:none;border-color:var(--accent)}
             <button class="analysis-mode-btn" id="mode-external-open" data-side="external" data-mode="open" onclick="selectAnalysisMode('external','open')">Open</button>
             <button class="analysis-mode-btn" id="mode-external-evaluate" data-side="external" data-mode="evaluate" onclick="selectAnalysisMode('external','evaluate')">Evaluate</button>
           </div>
-          <button class="btn-primary" id="run-external-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('external', _selectedMode['external'])">Run analysis →</button>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:0">
+            <button class="btn-primary" id="run-external-btn" style="padding:5px 14px;font-size:12px;display:none" onclick="analyzeStructure('external', _selectedMode['external'])">Run analysis →</button>
+            <button id="view-prompt-external" style="display:none;padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer" onclick="togglePromptView('external')">View prompt</button>
+          </div>
+          <div id="prompt-view-external" style="display:none;margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+            <pre style="padding:12px;font-size:10.5px;font-family:'SF Mono',Menlo,monospace;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--muted);max-height:280px;overflow-y:auto;margin:0"></pre>
+          </div>
         </div>
       </div>
     </div>
@@ -3865,21 +3877,78 @@ const _narrativeResults = {};
 let _extFileKey = '';  // set when a file is selected
 const _selectedMode = {curia: null, external: null};
 
+const NARRATIVE_PROMPTS = {
+  structured: `Analyze the narrative structure using this taxonomy:
+
+Hook: the opening move that earns the next 30 seconds — provocative claim, unexpected fact, concrete scene, or unresolved question.
+Stakes: why this matters, who is affected.
+Mechanism: the how/why beneath the what.
+Example/Anchor: a concrete instance that makes an abstract idea tangible.
+Tension: two forces in conflict with no obvious resolution.
+Counterpoint: the strongest version of the opposing view — steelmanned.
+Turn: the moment the piece goes somewhere unexpected. Changes direction.
+Reframe: showing the same thing from a different angle.
+Payoff: the tension introduced earlier gets resolved or deepened.
+Landing: how the piece ends — summary, reflection, open question, position, or resonant detail.
+
+Hook / Tension / Turn / Landing are the four that define whether a piece has a shape or just has content. Missing elements are flagged in the output.`,
+
+  open: `Read this transcript and find where the narrative intention shifts.
+
+Do NOT use standard labels (Hook, Stakes, etc.) or podcast/essay terminology.
+Name each section in your own words — describe what it's genuinely doing.
+If you observe something that doesn't have a common name, invent a phrase that captures it precisely.
+Let the structure tell you what it is; don't fit it to a template.
+
+For each section: position in transcript, your own label, what it does to the listener, anchor quote.
+Overall: what kind of journey does the listener go on?`,
+
+  evaluate: `8-question structural audit:
+
+1. Segment mapping — what is each segment doing narratively, approximate position, how does it transition?
+2. Opening — exact first sentence, type (claim/question/scene/fact/contrast), how long before you know what the episode is about?
+3. Closing — how does it end, type (summarize/reflect/question/position/trail), energy (up/down/flat)?
+4. World knowledge — does the host stay inside the source or bring in outside connections? When does outside knowledge enter?
+5. Fact vs opinion — does the episode distinguish between factual claims and editorial opinion? How?
+6. Pacing — roughly how many distinct ideas per minute? Does it re-hook mid-episode?
+7. Format contract — one sentence: what was this episode's implicit promise to the listener?
+8. Limitations — what listener intent would this structure fail to serve?
+
+Model: Claude Sonnet (deeper analysis than Structured/Open modes)`
+};
+
 function selectAnalysisMode(side, mode) {
   _selectedMode[side] = mode;
   // Update button styles
   ['structured','open','evaluate'].forEach(m => {
     const btn = document.getElementById(`mode-${side}-${m}`);
-    if (btn) {
-      btn.className = 'analysis-mode-btn' + (m === mode ? ` selected-${mode}` : '');
-    }
+    if (btn) btn.className = 'analysis-mode-btn' + (m === mode ? ` selected-${mode}` : '');
   });
-  // Show run button
+  // Show run + view-prompt buttons
   const runBtn = document.getElementById(`run-${side}-btn`);
-  if (runBtn) {
-    runBtn.style.display = '';
-    runBtn.textContent = mode === 'evaluate' ? 'Run evaluation →' : 'Run analysis →';
+  if (runBtn) { runBtn.style.display = ''; runBtn.textContent = mode === 'evaluate' ? 'Run evaluation →' : 'Run analysis →'; }
+  const vpBtn = document.getElementById(`view-prompt-${side}`);
+  if (vpBtn) vpBtn.style.display = '';
+  // Update prompt preview content (in case panel is already open)
+  const panel = document.getElementById(`prompt-view-${side}`);
+  if (panel && panel.style.display !== 'none') {
+    panel.querySelector('pre').textContent = NARRATIVE_PROMPTS[mode] || '';
   }
+}
+
+function togglePromptView(side) {
+  const panel = document.getElementById(`prompt-view-${side}`);
+  const btn   = document.getElementById(`view-prompt-${side}`);
+  if (!panel || !btn) return;
+  const visible = panel.style.display !== 'none';
+  if (!visible) {
+    const mode = _selectedMode[side] || 'structured';
+    panel.querySelector('pre').textContent = NARRATIVE_PROMPTS[mode] || '';
+  }
+  panel.style.display = visible ? 'none' : '';
+  btn.textContent = visible ? 'View prompt' : 'Hide prompt';
+  btn.style.color = visible ? 'var(--muted)' : 'var(--accent)';
+  btn.style.borderColor = visible ? 'var(--border)' : 'var(--accent)';
 }
 
 function _buildSourceKey(side) {
