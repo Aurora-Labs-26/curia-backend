@@ -4,6 +4,19 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-03 · Arihant + Claude (claude-opus-4-6)
+
+### Test
+76 new tests covering previously untested modules — worker handlers, prompt watcher, internal API, DSPy signatures, transformations, config loader.
+- **`tests/test_worker_handlers.py`** — 16 tests: _validate_format fallback, handle_ingest retry semantics, auto_generate skip, dedup check, handle_generate_episode, FCM notification swallowing, handler registry completeness
+- **`tests/test_prompt_watcher.py`** — 11 tests: _hash_file for existing/missing/same/different files, init_prompt_hashes tracking, check_prompt_changes detecting modified/new/unchanged files
+- **`tests/test_internal_api.py`** — 11 tests: _check_secret matching/missing/wrong/empty, SeedInterestsRequest validation, UserBriefContext model
+- **`tests/test_transformations.py`** — 15 tests: TRANSFORMATION_NAMES, TIER_1/TIER_2 partition, all 7 signature field names, Transformations module methods, docstring content
+- **`tests/test_dspy_signatures.py`** — 12 tests: GenerateOutline/GenerateTranscript/EvaluateIdeasBatch/EvaluateSingleIdea field names and singletons, prompt loader with_prompt/load_prompt/list_prompt_tasks
+- **`tests/test_config_loader.py`** — 11 tests: config_path default and env override, load_config providers/models/speaker bindings, missing file raises, invalid YAML raises
+
+---
+
 ## 2026-06-02 · Arihant + Claude (claude-opus-4-6)
 
 ### Feature
