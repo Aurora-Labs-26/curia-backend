@@ -30,6 +30,7 @@ ProviderType = Literal[
     "openrouter",     # LLM (OpenRouter gateway)
     "openai_tts",     # TTS (OpenAI TTS)
     "cartesia",       # TTS (Cartesia)
+    "hume",           # TTS (Hume AI Octave)
     "jina",           # embedding (Jina)
     "mistral",        # embedding (Mistral)
 ]

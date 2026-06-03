@@ -44,6 +44,11 @@ providers:
     api_key_env: SMALLEST_API_KEY
     base_url: https://waves-api.smallest.ai
 
+  hume:
+    type: hume
+    api_key_env: HUME_API_KEY
+    base_url: https://api.hume.ai
+
   # ── LLM providers ───────────────────────────────────────────────────────────
   #
   # vllm:
@@ -191,6 +196,13 @@ models:
       sample_rate: 24000
       speed: 1.0
       language: en
+
+  hume-octave:
+    provider: hume
+    model_id: octave
+    kind: tts
+    defaults:
+      output_format: mp3
 
   # ── Additional LLM model aliases ───────────────────────────────────────────
   #
@@ -375,14 +387,14 @@ bindings:
   # replace with cloned voice IDs once the team creates them.
   speaker:
     kenji:
-      model: smallest-lightning
-      voice_id: james
+      model: hume-octave
+      voice_id: KORA
     arjun:
-      model: smallest-lightning
-      voice_id: george
+      model: hume-octave
+      voice_id: DACHER
     emeka:
-      model: smallest-lightning
-      voice_id: emily
+      model: hume-octave
+      voice_id: AURA
 
   # ── Example: switching providers ──────────────────────────────────────────
   # Uncomment provider + model alias above, then override bindings here.
