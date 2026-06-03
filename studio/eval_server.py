@@ -26,12 +26,17 @@ import uvicorn
 
 app = FastAPI()
 
-# Disable DSPy LLM cache for the eval server — every job must get a fresh LLM
-# call so results are not stale across runs. This process is separate from the
-# production worker so it does not affect the main pipeline.
+# Disable LLM caching for the eval server — every job must get a fresh call.
+# This process is separate from the production worker; no production impact.
+try:
+    import litellm as _litellm_init
+    _litellm_init.cache = None          # kills LiteLLM disk/memory cache
+    _litellm_init.success_callback = [] # prevent cache writes via callbacks
+except Exception:
+    pass
 try:
     import dspy as _dspy_init
-    _dspy_init.configure(cache=False)
+    _dspy_init.configure(cache=False)   # belt-and-suspenders
 except Exception:
     pass
 
@@ -1790,9 +1795,7 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
     show_name  = job.get("show_name") or "clarity_engine"
     source_id  = job.get("source_id") or ""
     user_id    = job.get("user_id") or "default"
-    steps      = list(job.get("steps") or [])
-
-    steps.append({"text": "Generating transcript", "status": "running"})
+    steps = [{"text": "Generating transcript", "status": "running"}]  # fresh, not accumulated
     await _save_job(job_id, {**job, "status": "running", "steps": steps})
 
     try:
@@ -1869,7 +1872,7 @@ async def _rerun_outline_step(job_id: str, outline_prompt_override: str | None =
     show_name = job.get("show_name") or "clarity_engine"
     source_id = job.get("source_id") or ""
     user_id   = job.get("user_id") or "default"
-    steps     = list(job.get("steps") or [])
+    steps     = [{"text": "Re-running outline", "status": "running"}]  # fresh, not accumulated
 
     # Rebuild briefing if format/constraints changed; otherwise reuse stored
     if format_config_override or episode_constraints_override:
@@ -1878,8 +1881,6 @@ async def _rerun_outline_step(job_id: str, outline_prompt_override: str | None =
                                          episode_constraints_override=episode_constraints_override)
     else:
         briefing = job.get("briefing") or ""
-
-    steps.append({"text": "Re-running outline", "status": "running"})
     await _save_job(job_id, {**job, "status": "running", "steps": steps})
 
     try:
