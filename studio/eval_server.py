@@ -2169,21 +2169,35 @@ async def runs_for_url(url: str):
 
 
 @app.get("/api/compare/existing-episode")
-async def existing_episode(url: str):
-    """Find most recent ready episode for this URL from any user (production data)."""
+async def existing_episode(url: str, show_name: str | None = None):
+    """Find most recent ready episode for this URL. Prefers show_name match if provided."""
     try:
         from core.ingest import normalise_url
         from core.db.connection import db_fetchrow
         norm = normalise_url(url)
-        row = await db_fetchrow(
-            """SELECT e.id, e.title, e.show_name, e.created_at,
-                      e.outline::text AS outline, e.transcript::text AS transcript
-               FROM episode e
-               JOIN source s ON s.id = ANY(e.source_ids)
-               WHERE s.url = $url AND s.status = 'ready' AND e.status = 'ready'
-               ORDER BY e.created_at DESC LIMIT 1""",
-            {"url": norm},
-        )
+        # Try show-matched episode first if show_name given
+        row = None
+        if show_name:
+            row = await db_fetchrow(
+                """SELECT e.id, e.title, e.show_name, e.created_at,
+                          e.outline::text AS outline, e.transcript::text AS transcript
+                   FROM episode e
+                   JOIN source s ON s.id = ANY(e.source_ids)
+                   WHERE s.url = $url AND s.status = 'ready' AND e.status = 'ready'
+                     AND e.show_name = $show
+                   ORDER BY e.created_at DESC LIMIT 1""",
+                {"url": norm, "show": show_name},
+            )
+        if not row:
+            row = await db_fetchrow(
+                """SELECT e.id, e.title, e.show_name, e.created_at,
+                          e.outline::text AS outline, e.transcript::text AS transcript
+                   FROM episode e
+                   JOIN source s ON s.id = ANY(e.source_ids)
+                   WHERE s.url = $url AND s.status = 'ready' AND e.status = 'ready'
+                   ORDER BY e.created_at DESC LIMIT 1""",
+                {"url": norm},
+            )
         if not row:
             return JSONResponse(content={"found": False})
         data = _json.loads(_json.dumps(dict(row), default=_json_serial))
@@ -3013,7 +3027,7 @@ select:focus{outline:none;border-color:var(--accent)}
         <div style="padding:16px 20px">
           <div class="config-field" style="margin-bottom:8px">
             <label>Show format</label>
-            <select id="fmt-show-a" style="width:100%">
+            <select id="fmt-show-a" style="width:100%" onchange="checkUrlForExistingData()">
               <option value="clarity_engine">clarity_engine</option>
               <option value="narrative_drift">narrative_drift</option>
               <option value="momentum_loop">momentum_loop</option>
@@ -3353,7 +3367,8 @@ async function checkUrlForExistingData() {
   catch { document.getElementById('plab-url-display').textContent = url.slice(0, 40) + '…'; }
 
   // Check for existing production episode
-  const epRes = await fetch('/api/compare/existing-episode?url=' + encodeURIComponent(url));
+  const showA = document.getElementById('fmt-show-a')?.value || '';
+  const epRes = await fetch('/api/compare/existing-episode?url=' + encodeURIComponent(url) + (showA ? '&show_name=' + encodeURIComponent(showA) : ''));
   const epData = await epRes.json();
   _existingEp = epData.found ? epData : null;
   document.getElementById('existing-ep-notice').style.display = _existingEp ? '' : 'none';
@@ -3696,7 +3711,9 @@ async function runPromptCompare() {
   if (fmtPollB) clearTimeout(fmtPollB);
 
   // Production episode with a stored outline → use it for column A, skip running A
-  const _epOutline = _existingEp?.outline;
+  // Only valid if the cached episode's show_name matches the selected show for A
+  const _showMatches = _existingEp && (_existingEp.show_name === showA);
+  const _epOutline = _showMatches ? _existingEp.outline : null;
   const _hasExistingOutline = _epOutline &&
     (_epOutline.title || _epOutline.thread || (_epOutline.segments||[]).length > 0);
 
@@ -3747,7 +3764,9 @@ async function runTranscripts() {
     } catch(e) {}
   }
 
-  const _epTranscript = _existingEp?.transcript;
+  const _showMatchesA = _existingEp &&
+    (_existingEp.show_name === document.getElementById('fmt-show-a').value);
+  const _epTranscript = _showMatchesA ? _existingEp?.transcript : null;
   const _hasExistingTranscript = Array.isArray(_epTranscript) && _epTranscript.length > 0;
 
   await fetch('/api/compare/run-transcript', {
