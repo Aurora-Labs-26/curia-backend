@@ -346,12 +346,14 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
 
             await _step_start("Generating outline")
             import time as _time
+            import dspy as _dspy
             from dspy.utils.usage_tracker import track_usage as _track_usage
             from studio.generator import generate_outline
 
             _t0 = _time.time()
             with _track_usage() as _tracker:
-                outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
+                with _dspy.context(cache=False):
+                    outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
             _ol_duration = round(_time.time() - _t0, 2)
             _ol_tokens = sum(
                 v.get("completion_tokens") or v.get("output_tokens") or 0
@@ -1785,12 +1787,14 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
         import time as _time
         from dspy.utils.usage_tracker import track_usage as _track_usage
 
+        import dspy as _dspy
         _t0 = _time.time()
         with _track_usage() as _tracker:
-            transcript = generate_transcript(
-                briefing, outline, show_name,
-                prompt_override=transcript_prompt_override,
-            )
+            with _dspy.context(cache=False):
+                transcript = generate_transcript(
+                    briefing, outline, show_name,
+                    prompt_override=transcript_prompt_override,
+                )
         _duration_s = round(_time.time() - _t0, 2)
 
         # Extract output tokens from tracker

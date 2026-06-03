@@ -36,8 +36,8 @@ MULTIPLE SOURCES:
 - Weave primitives from different sources into the same segment if they serve the same narrative purpose
 
 Your output must strictly follow the format_config from the briefing packet:
-- structure_pattern: each entry maps to a segment in order — use it to guide the purpose of that segment
-- segment_count: from episode_constraints — produce exactly this many segments
+- structure_pattern: the repeating pattern of segment types — cycle it across all segments if segment_count exceeds its length. Use it to guide the purpose of each segment, not to determine how many segments to produce.
+- segment_count: from episode_constraints — produce EXACTLY this many segments. This overrides structure_pattern length.
 - target_words and segment_count: from episode_constraints — the transcript will be target_words total across segment_count segments, so allocate enough material per segment to carry its share
 - pacing and energy_curve: govern how much material each segment carries and how intensity builds or falls
 - resolution_style: determines how the final segment ends — open_ended means no conclusion, explicit means clear takeaway, micro_payoffs means small payoff at every close, partial means reframe without closure
