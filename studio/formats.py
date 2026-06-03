@@ -35,6 +35,8 @@ class FormatConfig:
     # are distributed across segment types — heavier segments get more words.
     # Must have same length as structure_pattern. Weights are normalised internally.
     segment_weights: list[float] = None
+    intro_budget_words: int = 150
+    outro_budget_words: int = 70
 
     @property
     def target_words(self) -> int:
@@ -101,56 +103,61 @@ CLARITY_ENGINE = FormatConfig(
 
 MOMENTUM_LOOP = FormatConfig(
     name="momentum_loop",
-    pacing="dynamic_fast",
-    resolution_style="micro_payoffs",
-    energy_curve="oscillating",
-    structure_pattern=["hook", "insight", "story", "hook", "insight"],
-    voice_style="energetic, punchy",
+    pacing="fast",
+    resolution_style="implication",
+    energy_curve="linear",
+    structure_pattern=["hook", "stakes", "mechanism", "payoff", "landing"],
+    voice_style="Planet Money narration — complete sentences, editorial confidence, no fragments",
     rules=FormatRules(
         must_do=[
-            "re-hook the listener every 60 to 90 seconds",
-            "keep each segment short — no more than 2 to 3 sentences per beat",
-            "deliver a small payoff at the end of every segment",
-            "use forward-momentum transitions — always point to what's next",
+            "open with a single unexpected fact or concrete scene from the source — not a question, not a thesis",
+            "establish who is affected and how within the first two segments",
+            "deliver the mechanism — why this happened or why it matters, not just what happened",
+            "land on one thing to remember — a single insight, number, or line",
+            "close with a single forward-pointing implication — what this means, not what to ask next",
         ],
         must_avoid=[
-            "long exposition or slow buildup",
-            "segments that end without a payoff",
-            "passive or reflective tone",
-            "complex multi-part arguments in a single segment",
+            "re-hooking mid-episode — the listener chose brevity, trust that",
+            "closing with a question or an open thread — Rundown completes, it does not open",
+            "padding to fill time — if the source is thin, the episode is short",
+            "more than one core idea — Rundown carries one thing, carried well",
+            "forward-momentum transitions that tease what's next — each segment completes itself",
         ]
     ),
-    default_segment_count=10,
-    default_length_minutes=10,
-    # insight and story carry the substance; hooks are punchy and short by design
-    segment_weights=[0.6, 1.4, 1.2, 0.6, 1.4],
+    default_segment_count=5,
+    default_length_minutes=4,
+    intro_budget_words=40,
+    outro_budget_words=30,
 )
 
 EXPLORATION_ENGINE = FormatConfig(
     name="exploration_engine",
     pacing="medium",
-    resolution_style="partial",
+    resolution_style="located_tension",
     energy_curve="steady_with_spikes",
-    structure_pattern=["claim", "counterpoint", "expansion", "link", "reframe"],
-    voice_style="analytical, exploratory",
+    structure_pattern=["hook", "tension", "counterpoint", "mechanism", "turn", "landing"],
+    voice_style="Planet Money narration — complete sentences, analytical confidence, no fragments",
     rules=FormatRules(
         must_do=[
-            "state a strong claim early, then complicate it",
-            "include the strongest counterpoint — steelman it",
-            "introduce at least one unexpected connection across sources",
-            "end with a reframe — a new way of seeing the original claim",
+            "open with the source's claim stated at its strongest — make the best case for it before challenging anything",
+            "establish what's actually at stake in believing this claim — who it affects, what depends on it",
+            "bring the strongest opposing case from world knowledge — the counterpoint does not need to come from the source",
+            "separate fact from opinion explicitly — what the evidence shows vs. what the source concludes from it",
+            "identify where the genuine disagreement lives vs. where the conflict is false or semantic",
+            "close by locating the unresolved tension precisely — not a verdict, not a question, just what's actually in dispute",
         ],
         must_avoid=[
-            "premature closure or tidy conclusions",
-            "one-sided narratives that ignore tension",
-            "energy spikes without intellectual payoff",
-            "summarising instead of advancing the argument",
+            "stating the claim neutrally — open with it at full strength",
+            "strawmanning the counterpoint — the opposing case must be the strongest available version",
+            "forcing a verdict — the tension should be intact at the end, not resolved",
+            "blending fact and opinion — they must be distinguishable at every point",
+            "closing with a summary — the landing must name the disagreement, not recap the episode",
+            "staying within the source for the counterpoint — world knowledge is required here",
         ]
     ),
-    default_segment_count=8,
+    default_segment_count=6,
     default_length_minutes=12,
-    # claim/expansion/link/reframe are the argument; counterpoint is a pivot — keep it tight
-    segment_weights=[1.4, 0.7, 1.5, 1.2, 1.3],
+    segment_weights=[1.2, 1.0, 1.5, 1.3, 1.2, 0.8],
 )
 
 
@@ -177,8 +184,8 @@ _SLUG_TO_BACKEND: dict[str, str] = {
 DISPLAY_NAMES: dict[str, str] = {
     "narrative_drift":    "Slow Burn",
     "clarity_engine":     "Sharp Take",
-    "momentum_loop":      "Live Wire",
-    "exploration_engine": "Open Verdict",
+    "momentum_loop":      "Rundown",
+    "exploration_engine": "Counter",
 }
 
 
@@ -233,5 +240,7 @@ def format_config_to_dict(fmt: FormatConfig) -> dict:
         "rules": {
             "must_do": fmt.rules.must_do,
             "must_avoid": fmt.rules.must_avoid,
-        }
+        },
+        "intro_budget_words": fmt.intro_budget_words,
+        "outro_budget_words": fmt.outro_budget_words,
     }

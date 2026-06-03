@@ -4,6 +4,16 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-04 · Aditya + Claude (claude-sonnet-4-6)
+
+### Config
+Rewrote `momentum_loop` (Rundown) and `exploration_engine` (Counter) format configs with new voice style, structure, rules, and per-format intro/outro budgets.
+- **`studio/formats.py`** — `MOMENTUM_LOOP`: renamed display to "Rundown", structure `["hook","stakes","mechanism","payoff","landing"]`, 5 segments / 4 min / 600 words, Planet Money voice, intro 40 / outro 30 words; `EXPLORATION_ENGINE`: renamed display to "Counter", structure `["hook","tension","counterpoint","mechanism","turn","landing"]`, 6 segments / 12 min / 1800 words, Planet Money voice, resolution_style `located_tension`, new must_do/must_avoid rules; added `intro_budget_words` / `outro_budget_words` fields to `FormatConfig` dataclass (default 150/70); `format_config_to_dict` now serialises both fields
+- **`studio/briefing_builder.py`** — uses `fmt.intro_budget_words` / `fmt.outro_budget_words` instead of global constants; removed `INTRO_WORDS`/`OUTRO_WORDS` from import
+- **`studio/eval_server.py`** — `/api/formats/{show_name}` uses `fmt.intro_budget_words` / `fmt.outro_budget_words`; removed `INTRO_WORDS`/`OUTRO_WORDS` from import
+
+---
+
 ## 2026-06-03 · Aditya + Claude (claude-sonnet-4-6) [3]
 
 ### Bug Fix

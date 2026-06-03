@@ -2737,7 +2737,7 @@ async def get_format_example(show_name: str):
 async def get_format_config(show_name: str):
     """Return format_config + episode_constraints for a show (combined editable block)."""
     try:
-        from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS
+        from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE
         fmt = get_format(show_name)
         return JSONResponse(content={
             "format_config": format_config_to_dict(fmt),
@@ -2745,8 +2745,8 @@ async def get_format_config(show_name: str):
                 "segment_count": fmt.default_segment_count,
                 "target_length_minutes": fmt.default_length_minutes,
                 "target_words": fmt.target_words,
-                "intro_budget_words": INTRO_WORDS,
-                "outro_budget_words": OUTRO_WORDS,
+                "intro_budget_words": fmt.intro_budget_words,
+                "outro_budget_words": fmt.outro_budget_words,
             },
         })
     except ValueError as e:

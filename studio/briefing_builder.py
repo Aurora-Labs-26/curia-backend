@@ -12,7 +12,7 @@ import json
 from typing import Optional
 
 from core.kb import UserKB
-from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS
+from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE
 
 PRIMITIVE_FIELDS = ["key_insights", "human_stakes", "core_tensions", "counterpoints", "examples"]
 
@@ -127,8 +127,8 @@ def build_briefing_packet(
             "target_length_minutes": target_minutes,
             "segment_count": segment_count,
             "target_words": target_words,
-            "intro_budget_words": INTRO_WORDS,
-            "outro_budget_words": OUTRO_WORDS,
+            "intro_budget_words": fmt.intro_budget_words,
+            "outro_budget_words": fmt.outro_budget_words,
         },
         "editorial_direction": editorial_direction or "Follow the most interesting thread in the material.",
         "source_primitives": build_source_primitives(sources, insights),
