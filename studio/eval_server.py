@@ -3995,11 +3995,31 @@ async function loadEpisodeIntoColumn(episodeId, side, jobData) {
 
   if (lines.length) {
     const plainText = lines.map(l => l.text||'').join('\n\n');
-    const transcriptHtml = lines.map(l =>
-      `<div class="transcript-line">
-        <div class="transcript-text">${esc(l.text||'')}</div>
-      </div>`
-    ).join('');
+    const segments = (outline.segments || []);
+    let transcriptHtml = '';
+    if (segments.length > 0) {
+      // Divide lines evenly across segments, insert title header before each group
+      const perSeg = Math.max(1, Math.round(lines.length / segments.length));
+      segments.forEach((seg, i) => {
+        const start = i * perSeg;
+        const end   = i === segments.length - 1 ? lines.length : start + perSeg;
+        const segLines = lines.slice(start, end);
+        const segTitle = esc(seg.title || seg.focus || seg.purpose || '');
+        const segNum   = seg.segment || (i + 1);
+        transcriptHtml += `<div style="display:flex;align-items:center;gap:8px;margin:${i === 0 ? '0' : '16px'} 0 8px">
+          <span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);white-space:nowrap">▸ SEG ${segNum}</span>
+          <span style="font-size:11px;font-weight:600;color:var(--muted)">${segTitle}</span>
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+        </div>`;
+        transcriptHtml += segLines.map(l =>
+          `<div class="transcript-line"><div class="transcript-text">${esc(l.text||'')}</div></div>`
+        ).join('');
+      });
+    } else {
+      transcriptHtml = lines.map(l =>
+        `<div class="transcript-line"><div class="transcript-text">${esc(l.text||'')}</div></div>`
+      ).join('');
+    }
     const copyId = 'copy-' + side + '-' + episodeId.slice(0,8);
     _registerCopy(copyId, plainText);
     div.innerHTML += `<div class="result-section">
