@@ -3572,10 +3572,11 @@ async function loadExistingToSlot(slot, phase) {
   if (phase !== 'outline' && lines.length) {
     const plainText = lines.map(l => l.text||'').join('\n\n');
     const copyId = 'copy-prod-' + slot;
+    _registerCopy(copyId, plainText);
     div.innerHTML += `<div class="result-section">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div class="result-section-label" style="margin-bottom:0">Transcript (production / cached)</div>
-        <button id="${copyId}" onclick="copyTranscript('${copyId}', \`${plainText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)"
+        <button id="${esc(copyId)}" onclick="copyTranscript('${esc(copyId)}')"
           style="padding:3px 10px;font-size:11px;font-weight:500;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer">Copy</button>
       </div>
       <div class="transcript-block">${lines.map(l=>`<div class="transcript-line"><div class="transcript-text">${esc(l.text||'')}</div></div>`).join('')}</div>
@@ -4000,10 +4001,11 @@ async function loadEpisodeIntoColumn(episodeId, side, jobData) {
       </div>`
     ).join('');
     const copyId = 'copy-' + side + '-' + episodeId.slice(0,8);
+    _registerCopy(copyId, plainText);
     div.innerHTML += `<div class="result-section">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div class="result-section-label" style="margin-bottom:0">Transcript</div>
-        <button id="${copyId}" onclick="copyTranscript('${copyId}', \`${plainText.replace(/`/g,'\\`').replace(/\$/g,'\\$')}\`)"
+        <button id="${esc(copyId)}" onclick="copyTranscript('${esc(copyId)}')"
           style="padding:3px 10px;font-size:11px;font-weight:500;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer;transition:all .15s"
           onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
           onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
@@ -4014,7 +4016,13 @@ async function loadEpisodeIntoColumn(episodeId, side, jobData) {
   container.appendChild(div);
 }
 
-function copyTranscript(btnId, text) {
+// Transcript text stored here — never embedded in onclick (avoids HTML/JS escaping bugs)
+const _copyStore = new Map();
+
+function _registerCopy(id, text) { _copyStore.set(id, text); }
+
+function copyTranscript(btnId) {
+  const text = _copyStore.get(btnId) || '';
   navigator.clipboard.writeText(text).then(() => {
     const btn = document.getElementById(btnId);
     if (!btn) return;
