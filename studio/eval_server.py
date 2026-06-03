@@ -3715,9 +3715,9 @@ Respond in JSON only.</pre>
     .tlab-run-btn:disabled { opacity:.4; cursor:not-allowed; }
     .tlab-meta { font-size:10px; color:var(--muted); margin-top:8px; }
     .tlab-status { font-size:11px; color:var(--accent); }
-    .tlab-copy-btn { font-size:10px; font-weight:600; padding:2px 8px; border-radius:4px; border:1px solid var(--border); background:var(--bg); color:var(--muted); cursor:pointer; font-family:inherit; transition:all .12s; }
-    .tlab-copy-btn:hover { border-color:var(--accent); color:var(--accent); }
-    .tlab-copy-btn.copied { border-color:var(--good); color:var(--good); }
+    .tlab-copy-btn { font-size:10px; font-weight:600; padding:2px 8px; border-radius:4px; border:1px solid var(--border); background:var(--bg); color:var(--muted) !important; cursor:pointer; font-family:inherit; transition:all .12s; text-transform:none; letter-spacing:0; }
+    .tlab-copy-btn:hover { border-color:var(--accent); color:var(--accent) !important; }
+    .tlab-copy-btn.copied { border-color:var(--good); color:var(--good) !important; }
   </style>
 
   <div id="tlab-layout">
