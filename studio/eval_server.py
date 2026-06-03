@@ -2175,26 +2175,33 @@ async def existing_episode(url: str, show_name: str | None = None):
         from core.ingest import normalise_url
         from core.db.connection import db_fetchrow
         norm = normalise_url(url)
-        # Try show-matched episode first if show_name given
+        # Exclude eval-generated episodes (show_idea.angle = '(eval)') — these are
+        # comparison outputs, not real production episodes.
+        eval_exclusion = """
+            AND (e.show_idea_id IS NULL OR e.show_idea_id NOT IN (
+                SELECT id FROM show_idea WHERE angle = '(eval)'
+            ))"""
         row = None
         if show_name:
             row = await db_fetchrow(
-                """SELECT e.id, e.title, e.show_name, e.created_at,
+                f"""SELECT e.id, e.title, e.show_name, e.created_at,
                           e.outline::text AS outline, e.transcript::text AS transcript
                    FROM episode e
                    JOIN source s ON s.id = ANY(e.source_ids)
                    WHERE s.url = $url AND s.status = 'ready' AND e.status = 'ready'
                      AND e.show_name = $show
+                     {eval_exclusion}
                    ORDER BY e.created_at DESC LIMIT 1""",
                 {"url": norm, "show": show_name},
             )
         if not row:
             row = await db_fetchrow(
-                """SELECT e.id, e.title, e.show_name, e.created_at,
+                f"""SELECT e.id, e.title, e.show_name, e.created_at,
                           e.outline::text AS outline, e.transcript::text AS transcript
                    FROM episode e
                    JOIN source s ON s.id = ANY(e.source_ids)
                    WHERE s.url = $url AND s.status = 'ready' AND e.status = 'ready'
+                   {eval_exclusion}
                    ORDER BY e.created_at DESC LIMIT 1""",
                 {"url": norm},
             )
