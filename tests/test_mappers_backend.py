@@ -7,7 +7,7 @@ from studio.shows.profiles import SHOW_PROFILES
 
 
 def test_all_formats_exist():
-    expected = {"narrative_drift", "clarity_engine", "momentum_loop", "exploration_engine"}
+    expected = {"narrative_drift", "clarity_engine", "momentum_loop", "exploration_engine", "crossfire"}
     assert set(FORMATS.keys()) == expected
 
 
