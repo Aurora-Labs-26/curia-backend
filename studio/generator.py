@@ -133,6 +133,7 @@ def generate_transcript(
     user_kb: UserKB | None = None,
     speaker_override: str | None = None,
     prompt_override: str | None = None,
+    format_example: str | None = None,
 ) -> list[dict]:
     profile = SHOW_PROFILES[show_name]
     import time as _time
@@ -171,6 +172,7 @@ def generate_transcript(
             outline=f"<outline>\n{json.dumps(outline, indent=2)}\n</outline>",
             quality_constraints=f"<constraints>\n{TRANSCRIPT_GUIDELINES_V1}\n</constraints>",
             examples=f"<examples>\n{TRANSCRIPT_EXAMPLES}\n</examples>",
+            format_examples=f"<format_example>\n{format_example}\n</format_example>" if format_example else "",
         )
     _elapsed = _time.time() - _start
     raw = prediction.transcript_json.strip()

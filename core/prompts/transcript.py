@@ -60,6 +60,15 @@ class GenerateTranscript(dspy.Signature):
         )
     )
 
+    format_examples: str = dspy.InputField(
+        desc=(
+            "Format-specific example wrapped in <format_example> tags. "
+            "Shows the correct argumentative tempo, segment weight, and closing style "
+            "for this specific format. Calibrate pacing and resolution — not sentence "
+            "style, which is handled by the <examples> block. If empty, ignore."
+        )
+    )
+
     transcript_json: str = dspy.OutputField(
         desc='JSON array of {"speaker": str, "text": str}. No wrapper object, no markdown fences.'
     )

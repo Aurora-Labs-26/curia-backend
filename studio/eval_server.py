@@ -1781,7 +1781,8 @@ async def get_job(job_id: str):
 
 
 async def _run_transcript_step(job_id: str, transcript_prompt_override: str | None = None,
-                               briefing_override: str | None = None):
+                               briefing_override: str | None = None,
+                               format_example: str | None = None):
     """Generate transcript from stored job state (briefing + outline). Skips audio for speed."""
     from core.db.connection import db_execute
     from studio.generator import generate_transcript
@@ -1807,6 +1808,7 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
             transcript = generate_transcript(
                 briefing, outline, show_name,
                 prompt_override=transcript_prompt_override,
+                format_example=format_example,
             )
         _duration_s = round(_time.time() - _t0, 2)
 
@@ -2259,9 +2261,10 @@ async def compare_run_transcript(request: Request):
     body = await request.json()
     job_id_a     = (body.get("job_a") or "").strip()
     job_id_b     = (body.get("job_b") or "").strip()
-    transcript_b = body.get("transcript_prompt_b") or None
-    briefing_b   = body.get("briefing_b") or None
-    skip_a       = bool(body.get("skip_a"))
+    transcript_b    = body.get("transcript_prompt_b") or None
+    briefing_b      = body.get("briefing_b") or None
+    format_example_b = body.get("format_example_b") or None
+    skip_a          = bool(body.get("skip_a"))
     if not job_id_a or not job_id_b:
         return JSONResponse(content={"error": "job_a and job_b required"}, status_code=400)
 
@@ -2274,7 +2277,8 @@ async def compare_run_transcript(request: Request):
                 pass
         try:
             ep_b = await _run_transcript_step(job_id_b, transcript_prompt_override=transcript_b,
-                                               briefing_override=briefing_b)
+                                               briefing_override=briefing_b,
+                                               format_example=format_example_b)
         except Exception:
             pass
         await _update_compare_run_episodes(job_id_a, job_id_b, ep_a, ep_b)
@@ -2717,6 +2721,16 @@ async def compare_feedback(request: Request):
         },
     )
     return JSONResponse(content={"ok": True})
+
+
+@app.get("/api/format-examples/{show_name}")
+async def get_format_example(show_name: str):
+    """Return stored format example for a show (from prompts/examples_{show_name}.txt)."""
+    from core.prompts.loader import PROMPTS_DIR
+    path = PROMPTS_DIR / f"examples_{show_name}.txt"
+    if path.exists():
+        return JSONResponse(content={"text": path.read_text(encoding="utf-8").strip(), "exists": True})
+    return JSONResponse(content={"text": "", "exists": False})
 
 
 @app.get("/api/formats/{show_name}")
@@ -3293,6 +3307,7 @@ select:focus{outline:none;border-color:var(--accent)}
   <button class="tab-btn active" id="tab-btn-format" onclick="switchTab('format')">Prompt A vs B</button>
   <button class="tab-btn" id="tab-btn-external" onclick="switchTab('external')">vs External</button>
   <button class="tab-btn" id="tab-btn-transform" onclick="switchTab('transform')">Transformation Lab</button>
+  <button class="tab-btn" id="tab-btn-fmtex" onclick="switchTab('fmtex')">Format Examples</button>
   <button class="tab-btn" id="tab-btn-history" onclick="switchTab('history');loadHistory()">History</button>
 </div>
 
@@ -3787,6 +3802,78 @@ Respond in JSON only.</pre>
   </div>
 </div>
 
+<!-- ── Tab: Format Examples ── -->
+<div class="tab-panel" id="tab-fmtex">
+  <style>
+    #fmtex-layout { display:flex; gap:0; height:calc(100vh - 120px); overflow:hidden; }
+    #fmtex-left { width:300px; flex-shrink:0; border-right:1px solid var(--border); display:flex; flex-direction:column; padding:16px; gap:12px; overflow-y:auto; }
+    #fmtex-right { flex:1; display:flex; flex-direction:column; padding:16px; gap:12px; overflow:hidden; }
+    .fmtex-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-bottom:5px; }
+    #fmtex-show-select { width:100%; padding:7px 9px; font-size:12px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); outline:none; font-family:inherit; }
+    #fmtex-example-ta { flex:1; width:100%; padding:12px 14px; font-size:12px; font-family:inherit; line-height:1.75; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); resize:none; outline:none; box-sizing:border-box; }
+    #fmtex-example-ta:focus { border-color:var(--accent); }
+    #fmtex-url-row { display:flex; gap:8px; flex-shrink:0; }
+    #fmtex-url-input { flex:1; padding:8px 11px; font-size:12px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); outline:none; font-family:inherit; }
+    #fmtex-url-input:focus { border-color:var(--accent); }
+    #fmtex-run-btn { padding:8px 16px; font-size:12px; font-weight:600; border-radius:6px; border:1.5px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; white-space:nowrap; }
+    #fmtex-run-btn:hover { opacity:.85; }
+    #fmtex-run-btn:disabled { opacity:.4; cursor:not-allowed; }
+    #fmtex-notice { font-size:11px; color:var(--muted); flex-shrink:0; }
+    #fmtex-cols { flex:1; display:grid; grid-template-columns:1fr 1fr; gap:12px; overflow:hidden; }
+    .fmtex-col { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); display:flex; flex-direction:column; overflow:hidden; }
+    .fmtex-col-label { padding:9px 14px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; border-bottom:1px solid var(--border); }
+    .fmtex-col-label.col-a { color:var(--blue); }
+    .fmtex-col-label.col-b { color:#7c3aed; }
+    .fmtex-col-steps { padding:8px 14px; border-bottom:1px solid var(--border); flex-shrink:0; }
+    .fmtex-col-body { flex:1; overflow-y:auto; padding:12px 14px; font-size:12px; line-height:1.8; color:var(--text); white-space:pre-wrap; }
+  </style>
+  <div id="fmtex-layout">
+    <!-- Left: format selector + example textarea -->
+    <div id="fmtex-left">
+      <div>
+        <div class="fmtex-label">Show format</div>
+        <select id="fmtex-show-select" onchange="fmtexLoadExample()">
+          <option value="clarity_engine">clarity_engine</option>
+          <option value="momentum_loop">momentum_loop</option>
+          <option value="narrative_drift">narrative_drift</option>
+          <option value="exploration_engine">exploration_engine</option>
+        </select>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div class="fmtex-label" style="display:flex;align-items:center;justify-content:space-between">
+          Format example
+          <span id="fmtex-file-status" style="font-size:9px;font-weight:500;text-transform:none;letter-spacing:0;color:var(--muted)"></span>
+        </div>
+        <textarea id="fmtex-example-ta" placeholder="Paste a 150-200 word format example here…&#10;&#10;Shows: argumentative tempo, load-bearing segment style, closing.&#10;NOT sentence craft (that's handled by the shared examples block)."></textarea>
+      </div>
+      <div style="font-size:10px;color:var(--muted);line-height:1.5">
+        B generates with this format example injected.<br>A generates without it.
+      </div>
+    </div>
+
+    <!-- Right: URL + A vs B columns -->
+    <div id="fmtex-right">
+      <div id="fmtex-url-row">
+        <input id="fmtex-url-input" type="url" placeholder="Paste article URL…" onkeydown="if(event.key==='Enter') fmtexRun()">
+        <button id="fmtex-run-btn" onclick="fmtexRun()">Generate →</button>
+      </div>
+      <div id="fmtex-notice">A = no format example · B = with format example above</div>
+      <div id="fmtex-cols">
+        <div class="fmtex-col">
+          <div class="fmtex-col-label col-a">A — Without format example</div>
+          <ul class="steps-list fmtex-col-steps" id="fmtex-steps-a"></ul>
+          <div class="fmtex-col-body" id="fmtex-body-a">Run to see output</div>
+        </div>
+        <div class="fmtex-col">
+          <div class="fmtex-col-label col-b">B — With format example</div>
+          <ul class="steps-list fmtex-col-steps" id="fmtex-steps-b"></ul>
+          <div class="fmtex-col-body" id="fmtex-body-b">Run to see output</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -3797,6 +3884,108 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   document.getElementById('tab-btn-' + name).classList.add('active');
   if (name === 'transform') tlabInit();
+  if (name === 'fmtex') fmtexInit();
+}
+
+// ── Format Examples Tab ───────────────────────────────────────────────────────
+
+let _fmtexJobA = null, _fmtexJobB = null;
+let _fmtexInitDone = false;
+
+async function fmtexInit() {
+  if (_fmtexInitDone) return;
+  _fmtexInitDone = true;
+  await fmtexLoadExample();
+}
+
+async function fmtexLoadExample() {
+  const show = document.getElementById('fmtex-show-select').value;
+  const status = document.getElementById('fmtex-file-status');
+  try {
+    const res  = await fetch('/api/format-examples/' + show);
+    const data = await res.json();
+    const ta   = document.getElementById('fmtex-example-ta');
+    if (data.exists && data.text) {
+      ta.value = data.text;
+      status.textContent = 'loaded from file';
+      status.style.color = 'var(--good)';
+    } else {
+      ta.value = '';
+      status.textContent = 'no file — write one';
+      status.style.color = 'var(--muted)';
+    }
+  } catch(e) {}
+}
+
+async function fmtexRun() {
+  const url     = document.getElementById('fmtex-url-input').value.trim();
+  const example = document.getElementById('fmtex-example-ta').value.trim();
+  const show    = document.getElementById('fmtex-show-select').value;
+  if (!url) { alert('Enter a URL'); return; }
+  if (!example) { alert('Add a format example for B'); return; }
+
+  const btn = document.getElementById('fmtex-run-btn');
+  btn.disabled = true;
+  ['a','b'].forEach(s => {
+    document.getElementById('fmtex-steps-' + s).innerHTML = '';
+    document.getElementById('fmtex-body-' + s).textContent = '';
+  });
+
+  // Kick off outline for both jobs
+  const res = await fetch('/api/compare/run-outline', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ url, show_name_a: show, show_name_b: show }),
+  });
+  const d = await res.json();
+  _fmtexJobA = d.job_a; _fmtexJobB = d.job_b;
+
+  fmtexPoll(_fmtexJobA, 'a', 'outline', example, show);
+  fmtexPoll(_fmtexJobB, 'b', 'outline', example, show);
+  btn.disabled = false;
+}
+
+function fmtexPoll(jobId, side, phase, example, show) {
+  setTimeout(async () => {
+    const res  = await fetch('/api/jobs/' + jobId);
+    const data = await res.json();
+    renderSteps(data.steps || [], 'fmtex-steps-' + side);
+
+    if (data.status === 'outline_done') {
+      if (phase === 'outline') {
+        // Both outlines done → trigger transcripts
+        const bothDone = await Promise.all([
+          fetch('/api/jobs/' + _fmtexJobA).then(r => r.json()),
+          fetch('/api/jobs/' + _fmtexJobB).then(r => r.json()),
+        ]);
+        if (bothDone[0].status === 'outline_done' && bothDone[1].status === 'outline_done') {
+          await fetch('/api/compare/run-transcript', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              job_a: _fmtexJobA, job_b: _fmtexJobB,
+              format_example_b: example,
+            }),
+          });
+          fmtexPoll(_fmtexJobA, 'a', 'transcript', example, show);
+          fmtexPoll(_fmtexJobB, 'b', 'transcript', example, show);
+        } else {
+          fmtexPoll(jobId, side, phase, example, show);
+        }
+      } else {
+        fmtexPoll(jobId, side, phase, example, show);
+      }
+    } else if (data.status === 'done') {
+      if (data.episode_id) {
+        const ep = await fetch('/api/episodes/' + data.episode_id).then(r => r.json());
+        const lines = Array.isArray(ep.transcript) ? ep.transcript : [];
+        const body = document.getElementById('fmtex-body-' + side);
+        body.textContent = lines.map(l => l.text || '').join('\n\n');
+      }
+    } else if (data.status === 'error') {
+      document.getElementById('fmtex-body-' + side).textContent = 'Error: ' + (data.message || '');
+    } else {
+      fmtexPoll(jobId, side, phase, example, show);
+    }
+  }, 2000);
 }
 
 // ── Transformation Lab ────────────────────────────────────────────────────────
