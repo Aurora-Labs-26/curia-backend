@@ -3075,10 +3075,10 @@ select:focus{outline:none;border-color:var(--accent)}
           <button class="btn-primary" id="transcript-btn" onclick="runTranscripts()">Generate transcripts →</button>
         </div>
       </div>
-      <div id="briefing-edit-panel" style="display:none;padding:0 18px 14px;border-top:1px solid var(--border)">
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:12px 0 6px">B — Briefing JSON (edit format_config to change voice style + rules)</div>
+      <div id="briefing-edit-panel" style="display:none;padding:0 20px 20px;border-top:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:14px 0 8px">B — Briefing JSON · edit <code style="font-size:10px;background:var(--bg);padding:1px 5px;border-radius:3px;border:1px solid var(--border)">format_config</code> to change voice style + rules</div>
         <textarea id="briefing-b-override"
-          style="width:100%;height:320px;background:#0a0a0a;border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;font-family:ui-monospace,monospace;padding:10px 12px;resize:vertical;outline:none;line-height:1.6"
+          style="width:100%;height:460px;background:var(--bg);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);font-size:12px;font-family:ui-monospace,monospace;padding:14px 16px;resize:vertical;outline:none;line-height:1.7;box-sizing:border-box"
           placeholder="Loading briefing…"
           oninput="this.dataset.modified='1'"></textarea>
       </div>
@@ -3692,7 +3692,7 @@ function pollFmtJob(jobId, side, phase) {
       if (side === 'b') _outlineDoneB = true;
       if (_outlineDoneA && _outlineDoneB) {
         document.getElementById('fmt-btn').disabled = false;
-        document.getElementById('phase2-bar').style.display = 'flex';
+        document.getElementById('phase2-bar').style.display = 'block';
         // Show re-run outline button for B
         showRerunButton('outline');
       }
