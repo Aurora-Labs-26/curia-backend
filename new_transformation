@@ -13,11 +13,10 @@ When a field has no honest answer, return null. Never invent. Never pad.
 ---
 
 FIELD 1 — KEY INSIGHTS
-Extract the 3 most important insights, ideas, or claims in the article.
+Extract 3 to 4 insights. Default to 3. Add a 4th only if it is genuinely distinct and not a restatement of the first three.
 Pick the sharpest, most specific things the piece says — surprising, counterintuitive,
 or simply the clearest expression of its argument.
 Rules:
-- Exactly 3. Not 2, not 4.
 - Each insight must be one sentence.
 - Include actual numbers, names, mechanisms, or claims if present in the article.
 - Do not hedge. Do not summarize. State the insight directly.
