@@ -2896,23 +2896,48 @@ async def run_transform_b(request: Request):
         loop = _aio.get_event_loop()
         import time as _time
 
+        # Rough cost table ($/1M tokens) for common models
+        _COST = {
+            "claude-haiku-4-5":         {"in": 0.80,  "out": 4.00},
+            "claude-haiku-3-5":         {"in": 0.80,  "out": 4.00},
+            "claude-sonnet-4-5":        {"in": 3.00,  "out": 15.00},
+            "claude-sonnet-4-6":        {"in": 3.00,  "out": 15.00},
+            "claude-opus-4-8":          {"in": 15.00, "out": 75.00},
+        }
+
         def _call():
             with _track_usage() as tracker:
                 pred = module(article=full_text)
             result = getattr(pred, out_field, "").strip()
-            tokens = sum(
-                v.get("completion_tokens") or v.get("output_tokens") or 0
-                for v in tracker.get_total_tokens().values()
-            )
-            return result, tokens
+            totals = tracker.get_total_tokens()
+            input_toks = output_toks = 0
+            model_name = ""
+            for model, v in totals.items():
+                model_name = model_name or model
+                input_toks  += v.get("prompt_tokens")     or v.get("input_tokens")      or 0
+                output_toks += v.get("completion_tokens") or v.get("output_tokens")     or 0
+            # Cost estimate
+            cost_key = next((k for k in _COST if k in model_name.lower()), None)
+            cost = None
+            if cost_key and (input_toks or output_toks):
+                r = _COST[cost_key]
+                cost = round((input_toks * r["in"] + output_toks * r["out"]) / 1_000_000, 6)
+            return result, input_toks, output_toks, model_name, cost
 
         t0 = _time.time()
         try:
-            result, tokens = await loop.run_in_executor(None, _call)
+            result, input_toks, output_toks, model_name, cost = await loop.run_in_executor(None, _call)
         except Exception as exc:
             return {"error": str(exc)}
         duration = round(_time.time() - t0, 2)
-        return {"output": result, "tokens": tokens, "duration_s": duration}
+        return {
+            "output": result,
+            "input_tokens": input_toks,
+            "output_tokens": output_toks,
+            "model": model_name,
+            "cost_usd": cost,
+            "duration_s": duration,
+        }
 
     result = await _run()
     return JSONResponse(content=result)
@@ -3659,6 +3684,7 @@ Respond in JSON only.</pre>
         <div class="tlab-col">
           <div class="tlab-col-label col-a">
             <span>A — Current (from DB)</span>
+            <span style="font-size:9px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0">no token data — cached</span>
           </div>
           <div class="tlab-col-body">
             <div class="tlab-prompt-area">
@@ -3902,7 +3928,11 @@ async function tlabRunB() {
     } else {
       outB.textContent = data.output || '(empty)';
       outB.className   = 'tlab-output';
-      meta.textContent = `${data.duration_s}s · ${(data.tokens||0).toLocaleString()} tokens`;
+      const inToks  = (data.input_tokens  || 0).toLocaleString();
+      const outToks = (data.output_tokens || 0).toLocaleString();
+      const costStr = data.cost_usd != null ? ` · ~$${data.cost_usd.toFixed(5)}` : '';
+      const model   = data.model ? ` · ${data.model.split('/').pop()}` : '';
+      meta.textContent = `${data.duration_s}s · ${inToks} in / ${outToks} out${costStr}${model}`;
     }
   } catch(e) {
     outB.textContent = 'Network error';
