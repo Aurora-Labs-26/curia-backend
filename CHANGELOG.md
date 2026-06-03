@@ -4,6 +4,15 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-03 · Aditya + Claude (claude-sonnet-4-6) [2]
+
+### Bug Fix
+Two column-assignment regressions in compare UI.
+- **`studio/eval_server.py`** — outline phase: only skip polling A if `_existingEp` actually has a stored outline (old episodes have none → column A was empty while B had fresh outline, making "cache" appear to be in B); transcript phase: same gate on transcript presence
+- **`studio/eval_server.py`** — sidebar assignSlot: when no episode_id (outline-only run), load outline from job state via `/api/jobs/{id}` instead of silently showing nothing
+
+---
+
 ## 2026-06-03 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Feature

@@ -3391,13 +3391,35 @@ function startNewRun() {
   document.getElementById('fmt-rerun-b').innerHTML = '';
 }
 
-function assignSlot(idx, slot) {
+async function assignSlot(idx, slot) {
   if (slot === 'a') _plabSlotA = idx;
   else _plabSlotB = idx;
   renderSidebar();
   const run = _plabRuns[idx];
+  const side = slot === 'a' ? 'a' : 'b';
   const epId = slot === 'a' ? run.episode_id_a : run.episode_id_b;
-  if (epId) loadEpisodeIntoColumn(epId, slot === 'a' ? 'a' : 'b');
+  if (epId) {
+    loadEpisodeIntoColumn(epId, side);
+  } else {
+    // No transcript yet — load outline from job state
+    const jobId = slot === 'a' ? run.job_id_a : run.job_id_b;
+    if (!jobId) return;
+    const container = document.getElementById('fmt-result-' + side);
+    container.innerHTML = '<div style="padding:14px 20px;font-size:12px;color:var(--muted)">Loading outline…</div>';
+    try {
+      const res  = await fetch('/api/jobs/' + jobId);
+      const data = await res.json();
+      if (data.outline) {
+        renderOutlineInColumn(data.outline, side);
+        const steps = document.getElementById('fmt-steps-' + side);
+        steps.innerHTML = '<li class="step done"><span class="step-icon">✓</span><span>Outline only — no transcript generated yet</span></li>';
+      } else {
+        container.innerHTML = '<div style="padding:14px 20px;font-size:12px;color:var(--muted)">No outline data available for this run.</div>';
+      }
+    } catch(e) {
+      container.innerHTML = '<div style="padding:14px 20px;font-size:12px;color:var(--bad)">Failed to load run data.</div>';
+    }
+  }
 }
 
 async function loadExistingToSlot(slot, phase) {
@@ -3572,8 +3594,12 @@ async function runPromptCompare() {
   if (fmtPollA) clearTimeout(fmtPollA);
   if (fmtPollB) clearTimeout(fmtPollB);
 
-  // If production episode exists, show its outline in column A (outline phase only)
-  if (_existingEp) {
+  // Production episode with a stored outline → use it for column A, skip running A
+  const _epOutline = _existingEp?.outline;
+  const _hasExistingOutline = _epOutline &&
+    (_epOutline.title || _epOutline.thread || (_epOutline.segments||[]).length > 0);
+
+  if (_hasExistingOutline) {
     _outlineDoneA = true;
     loadExistingToSlot('a', 'outline');
     document.getElementById('fmt-steps-a').innerHTML =
@@ -3595,8 +3621,8 @@ async function runPromptCompare() {
   const d = await res.json();
   _fmtJobA = d.job_a; _fmtJobB = d.job_b;
 
-  // Only poll A if we're actually running it (no cached episode)
-  if (!_existingEp) pollFmtJob(_fmtJobA, 'a', 'outline');
+  // Poll A unless we already have its outline from the cached production episode
+  if (!_hasExistingOutline) pollFmtJob(_fmtJobA, 'a', 'outline');
   pollFmtJob(_fmtJobB, 'b', 'outline');
 
   // compare_run row is already saved — refresh sidebar immediately
@@ -3620,7 +3646,9 @@ async function runTranscripts() {
     })
   });
 
-  if (_existingEp) {
+  const _epTranscript = _existingEp?.transcript;
+  const _hasExistingTranscript = Array.isArray(_epTranscript) && _epTranscript.length > 0;
+  if (_hasExistingTranscript) {
     // Load cached full episode into A immediately — no pipeline needed
     loadExistingToSlot('a', 'transcript');
     document.getElementById('fmt-steps-a').innerHTML =
