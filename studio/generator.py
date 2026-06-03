@@ -37,7 +37,7 @@ from core.llm_config import resolve
 from core.prompts.outline import GenerateOutline as _OutlineSignature
 from core.prompts.outline import generate_outline as _outline_module
 from core.prompts.transcript import GenerateTranscript as _TranscriptSignature
-from core.prompts.transcript import generate_transcript as _transcript_module
+from core.prompts.transcript import generate_transcript as _transcript_module, TRANSCRIPT_EXAMPLES
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
 from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
 from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
@@ -166,10 +166,11 @@ def generate_transcript(
     _start = _time.time()
     with dspy.context(lm=resolve.llm("transcript", show=show_name)):
         prediction = _module(
-            briefing=briefing,
-            outline=json.dumps(outline, indent=2),
-            speaker_definition=speaker_definition,
-            quality_guidelines=TRANSCRIPT_GUIDELINES_V1,
+            briefing=f"<briefing>\n{briefing}\n</briefing>",
+            speaker=f"<speaker>\n{speaker_definition}\n</speaker>",
+            outline=f"<outline>\n{json.dumps(outline, indent=2)}\n</outline>",
+            quality_constraints=f"<constraints>\n{TRANSCRIPT_GUIDELINES_V1}\n</constraints>",
+            examples=f"<examples>\n{TRANSCRIPT_EXAMPLES}\n</examples>",
         )
     _elapsed = _time.time() - _start
     raw = prediction.transcript_json.strip()
@@ -714,17 +715,19 @@ async def process_episode(episode_id: str, prompt_override: str | None = None, o
         )
         briefing = briefing_packet_to_str(packet)
 
-        # 3. Generate outline
+        # 3. Generate outline (sync DSPy call — offload to thread pool)
         await _set_episode_status(episode_id, "outlining")
-        outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
+        loop = asyncio.get_event_loop()
+        outline = await loop.run_in_executor(
+            None, generate_outline, briefing, show_name, outline_prompt_override
+        )
         title = outline.get("title", show_name)
 
-        # 4. Generate transcript (KB → speaker_definition listener hints)
+        # 4. Generate transcript (sync DSPy call — offload to thread pool)
         await _set_episode_status(episode_id, "transcribing")
-        transcript = generate_transcript(
-            briefing, outline, show_name,
-            user_kb=user_kb, speaker_override=speaker_override,
-            prompt_override=prompt_override,
+        transcript = await loop.run_in_executor(
+            None, generate_transcript,
+            briefing, outline, show_name, user_kb, speaker_override, prompt_override,
         )
 
         judgment = await _rubric_judge(
@@ -748,10 +751,9 @@ async def process_episode(episode_id: str, prompt_override: str | None = None, o
             judgment_v1 = judgment
 
             # Generate v2
-            transcript_v2 = generate_transcript(
-                briefing, outline, show_name,
-                user_kb=user_kb, speaker_override=speaker_override,
-                prompt_override=prompt_override,
+            transcript_v2 = await loop.run_in_executor(
+                None, generate_transcript,
+                briefing, outline, show_name, user_kb, speaker_override, prompt_override,
             )
             judgment_v2 = await _rubric_judge(
                 task="transcript",
@@ -776,11 +778,12 @@ async def process_episode(episode_id: str, prompt_override: str | None = None, o
             f"floor_violations={len(judgment.floor_violations)})"
         )
 
-        # 5. Synthesize + stitch
+        # 5. Synthesize + stitch (sync TTS + pydub — offload to thread pool)
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        _, tts_timings = synthesize_and_stitch(
-            transcript, show_name, audio_path, speaker_override=speaker_override
+        _, tts_timings = await loop.run_in_executor(
+            None, synthesize_and_stitch,
+            transcript, show_name, audio_path, speaker_override,
         )
 
         # 6. Persist results onto the existing row

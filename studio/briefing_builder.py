@@ -12,7 +12,7 @@ import json
 from typing import Optional
 
 from core.kb import UserKB
-from studio.formats import get_format, format_config_to_dict
+from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS
 
 PRIMITIVE_FIELDS = ["key_insights", "human_stakes", "core_tensions", "counterpoints", "examples"]
 
@@ -26,8 +26,18 @@ def build_source_primitives(sources: list[dict], insights: dict[str, dict]) -> l
     for source in sources:
         sid = str(source.get("id", "")).replace("source:", "")
         source_insights = insights.get(sid, {})
+        url = source.get("url") or None
+        domain = None
+        if url:
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc.removeprefix("www.")
+            except Exception:
+                pass
         primitives.append({
             "title": source.get("title", "Untitled"),
+            "url": url,
+            "domain": domain,
             "key_insights": source_insights.get("key_insights") or None,
             "human_stakes": source_insights.get("human_stakes") or None,
             "core_tensions": source_insights.get("core_tensions") or None,
@@ -106,12 +116,19 @@ def build_briefing_packet(
     if length_override is None:
         length_override = _kb_length_override(user_kb)
 
+    target_minutes = length_override or fmt.default_length_minutes
+    segment_count = segment_count_override or fmt.default_segment_count
+    target_words = round(target_minutes * WORDS_PER_MINUTE)
+
     packet = {
         "format": format_name,
         "format_config": format_config_to_dict(fmt),
         "episode_constraints": {
-            "target_length_minutes": length_override or fmt.default_length_minutes,
-            "segment_count": segment_count_override or fmt.default_segment_count,
+            "target_length_minutes": target_minutes,
+            "segment_count": segment_count,
+            "target_words": target_words,
+            "intro_budget_words": INTRO_WORDS,
+            "outro_budget_words": OUTRO_WORDS,
         },
         "editorial_direction": editorial_direction or "Follow the most interesting thread in the material.",
         "source_primitives": build_source_primitives(sources, insights),

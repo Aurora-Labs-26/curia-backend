@@ -18,6 +18,7 @@ MULTIPLE SOURCES:
 Your output must strictly follow the format_config from the briefing packet:
 - structure_pattern: each entry maps to a segment in order -- use it to guide the purpose of that segment
 - segment_count: from episode_constraints -- produce exactly this many segments
+- target_words and segment_count: from episode_constraints -- the transcript will be target_words total across segment_count segments, so allocate enough material per segment to carry its share
 - pacing and energy_curve: govern how much material each segment carries and how intensity builds or falls
 - resolution_style: determines how the final segment ends -- open_ended means no conclusion, explicit means clear takeaway, micro_payoffs means small payoff at every close, partial means reframe without closure
 - rules.must_do and rules.must_avoid: hard constraints on every segment, no exceptions
