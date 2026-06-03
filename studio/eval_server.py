@@ -2779,8 +2779,18 @@ _TRANSFORM_TASKS = {
 }
 
 
+_COMBINED_PROMPT_PATH = Path(__file__).parent.parent / "new_transformation"
+_COMBINED_FIELDS = ["key_insights", "core_tensions", "counterpoints", "human_stakes", "examples", "summary"]
+
+
 @app.get("/api/transform/prompts/{insight_type}")
 async def get_transform_prompt(insight_type: str):
+    if insight_type == "combined":
+        try:
+            prompt = _COMBINED_PROMPT_PATH.read_text(encoding="utf-8").strip()
+            return JSONResponse(content={"prompt": prompt, "task": "combined"})
+        except Exception as e:
+            return JSONResponse(content={"error": str(e)}, status_code=500)
     if insight_type not in _TRANSFORM_TASKS:
         return JSONResponse(content={"error": "unknown type"}, status_code=404)
     from core.prompts.loader import load_prompt, PROMPTS_DIR
@@ -2859,19 +2869,74 @@ async def run_transform_b(request: Request):
     prompt_b     = (body.get("prompt") or "").strip()
     if not source_id or not insight_type or not prompt_b:
         return JSONResponse(content={"error": "source_id, insight_type, prompt required"}, status_code=400)
-    if insight_type not in _TRANSFORM_TASKS:
+    if insight_type not in _TRANSFORM_TASKS and insight_type != "combined":
         return JSONResponse(content={"error": "unknown insight_type"}, status_code=400)
 
     from core.db.connection import db_fetchrow
 
     async def _run():
         import asyncio as _aio
+        import re as _re
         import dspy as _dspy
         from core.prompts.transformations import (
             ExtractKeyInsights, ExtractCoreTensions, ExtractCounterpoints,
             ExtractHumanStakes, ExtractExamples, ExtractSummary, ExtractMetadata,
         )
         from dspy.utils.usage_tracker import track_usage as _track_usage
+
+        # ── Combined single-call path ────────────────────────────────────────
+        if insight_type == "combined":
+            row = await db_fetchrow(
+                "SELECT full_text FROM source WHERE id = $id::uuid", {"id": source_id}
+            )
+            if not row or not row["full_text"]:
+                return {"error": "Source not found or has no text"}
+            full_text = row["full_text"][:50_000]
+            filled = prompt_b.replace("{{ARTICLE_TEXT}}", full_text)
+
+            import time as _time
+            import litellm as _litellm
+            from core.llm_config import resolve as _resolve
+
+            lm = _resolve.llm("outline")  # haiku — same tier as individual transforms
+            model_id = getattr(lm, "model", "claude-haiku-4-5-20251001")
+
+            def _call_combined():
+                t0 = _time.time()
+                resp = _litellm.completion(
+                    model=model_id,
+                    messages=[{"role": "user", "content": filled}],
+                    temperature=1.0,
+                )
+                raw = resp.choices[0].message.content or ""
+                usage = getattr(resp, "usage", None)
+                in_toks  = getattr(usage, "prompt_tokens",     0) if usage else 0
+                out_toks = getattr(usage, "completion_tokens", 0) if usage else 0
+                # Parse XML-tagged fields
+                fields = {}
+                for tag in _COMBINED_FIELDS:
+                    m = _re.search(rf"<{tag}>(.*?)</{tag}>", raw, _re.DOTALL)
+                    fields[tag] = m.group(1).strip() if m else None
+                return raw, fields, in_toks, out_toks, round(_time.time() - t0, 2)
+
+            loop = _aio.get_event_loop()
+            try:
+                raw, fields, in_toks, out_toks, dur = await loop.run_in_executor(None, _call_combined)
+            except Exception as exc:
+                return {"error": str(exc)}
+
+            cost_rates = {"in": 0.80, "out": 4.00}
+            cost = round((in_toks * cost_rates["in"] + out_toks * cost_rates["out"]) / 1_000_000, 6)
+            return {
+                "output": raw,
+                "fields": fields,
+                "input_tokens": in_toks,
+                "output_tokens": out_toks,
+                "model": model_id,
+                "cost_usd": cost,
+                "duration_s": dur,
+                "combined": True,
+            }
 
         _sig_map = {
             "key_insights":  (ExtractKeyInsights,  "insights"),
@@ -3676,6 +3741,8 @@ Respond in JSON only.</pre>
         <button class="tlab-type-btn"         data-type="examples"      onclick="tlabSelectType('examples')">examples</button>
         <button class="tlab-type-btn"         data-type="summary"       onclick="tlabSelectType('summary')">summary</button>
         <button class="tlab-type-btn"         data-type="metadata"      onclick="tlabSelectType('metadata')">metadata</button>
+        <button class="tlab-type-btn"         data-type="combined"      onclick="tlabSelectType('combined')"
+          style="border-color:var(--accent);color:var(--accent);font-style:italic">⚡ combined (1 call)</button>
       </div>
 
       <!-- A vs B columns -->
@@ -3835,8 +3902,29 @@ async function tlabSelectSource(id) {
   } catch(e) { alert('Failed to load source'); }
 }
 
+const _COMBINED_FIELD_LABELS = {
+  key_insights: 'Key Insights', core_tensions: 'Core Tensions',
+  counterpoints: 'Counterpoints', human_stakes: 'Human Stakes',
+  examples: 'Examples', summary: 'Summary',
+};
+
 function tlabShowA(insights) {
   const out = document.getElementById('tlab-output-a');
+  if (_tlabType === 'combined') {
+    // Show all 6 stored fields stacked
+    const fields = ['key_insights','core_tensions','counterpoints','human_stakes','examples','summary'];
+    const parts = fields.map(f => {
+      const v = insights[f];
+      const content = (v && v.toLowerCase() !== 'null') ? esc(v) : '<em style="color:var(--muted)">not stored</em>';
+      return `<div style="margin-bottom:14px">
+        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin-bottom:4px">${esc(_COMBINED_FIELD_LABELS[f]||f)}</div>
+        <div style="font-size:12px;line-height:1.75;color:var(--text);white-space:pre-wrap">${content}</div>
+      </div>`;
+    }).join('');
+    out.innerHTML = parts || '<em style="color:var(--muted)">no stored data</em>';
+    out.className = 'tlab-output';
+    return;
+  }
   const val = insights[_tlabType];
   if (val && val.toLowerCase() !== 'null') {
     out.textContent = val;
@@ -3925,6 +4013,18 @@ async function tlabRunB() {
     if (data.error) {
       outB.textContent = 'Error: ' + data.error;
       outB.className   = 'tlab-output';
+    } else if (data.combined && data.fields) {
+      // Combined: render parsed XML fields
+      const fields = ['key_insights','core_tensions','counterpoints','human_stakes','examples','summary'];
+      outB.innerHTML = fields.map(f => {
+        const v = data.fields[f];
+        const content = (v && v.toLowerCase() !== 'null') ? esc(v) : '<em style="color:var(--muted)">null</em>';
+        return `<div style="margin-bottom:14px">
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;margin-bottom:4px">${esc(_COMBINED_FIELD_LABELS[f]||f)}</div>
+          <div style="font-size:12px;line-height:1.75;color:var(--text);white-space:pre-wrap">${content}</div>
+        </div>`;
+      }).join('');
+      outB.className = 'tlab-output';
     } else {
       outB.textContent = data.output || '(empty)';
       outB.className   = 'tlab-output';
