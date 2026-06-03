@@ -26,6 +26,15 @@ import uvicorn
 
 app = FastAPI()
 
+# Disable DSPy LLM cache for the eval server — every job must get a fresh LLM
+# call so results are not stale across runs. This process is separate from the
+# production worker so it does not affect the main pipeline.
+try:
+    import dspy as _dspy_init
+    _dspy_init.configure(cache=False)
+except Exception:
+    pass
+
 _jobs: dict[str, dict] = {}
 
 _TABLE_READY = False
@@ -351,14 +360,12 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
 
             await _step_start("Generating outline")
             import time as _time
-            import dspy as _dspy
             from dspy.utils.usage_tracker import track_usage as _track_usage
             from studio.generator import generate_outline
 
             _t0 = _time.time()
             with _track_usage() as _tracker:
-                with _dspy.context(cache=False):
-                    outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
+                outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
             _ol_duration = round(_time.time() - _t0, 2)
             _ol_tokens = sum(
                 v.get("completion_tokens") or v.get("output_tokens") or 0
@@ -1792,14 +1799,12 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
         import time as _time
         from dspy.utils.usage_tracker import track_usage as _track_usage
 
-        import dspy as _dspy
         _t0 = _time.time()
         with _track_usage() as _tracker:
-            with _dspy.context(cache=False):
-                transcript = generate_transcript(
-                    briefing, outline, show_name,
-                    prompt_override=transcript_prompt_override,
-                )
+            transcript = generate_transcript(
+                briefing, outline, show_name,
+                prompt_override=transcript_prompt_override,
+            )
         _duration_s = round(_time.time() - _t0, 2)
 
         # Extract output tokens from tracker
@@ -1851,17 +1856,28 @@ async def _run_transcript_step(job_id: str, transcript_prompt_override: str | No
         raise
 
 
-async def _rerun_outline_step(job_id: str, outline_prompt_override: str | None = None):
-    """Re-run outline from stored briefing. Updates stored outline in job state."""
+async def _rerun_outline_step(job_id: str, outline_prompt_override: str | None = None,
+                              format_config_override: dict | None = None,
+                              episode_constraints_override: dict | None = None):
+    """Re-run outline, rebuilding briefing if format/constraints overrides provided."""
     from studio.generator import generate_outline
 
     job = await _load_job(job_id)
     if not job:
         raise RuntimeError("Job not found")
 
-    briefing  = job.get("briefing") or ""
     show_name = job.get("show_name") or "clarity_engine"
+    source_id = job.get("source_id") or ""
+    user_id   = job.get("user_id") or "default"
     steps     = list(job.get("steps") or [])
+
+    # Rebuild briefing if format/constraints changed; otherwise reuse stored
+    if format_config_override or episode_constraints_override:
+        briefing = await _build_briefing(source_id, show_name, user_id,
+                                         format_config_override=format_config_override,
+                                         episode_constraints_override=episode_constraints_override)
+    else:
+        briefing = job.get("briefing") or ""
 
     steps.append({"text": "Re-running outline", "status": "running"})
     await _save_job(job_id, {**job, "status": "running", "steps": steps})
@@ -1869,9 +1885,9 @@ async def _rerun_outline_step(job_id: str, outline_prompt_override: str | None =
     try:
         outline = generate_outline(briefing, show_name, prompt_override=outline_prompt_override)
         steps[-1]["status"] = "done"
-        # Clear episode_id — transcript will need re-run too
+        # Clear episode_id — transcript needs re-run; persist updated briefing if rebuilt
         await _save_job(job_id, {**job, "status": "outline_done", "outline": outline,
-                                  "steps": steps, "episode_id": None})
+                                  "briefing": briefing, "steps": steps, "episode_id": None})
         return outline
     except Exception as e:
         steps[-1]["status"] = "error"
@@ -2273,10 +2289,25 @@ async def compare_rerun_step(request: Request):
     job_id    = (body.get("job_id") or "").strip()
     step      = (body.get("step") or "").strip()   # "outline" | "transcript"
     prompt    = body.get("prompt") or None
+    format_config_b_raw = body.get("format_config_b") or None
+    fmt_override: dict | None = None
+    ec_override: dict | None = None
+    if format_config_b_raw:
+        try:
+            combined = _json.loads(format_config_b_raw) if isinstance(format_config_b_raw, str) else format_config_b_raw
+            if "format_config" in combined or "episode_constraints" in combined:
+                fmt_override = combined.get("format_config") or None
+                ec_override  = combined.get("episode_constraints") or None
+            else:
+                fmt_override = combined
+        except Exception:
+            return JSONResponse(content={"error": "format_config_b is not valid JSON"}, status_code=400)
     if not job_id or step not in ("outline", "transcript"):
         return JSONResponse(content={"error": "job_id and step (outline|transcript) required"}, status_code=400)
     if step == "outline":
-        asyncio.create_task(_rerun_outline_step(job_id, outline_prompt_override=prompt))
+        asyncio.create_task(_rerun_outline_step(job_id, outline_prompt_override=prompt,
+                                                format_config_override=fmt_override,
+                                                episode_constraints_override=ec_override))
     else:
         asyncio.create_task(_run_transcript_step(job_id, transcript_prompt_override=prompt))
     return JSONResponse(content={"ok": True})
@@ -3833,7 +3864,7 @@ async function rerunStep(step) {
   await fetch('/api/compare/rerun-step', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({job_id: _fmtJobB, step, prompt})
+    body: JSON.stringify({job_id: _fmtJobB, step, prompt, format_config_b: _getFormatConfigB()})
   });
   if (step === 'outline') {
     document.getElementById('phase2-bar').style.display = 'none';
