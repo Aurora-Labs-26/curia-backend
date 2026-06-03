@@ -36,6 +36,11 @@ from core.kb import UserKB, load_kb
 from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
 from core.prompts.transcript import generate_transcript as _transcript_module, TRANSCRIPT_EXAMPLES
+from core.prompts.transcript_two_host import (
+    generate_host_a as _host_a_module,
+    generate_host_b as _host_b_module,
+    merge_dialogue as _merge_module,
+)
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
 from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
 from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
@@ -175,6 +180,128 @@ def generate_transcript(
         raise
     logger.info(f"Transcript: {len(transcript)} lines")
     return transcript
+
+
+def _parse_json_response(raw: str, label: str) -> list | dict:
+    """Strip markdown fences and parse JSON from an LLM response."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        logger.error(f"{label} JSON parse failed:\n{raw[:300]}")
+        raise
+
+
+def generate_transcript_two_host(
+    briefing: str,
+    outline: dict,
+    show_name: str,
+    user_kb: UserKB | None = None,
+) -> list[dict]:
+    """
+    Three-call two-host transcript pipeline:
+      1. Host A builds the case (teacher / thesis-holder)
+      2. Host B reacts to Host A's actual words (student / antithesis)
+      3. Merger interleaves into natural dialogue with intro/outro
+
+    The role difference is encoded in the speaker backstory/patterns in profiles.py.
+    Returns the merged transcript as [{speaker, text}, ...].
+    """
+    import time as _time
+
+    profile = SHOW_PROFILES[show_name]
+    llm_log = logger.bind(log_type="llm")
+    logger.info(f"Generating two-host transcript (show={show_name})...")
+
+    speakers = profile.speaker_config.speakers
+    if len(speakers) < 2:
+        raise ValueError(
+            f"Two-host pipeline requires at least 2 speakers in profile '{show_name}', "
+            f"got {len(speakers)}"
+        )
+    speaker_a = speakers[0]
+    speaker_b = speakers[1]
+
+    speaker_a_def = (
+        f"Name: {speaker_a.name}\n"
+        f"Backstory: {speaker_a.backstory}\n"
+        f"Speech patterns: {speaker_a.speech_patterns}"
+        + _format_listener_hints(user_kb)
+    )
+    speaker_b_def = (
+        f"Name: {speaker_b.name}\n"
+        f"Backstory: {speaker_b.backstory}\n"
+        f"Speech patterns: {speaker_b.speech_patterns}"
+    )
+    outline_json = json.dumps(outline, indent=2)
+    briefing_tagged = f"<briefing>\n{briefing}\n</briefing>"
+    outline_tagged = f"<outline>\n{outline_json}\n</outline>"
+    constraints_tagged = f"<constraints>\n{TRANSCRIPT_GUIDELINES_V1}\n</constraints>"
+    examples_tagged = f"<examples>\n{TRANSCRIPT_EXAMPLES}\n</examples>"
+
+    # ── Call 1: Host A ──────────────────────────────────────────────────
+    llm_log.info(f"LLM_CALL_START | task=transcript_host_a show={show_name}")
+    _t1 = _time.time()
+    with dspy.context(lm=resolve.llm("transcript", show=show_name)):
+        pred_a = _host_a_module(
+            briefing=briefing_tagged,
+            speaker=f"<speaker>\n{speaker_a_def}\n</speaker>",
+            outline=outline_tagged,
+            quality_constraints=constraints_tagged,
+            examples=examples_tagged,
+        )
+    _e1 = _time.time() - _t1
+    host_a_transcript = _parse_json_response(pred_a.host_a_json, "Host A")
+    llm_log.info(f"LLM_CALL_END | task=transcript_host_a duration={_e1:.2f}s lines={len(host_a_transcript)}")
+
+    # ── Call 2: Host B (reacts to A) ────────────────────────────────────
+    host_a_json_str = json.dumps(host_a_transcript, indent=2, ensure_ascii=False)
+    llm_log.info(f"LLM_CALL_START | task=transcript_host_b show={show_name}")
+    _t2 = _time.time()
+    with dspy.context(lm=resolve.llm("transcript", show=show_name)):
+        pred_b = _host_b_module(
+            briefing=briefing_tagged,
+            speaker=f"<speaker>\n{speaker_b_def}\n</speaker>",
+            outline=outline_tagged,
+            host_a_transcript=f"<host_a_transcript>\n{host_a_json_str}\n</host_a_transcript>",
+            quality_constraints=constraints_tagged,
+            examples=examples_tagged,
+        )
+    _e2 = _time.time() - _t2
+    host_b_transcript = _parse_json_response(pred_b.host_b_json, "Host B")
+    llm_log.info(f"LLM_CALL_END | task=transcript_host_b duration={_e2:.2f}s lines={len(host_b_transcript)}")
+
+    # ── Call 3: Merge ───────────────────────────────────────────────────
+    host_b_json_str = json.dumps(host_b_transcript, indent=2, ensure_ascii=False)
+    llm_log.info(f"LLM_CALL_START | task=transcript_merge show={show_name}")
+    _t3 = _time.time()
+    with dspy.context(lm=resolve.llm("transcript", show=show_name)):
+        pred_merge = _merge_module(
+            briefing=briefing_tagged,
+            outline=outline_tagged,
+            host_a_transcript=f"<host_a_transcript>\n{host_a_json_str}\n</host_a_transcript>",
+            host_b_transcript=f"<host_b_transcript>\n{host_b_json_str}\n</host_b_transcript>",
+            speaker_a_name=speaker_a.name.lower(),
+            speaker_b_name=speaker_b.name.lower(),
+        )
+    _e3 = _time.time() - _t3
+    merged = _parse_json_response(pred_merge.merged_json, "Merger")
+    llm_log.info(
+        f"LLM_CALL_END | task=transcript_merge duration={_e3:.2f}s "
+        f"lines={len(merged)} (A={len(host_a_transcript)}, B={len(host_b_transcript)})"
+    )
+
+    total = _e1 + _e2 + _e3
+    logger.info(
+        f"Two-host transcript complete: {len(merged)} lines in {total:.2f}s "
+        f"(A={_e1:.1f}s, B={_e2:.1f}s, merge={_e3:.1f}s)"
+    )
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -710,12 +837,20 @@ async def process_episode(episode_id: str) -> None:
         )
         title = outline.get("title", show_name)
 
-        # 4. Generate transcript (sync DSPy call — offload to thread pool)
+        # 4. Generate transcript — pick single-host or two-host based on speaker count
         await _set_episode_status(episode_id, "transcribing")
-        transcript = await loop.run_in_executor(
-            None, generate_transcript,
-            briefing, outline, show_name, user_kb, speaker_override,
-        )
+        is_two_host = len(profile.speaker_config.speakers) >= 2 and speaker_override is None
+        if is_two_host:
+            logger.info(f"  two-host pipeline (speakers: {[s.name for s in profile.speaker_config.speakers]})")
+            transcript = await loop.run_in_executor(
+                None, generate_transcript_two_host,
+                briefing, outline, show_name, user_kb,
+            )
+        else:
+            transcript = await loop.run_in_executor(
+                None, generate_transcript,
+                briefing, outline, show_name, user_kb, speaker_override,
+            )
 
         judgment = await _rubric_judge(
             task="transcript",
@@ -738,10 +873,16 @@ async def process_episode(episode_id: str) -> None:
             judgment_v1 = judgment
 
             # Generate v2
-            transcript_v2 = await loop.run_in_executor(
-                None, generate_transcript,
-                briefing, outline, show_name, user_kb, speaker_override,
-            )
+            if is_two_host:
+                transcript_v2 = await loop.run_in_executor(
+                    None, generate_transcript_two_host,
+                    briefing, outline, show_name, user_kb,
+                )
+            else:
+                transcript_v2 = await loop.run_in_executor(
+                    None, generate_transcript,
+                    briefing, outline, show_name, user_kb, speaker_override,
+                )
             judgment_v2 = await _rubric_judge(
                 task="transcript",
                 output=json.dumps(transcript_v2, ensure_ascii=False),

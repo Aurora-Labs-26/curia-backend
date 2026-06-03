@@ -138,11 +138,50 @@ NARRATIVE_DRIFT_PROFILE = EpisodeProfile(
     outro_audio_path=_AUDIO_OUTRO,
 )
 
+CLARITY_ENGINE_SPEAKERS = SpeakerProfile(
+    name="clarity_engine",
+    speakers=[
+        Speaker(
+            name="kenji",
+            backstory=(
+                "Former wire journalist who reported from three continents. "
+                "In this show, he's the teacher — he's done the reading, understands the mechanism, "
+                "and wants to make it land clearly. He explains step by step, uses concrete examples, "
+                "and doesn't move on until the point is made."
+            ),
+            speech_patterns=(
+                "Keeps sentences tight. "
+                "Prefers one idea per line. "
+                "Builds from concrete detail to the general claim, not the other way around. "
+                "Uses contrast sparingly but sharply. "
+                "When asked a question, answers it directly before elaborating."
+            ),
+        ),
+        Speaker(
+            name="arjun",
+            backstory=(
+                "Economist turned essayist. Spent a decade in policy before deciding "
+                "the interesting questions were upstream of any policy solution. "
+                "In this show, he's the student — not unintelligent, but encountering this "
+                "material for the first time. He asks the questions the listener would ask. "
+                "Forces clarity by refusing to let vague explanations pass."
+            ),
+            speech_patterns=(
+                "Asks short, pointed questions. "
+                "Says 'wait' or 'hold on' when something doesn't click. "
+                "Paraphrases back what he heard to check understanding. "
+                "When satisfied, says so plainly: 'okay, that makes sense.' "
+                "Pushes for examples when the explanation stays abstract."
+            ),
+        ),
+    ],
+)
+
 CLARITY_ENGINE_PROFILE = EpisodeProfile(
     name="clarity_engine",
     format_name="clarity_engine",
     language="en-US",
-    speaker_config=KENJI_SPEAKER,
+    speaker_config=CLARITY_ENGINE_SPEAKERS,
     intro_audio_path=_AUDIO_INTRO,
     outro_audio_path=_AUDIO_OUTRO,
 )
@@ -156,11 +195,50 @@ MOMENTUM_LOOP_PROFILE = EpisodeProfile(
     outro_audio_path=_AUDIO_OUTRO,
 )
 
+EXPLORATION_ENGINE_SPEAKERS = SpeakerProfile(
+    name="exploration_engine",
+    speakers=[
+        Speaker(
+            name="kenji",
+            backstory=(
+                "Former wire journalist who reported from three continents. "
+                "In this show, he holds the thesis — he read the material and formed a strong "
+                "interpretation. He states it early and builds evidence for it. He's not defensive "
+                "but he's committed to his reading."
+            ),
+            speech_patterns=(
+                "Keeps sentences tight. "
+                "States claims plainly before supporting them. "
+                "Uses specific evidence — names, numbers, mechanisms. "
+                "When challenged, doesn't retreat but reframes: 'that's fair, but consider this.' "
+                "Occasionally restates an idea more precisely after the first pass."
+            ),
+        ),
+        Speaker(
+            name="arjun",
+            backstory=(
+                "Economist turned essayist. Spent a decade in policy before deciding "
+                "the interesting questions were upstream of any policy solution. "
+                "In this show, he holds the antithesis — he read the same material and genuinely "
+                "sees it differently. He's not playing devil's advocate; he has his own interpretation. "
+                "He steelmans his position and waits for the strongest moment to land it."
+            ),
+            speech_patterns=(
+                "Builds arguments step by step. "
+                "Sits with tension before resolving it. "
+                "Uses 'but what if' and 'there's another way to read this' to pivot. "
+                "Concedes partial points clearly before pressing his own. "
+                "Ends exchanges with a reframe that shifts the lens."
+            ),
+        ),
+    ],
+)
+
 EXPLORATION_ENGINE_PROFILE = EpisodeProfile(
     name="exploration_engine",
     format_name="exploration_engine",
     language="en-US",
-    speaker_config=KENJI_SPEAKER,
+    speaker_config=EXPLORATION_ENGINE_SPEAKERS,
     intro_audio_path=_AUDIO_INTRO,
     outro_audio_path=_AUDIO_OUTRO,
 )
