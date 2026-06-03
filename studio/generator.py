@@ -257,6 +257,9 @@ def generate_transcript_two_host(
         )
     _e1 = _time.time() - _t1
     host_a_transcript = _parse_json_response(pred_a.host_a_json, "Host A")
+    # Force correct speaker name — LLM may output "Host", "HOST_A", etc.
+    for line in host_a_transcript:
+        line["speaker"] = speaker_a.name.lower()
     llm_log.info(f"LLM_CALL_END | task=transcript_host_a duration={_e1:.2f}s lines={len(host_a_transcript)}")
 
     # ── Call 2: Host B (reacts to A) ────────────────────────────────────
@@ -274,6 +277,8 @@ def generate_transcript_two_host(
         )
     _e2 = _time.time() - _t2
     host_b_transcript = _parse_json_response(pred_b.host_b_json, "Host B")
+    for line in host_b_transcript:
+        line["speaker"] = speaker_b.name.lower()
     llm_log.info(f"LLM_CALL_END | task=transcript_host_b duration={_e2:.2f}s lines={len(host_b_transcript)}")
 
     # ── Call 3: Merge ───────────────────────────────────────────────────
@@ -291,6 +296,18 @@ def generate_transcript_two_host(
         )
     _e3 = _time.time() - _t3
     merged = _parse_json_response(pred_merge.merged_json, "Merger")
+    # Normalize speaker names — LLM may capitalize or use variants
+    name_a = speaker_a.name.lower()
+    name_b = speaker_b.name.lower()
+    for line in merged:
+        raw = (line.get("speaker") or "").strip().lower()
+        if name_a in raw:
+            line["speaker"] = name_a
+        elif name_b in raw:
+            line["speaker"] = name_b
+        else:
+            # Fallback: alternate assignment or default to host A
+            line["speaker"] = name_a
     llm_log.info(
         f"LLM_CALL_END | task=transcript_merge duration={_e3:.2f}s "
         f"lines={len(merged)} (A={len(host_a_transcript)}, B={len(host_b_transcript)})"

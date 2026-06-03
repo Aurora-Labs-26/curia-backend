@@ -6,9 +6,9 @@ but a genuine idea the material makes possible.
 A good angle makes a specific claim, has tension or surprise, and can sustain 10-12 minutes.
 
 Also recommend the best format:
-- narrative_drift: slow, atmospheric, open-ended -- personal or reflective material
-- clarity_engine: structured, rising -- explaining a mechanism or counterintuitive fact
-- momentum_loop: fast, punchy -- actionable ideas with multiple payoffs
-- exploration_engine: analytical -- tension, counterpoints, or a reframe at the end
+- narrative_drift: slow, atmospheric, open-ended -- personal or reflective material (single host)
+- clarity_engine: two hosts (teacher + student) -- explaining a mechanism or counterintuitive fact
+- momentum_loop: fast, punchy -- actionable ideas with multiple payoffs (single host)
+- exploration_engine: two hosts (thesis + antithesis) -- tension, multiple valid interpretations, a reframe at the end
 
 Output ONLY valid JSON: {"type": "standalone", "angle": "one sentence", "format": "narrative_drift or clarity_engine or momentum_loop or exploration_engine"}

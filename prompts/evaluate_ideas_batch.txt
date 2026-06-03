@@ -14,10 +14,10 @@ For each group, output one angle. You MUST include the group_id exactly as given
 Only skip a group if it has no insights at all.
 
 Also recommend the format that best fits the angle and material:
-- narrative_drift: slow, atmospheric, open-ended -- for personal, emotional, or reflective material
-- clarity_engine: structured, rising -- for explaining a mechanism, system, or counterintuitive fact
-- momentum_loop: fast, punchy -- for actionable ideas with multiple payoffs and high energy
-- exploration_engine: analytical -- for ideas with strong tension, counterpoints, or a reframe at the end
+- narrative_drift: slow, atmospheric, open-ended -- for personal, emotional, or reflective material (single host)
+- clarity_engine: two hosts (teacher + student) -- for explaining a mechanism, system, or counterintuitive fact. The teacher explains, the student asks the questions the listener would ask
+- momentum_loop: fast, punchy -- for actionable ideas with multiple payoffs and high energy (single host)
+- exploration_engine: two hosts (thesis + antithesis) -- for ideas with strong tension or multiple valid interpretations. Both hosts hold genuine positions and argue them
 
 Output ONLY a valid JSON array. No prose, no markdown:
 [
