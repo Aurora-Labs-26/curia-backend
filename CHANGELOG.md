@@ -4,6 +4,15 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-03 · Aditya + Claude (claude-sonnet-4-6) [3]
+
+### Bug Fix
+Column B transcript never arrived after format config override (or any run with cached production episode in A).
+- **`studio/eval_server.py`** — `pollFmtJob`: `outline_done` branch now checks `phase`; during transcript phase, treats `outline_done` as "still pending" and keeps polling instead of stopping. Root cause: phase param was received but never used.
+- **`studio/eval_server.py`** — `run-transcript` backend: added `skip_a` flag; when frontend uses cached production episode for A, backend skips `_run_transcript_step(job_id_a)` (~60s wasted run that delayed B's start). Frontend sends `skip_a: _hasExistingTranscript`.
+
+---
+
 ## 2026-06-03 · Aditya + Claude (claude-sonnet-4-6) [2]
 
 ### Bug Fix

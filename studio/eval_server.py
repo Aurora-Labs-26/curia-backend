@@ -2206,16 +2206,17 @@ async def compare_run_transcript(request: Request):
     job_id_b     = (body.get("job_b") or "").strip()
     transcript_b = body.get("transcript_prompt_b") or None
     briefing_b   = body.get("briefing_b") or None
+    skip_a       = bool(body.get("skip_a"))
     if not job_id_a or not job_id_b:
         return JSONResponse(content={"error": "job_a and job_b required"}, status_code=400)
 
     async def _run_both():
-        import asyncio as _aio
         ep_a, ep_b = None, None
-        try:
-            ep_a = await _run_transcript_step(job_id_a)
-        except Exception:
-            pass
+        if not skip_a:
+            try:
+                ep_a = await _run_transcript_step(job_id_a)
+            except Exception:
+                pass
         try:
             ep_b = await _run_transcript_step(job_id_b, transcript_prompt_override=transcript_b,
                                                briefing_override=briefing_b)
@@ -3737,6 +3738,9 @@ async function runTranscripts() {
   document.getElementById('fmt-result-a').innerHTML = '';
   document.getElementById('fmt-result-b').innerHTML = '';
 
+  const _epTranscript = _existingEp?.transcript;
+  const _hasExistingTranscript = Array.isArray(_epTranscript) && _epTranscript.length > 0;
+
   await fetch('/api/compare/run-transcript', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
@@ -3744,11 +3748,10 @@ async function runTranscripts() {
       job_a: _fmtJobA, job_b: _fmtJobB,
       transcript_prompt_b: _getTranscriptPromptB(),
       briefing_b: _getBriefingB(),
+      skip_a: _hasExistingTranscript,
     })
   });
 
-  const _epTranscript = _existingEp?.transcript;
-  const _hasExistingTranscript = Array.isArray(_epTranscript) && _epTranscript.length > 0;
   if (_hasExistingTranscript) {
     // Load cached full episode into A immediately — no pipeline needed
     loadExistingToSlot('a', 'transcript');
@@ -3787,15 +3790,19 @@ function pollFmtJob(jobId, side, phase) {
     renderSteps(data.steps || [], 'fmt-steps-' + side);
 
     if (data.status === 'outline_done') {
-      // Show outline content
-      if (data.outline) renderOutlineInColumn(data.outline, side);
-      if (side === 'a') _outlineDoneA = true;
-      if (side === 'b') _outlineDoneB = true;
-      if (_outlineDoneA && _outlineDoneB) {
-        document.getElementById('fmt-btn').disabled = false;
-        document.getElementById('phase2-bar').style.display = 'block';
-        // Show re-run outline button for B
-        showRerunButton('outline');
+      if (phase === 'outline') {
+        // Outline phase — render outline and mark done
+        if (data.outline) renderOutlineInColumn(data.outline, side);
+        if (side === 'a') _outlineDoneA = true;
+        if (side === 'b') _outlineDoneB = true;
+        if (_outlineDoneA && _outlineDoneB) {
+          document.getElementById('fmt-btn').disabled = false;
+          document.getElementById('phase2-bar').style.display = 'block';
+          showRerunButton('outline');
+        }
+      } else {
+        // Transcript phase — backend hasn't started transcript yet, keep polling
+        pollFmtJob(jobId, side, phase);
       }
     } else if (data.status === 'done') {
       document.getElementById('fmt-btn').disabled = false;
