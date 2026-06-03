@@ -1085,7 +1085,8 @@ class TTSAdapter:
         base_url = (self.provider.base_url or "https://api.hume.ai").rstrip("/")
         url = f"{base_url}/v0/tts/file"
         output_fmt = self.settings.get("output_format", "mp3")
-        utterance: dict = {"text": text, "voice": {"name": self.voice_id}}
+        voice_provider = self.settings.get("voice_provider", "HUME_AI")
+        utterance: dict = {"text": text, "voice": {"provider": voice_provider, "name": self.voice_id}}
         description = self.settings.get("description")
         if description:
             utterance["description"] = description[:1000]
@@ -1120,7 +1121,8 @@ class TTSAdapter:
         base_url = (self.provider.base_url or "https://api.hume.ai").rstrip("/")
         url = f"{base_url}/v0/tts/file"
         output_fmt = self.settings.get("output_format", "mp3")
-        utterance: dict = {"text": text, "voice": {"name": self.voice_id}}
+        voice_provider = self.settings.get("voice_provider", "HUME_AI")
+        utterance: dict = {"text": text, "voice": {"provider": voice_provider, "name": self.voice_id}}
         description = self.settings.get("description")
         if description:
             utterance["description"] = description[:1000]
