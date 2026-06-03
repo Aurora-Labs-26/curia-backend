@@ -31,6 +31,14 @@ class FormatConfig:
     rules: FormatRules
     default_segment_count: int
     default_length_minutes: int
+    # Relative depth weight per structure_pattern entry. Controls how body words
+    # are distributed across segment types — heavier segments get more words.
+    # Must have same length as structure_pattern. Weights are normalised internally.
+    segment_weights: list[float] = None
+
+    @property
+    def target_words(self) -> int:
+        return round(self.default_length_minutes * WORDS_PER_MINUTE)
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +68,8 @@ NARRATIVE_DRIFT = FormatConfig(
     ),
     default_segment_count=8,
     default_length_minutes=12,
+    # scene and expansion carry the weight; detail is connective; soft_reflection is brief
+    segment_weights=[1.4, 0.8, 1.5, 0.8],
 )
 
 CLARITY_ENGINE = FormatConfig(
@@ -85,6 +95,8 @@ CLARITY_ENGINE = FormatConfig(
     ),
     default_segment_count=6,
     default_length_minutes=10,
+    # mechanism and example carry the argument; question is a hook; summary is tight
+    segment_weights=[0.7, 1.0, 1.6, 1.4, 0.8],
 )
 
 MOMENTUM_LOOP = FormatConfig(
@@ -110,6 +122,8 @@ MOMENTUM_LOOP = FormatConfig(
     ),
     default_segment_count=10,
     default_length_minutes=10,
+    # insight and story carry the substance; hooks are punchy and short by design
+    segment_weights=[0.6, 1.4, 1.2, 0.6, 1.4],
 )
 
 EXPLORATION_ENGINE = FormatConfig(
@@ -135,6 +149,8 @@ EXPLORATION_ENGINE = FormatConfig(
     ),
     default_segment_count=8,
     default_length_minutes=12,
+    # claim/expansion/link/reframe are the argument; counterpoint is a pivot — keep it tight
+    segment_weights=[1.4, 0.7, 1.5, 1.2, 1.3],
 )
 
 
@@ -183,6 +199,25 @@ def get_format(name: str) -> FormatConfig:
     return FORMATS[name]
 
 
+def segment_word_budgets(fmt: FormatConfig, segment_count: int, body_words: int) -> list[int]:
+    """
+    Return a list of per-segment word budgets that sum to body_words.
+    Weights are cycled across segment_count using the structure_pattern weights.
+    Falls back to even distribution if no weights defined.
+    """
+    weights = fmt.segment_weights
+    if not weights:
+        even = max(50, round(body_words / segment_count))
+        return [even] * segment_count
+    # Cycle the weight pattern across however many segments the episode has
+    cycled = [weights[i % len(weights)] for i in range(segment_count)]
+    total_weight = sum(cycled)
+    budgets = [max(50, round((w / total_weight) * body_words)) for w in cycled]
+    # Adjust last segment to absorb rounding error
+    budgets[-1] += body_words - sum(budgets)
+    return budgets
+
+
 def format_config_to_dict(fmt: FormatConfig) -> dict:
     """Serialize FormatConfig to a plain dict for the briefing packet."""
     return {
@@ -193,6 +228,8 @@ def format_config_to_dict(fmt: FormatConfig) -> dict:
         "energy_curve": fmt.energy_curve,
         "structure_pattern": fmt.structure_pattern,
         "voice_style": fmt.voice_style,
+        "target_words": fmt.target_words,
+        "segment_weights": fmt.segment_weights,
         "rules": {
             "must_do": fmt.rules.must_do,
             "must_avoid": fmt.rules.must_avoid,
