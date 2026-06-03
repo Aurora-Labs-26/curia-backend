@@ -231,7 +231,8 @@ async def _ensure_primitive_embedding(source_id: str):
 
 
 async def _build_briefing(source_id: str, show_name: str, user_id: str,
-                          format_config_override: dict | None = None) -> str:
+                          format_config_override: dict | None = None,
+                          episode_constraints_override: dict | None = None) -> str:
     """Build briefing string for a single already-ingested source."""
     from core.db.connection import db_fetchrow, db_query
     from studio.briefing_builder import build_briefing_packet, briefing_packet_to_str
@@ -255,12 +256,15 @@ async def _build_briefing(source_id: str, show_name: str, user_id: str,
     )
     if format_config_override:
         packet["format_config"] = format_config_override
+    if episode_constraints_override:
+        packet["episode_constraints"].update(episode_constraints_override)
     return briefing_packet_to_str(packet)
 
 
 async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "single",
                         prompt_override: str | None = None, outline_prompt_override: str | None = None,
-                        stop_after: str = "full", format_config_override: dict | None = None):
+                        stop_after: str = "full", format_config_override: dict | None = None,
+                        episode_constraints_override: dict | None = None):
     from core.db.connection import db_fetchrow, db_execute
     from core.ingest import process_source, get_or_create_source
     from studio.generator import process_episode
@@ -341,7 +345,8 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
         if stop_after == "outline":
             await _step_start("Building briefing")
             briefing = await _build_briefing(source_id, show_name, user_id,
-                                             format_config_override=format_config_override)
+                                             format_config_override=format_config_override,
+                                             episode_constraints_override=episode_constraints_override)
             await _step_done()
 
             await _step_start("Generating outline")
@@ -2133,9 +2138,16 @@ async def compare_run_outline(request: Request):
     change_note      = (body.get("change_note") or "").strip() or None
     format_config_b_raw = body.get("format_config_b") or None
     format_config_b: dict | None = None
+    episode_constraints_b: dict | None = None
     if format_config_b_raw:
         try:
-            format_config_b = _json.loads(format_config_b_raw) if isinstance(format_config_b_raw, str) else format_config_b_raw
+            combined = _json.loads(format_config_b_raw) if isinstance(format_config_b_raw, str) else format_config_b_raw
+            # Support combined {format_config, episode_constraints} block or bare format_config
+            if "format_config" in combined or "episode_constraints" in combined:
+                format_config_b = combined.get("format_config") or None
+                episode_constraints_b = combined.get("episode_constraints") or None
+            else:
+                format_config_b = combined
         except Exception:
             return JSONResponse(content={"error": "format_config_b is not valid JSON"}, status_code=400)
     if not url:
@@ -2147,7 +2159,8 @@ async def compare_run_outline(request: Request):
     asyncio.create_task(_run_pipeline(job_a, url, show_name_a, stop_after="outline"))
     asyncio.create_task(_run_pipeline(job_b, url, show_name_b, stop_after="outline",
                                       outline_prompt_override=outline_b,
-                                      format_config_override=format_config_b))
+                                      format_config_override=format_config_b,
+                                      episode_constraints_override=episode_constraints_b))
     return JSONResponse(content={"job_a": job_a, "job_b": job_b})
 
 
@@ -2676,11 +2689,20 @@ async def compare_feedback(request: Request):
 
 @app.get("/api/formats/{show_name}")
 async def get_format_config(show_name: str):
-    """Return the current format_config dict for a show (for pre-filling the format override textarea)."""
+    """Return format_config + episode_constraints for a show (combined editable block)."""
     try:
-        from studio.formats import get_format, format_config_to_dict
+        from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS
         fmt = get_format(show_name)
-        return JSONResponse(content=format_config_to_dict(fmt))
+        return JSONResponse(content={
+            "format_config": format_config_to_dict(fmt),
+            "episode_constraints": {
+                "segment_count": fmt.default_segment_count,
+                "target_length_minutes": fmt.default_length_minutes,
+                "target_words": fmt.target_words,
+                "intro_budget_words": INTRO_WORDS,
+                "outro_budget_words": OUTRO_WORDS,
+            },
+        })
     except ValueError as e:
         return JSONResponse(content={"error": str(e)}, status_code=404)
     except Exception as e:
@@ -3076,10 +3098,10 @@ select:focus{outline:none;border-color:var(--accent)}
               <option value="exploration_engine">exploration_engine</option>
             </select>
           </div>
-          <!-- Format config -->
+          <!-- Format config + episode constraints -->
           <div style="margin-bottom:12px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
-              <span style="font-size:12px;font-weight:600;color:var(--text)">Format config</span>
+              <span style="font-size:12px;font-weight:600;color:var(--text)">Format + constraints</span>
               <div style="display:flex;align-items:center;gap:8px">
                 <span id="format-config-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
                 <button class="btn-secondary" style="padding:4px 10px;font-size:11px" id="format-config-edit-btn" onclick="toggleFormatConfigEdit()">Edit</button>
