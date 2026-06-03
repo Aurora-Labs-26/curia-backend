@@ -230,7 +230,8 @@ async def _ensure_primitive_embedding(source_id: str):
     )
 
 
-async def _build_briefing(source_id: str, show_name: str, user_id: str) -> str:
+async def _build_briefing(source_id: str, show_name: str, user_id: str,
+                          format_config_override: dict | None = None) -> str:
     """Build briefing string for a single already-ingested source."""
     from core.db.connection import db_fetchrow, db_query
     from studio.briefing_builder import build_briefing_packet, briefing_packet_to_str
@@ -252,12 +253,14 @@ async def _build_briefing(source_id: str, show_name: str, user_id: str) -> str:
         editorial_direction=None,
         user_kb=None,
     )
+    if format_config_override:
+        packet["format_config"] = format_config_override
     return briefing_packet_to_str(packet)
 
 
 async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "single",
                         prompt_override: str | None = None, outline_prompt_override: str | None = None,
-                        stop_after: str = "full"):
+                        stop_after: str = "full", format_config_override: dict | None = None):
     from core.db.connection import db_fetchrow, db_execute
     from core.ingest import process_source, get_or_create_source
     from studio.generator import process_episode
@@ -337,7 +340,8 @@ async def _run_pipeline(job_id: str, url: str, show_name: str, mode: str = "sing
 
         if stop_after == "outline":
             await _step_start("Building briefing")
-            briefing = await _build_briefing(source_id, show_name, user_id)
+            briefing = await _build_briefing(source_id, show_name, user_id,
+                                             format_config_override=format_config_override)
             await _step_done()
 
             await _step_start("Generating outline")
@@ -2117,12 +2121,19 @@ async def get_prompt(task: str):
 async def compare_run_outline(request: Request):
     """Phase 1: ingest + outline only for both A and B."""
     body = await request.json()
-    url          = (body.get("url") or "").strip()
-    show_name_a  = (body.get("show_name_a") or "clarity_engine").strip()
-    show_name_b  = (body.get("show_name_b") or show_name_a).strip()
-    outline_b    = body.get("outline_prompt_b") or None
-    transcript_b = body.get("transcript_prompt_b") or None
-    change_note  = (body.get("change_note") or "").strip() or None
+    url              = (body.get("url") or "").strip()
+    show_name_a      = (body.get("show_name_a") or "clarity_engine").strip()
+    show_name_b      = (body.get("show_name_b") or show_name_a).strip()
+    outline_b        = body.get("outline_prompt_b") or None
+    transcript_b     = body.get("transcript_prompt_b") or None
+    change_note      = (body.get("change_note") or "").strip() or None
+    format_config_b_raw = body.get("format_config_b") or None
+    format_config_b: dict | None = None
+    if format_config_b_raw:
+        try:
+            format_config_b = _json.loads(format_config_b_raw) if isinstance(format_config_b_raw, str) else format_config_b_raw
+        except Exception:
+            return JSONResponse(content={"error": "format_config_b is not valid JSON"}, status_code=400)
     if not url:
         return JSONResponse(content={"error": "url required"}, status_code=400)
     job_a = str(uuid4())
@@ -2131,7 +2142,8 @@ async def compare_run_outline(request: Request):
                              job_a, job_b, change_note=change_note)
     asyncio.create_task(_run_pipeline(job_a, url, show_name_a, stop_after="outline"))
     asyncio.create_task(_run_pipeline(job_b, url, show_name_b, stop_after="outline",
-                                      outline_prompt_override=outline_b))
+                                      outline_prompt_override=outline_b,
+                                      format_config_override=format_config_b))
     return JSONResponse(content={"job_a": job_a, "job_b": job_b})
 
 
@@ -2636,6 +2648,19 @@ async def compare_feedback(request: Request):
     return JSONResponse(content={"ok": True})
 
 
+@app.get("/api/formats/{show_name}")
+async def get_format_config(show_name: str):
+    """Return the current format_config dict for a show (for pre-filling the format override textarea)."""
+    try:
+        from studio.formats import get_format, format_config_to_dict
+        fmt = get_format(show_name)
+        return JSONResponse(content=format_config_to_dict(fmt))
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=404)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 @app.get("/api/compare/runs")
 async def list_compare_runs():
     try:
@@ -3018,12 +3043,28 @@ select:focus{outline:none;border-color:var(--accent)}
           <!-- Show format -->
           <div class="config-field" style="margin-bottom:14px">
             <label>Show format</label>
-            <select id="fmt-show-b" style="width:100%" onchange="updateChangeCount()">
+            <select id="fmt-show-b" style="width:100%" onchange="updateChangeCount(); _formatConfigLoaded = false;">
               <option value="clarity_engine">clarity_engine</option>
               <option value="narrative_drift">narrative_drift</option>
               <option value="momentum_loop">momentum_loop</option>
               <option value="exploration_engine">exploration_engine</option>
             </select>
+          </div>
+          <!-- Format config -->
+          <div style="margin-bottom:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+              <span style="font-size:12px;font-weight:600;color:var(--text)">Format config</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span id="format-config-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#f3f0ed;color:var(--subtle)">default</span>
+                <button class="btn-secondary" style="padding:4px 10px;font-size:11px" id="format-config-edit-btn" onclick="toggleFormatConfigEdit()">Edit</button>
+              </div>
+            </div>
+            <textarea id="format-config-override"
+              style="display:none;width:100%;height:260px;padding:10px 12px;font-family:'SF Mono',Menlo,monospace;font-size:11px;line-height:1.65;border:1px solid var(--border);border-radius:6px;resize:vertical;color:var(--text);background:var(--bg);outline:none"
+              oninput="onFormatConfigEdit()"></textarea>
+            <div id="format-config-actions" style="display:none;margin-top:8px;gap:8px;justify-content:flex-end">
+              <button class="btn-secondary" style="padding:5px 12px;font-size:12px" onclick="cancelFormatConfigEdit()">Cancel</button>
+            </div>
           </div>
           <!-- Outline prompt -->
           <div style="margin-bottom:12px">
@@ -3386,6 +3427,7 @@ function startNewRun() {
   document.getElementById('change-note-input').value = '';
   cancelPromptEdit('outline');
   cancelPromptEdit('transcript');
+  cancelFormatConfigEdit();
   document.getElementById('fmt-url').focus();
   document.getElementById('fmt-rerun-b').style.display = 'none';
   document.getElementById('fmt-rerun-b').innerHTML = '';
@@ -3527,9 +3569,67 @@ function updateChangeCount() {
   if (showA !== showB) n++;
   if (document.getElementById('outline-override').dataset.modified) n++;
   if (document.getElementById('transcript-override').dataset.modified) n++;
+  if (document.getElementById('format-config-override').dataset.modified) n++;
   const el = document.getElementById('b-change-count');
   el.style.display = n > 0 ? '' : 'none';
   el.textContent = n + (n === 1 ? ' override' : ' overrides');
+}
+
+// ── Format config override ────────────────────────────────────────────────────
+let _formatConfigLoaded = false;
+
+async function toggleFormatConfigEdit() {
+  const ta   = document.getElementById('format-config-override');
+  const acts = document.getElementById('format-config-actions');
+  const btn  = document.getElementById('format-config-edit-btn');
+  const isOpen = ta.style.display !== 'none';
+  if (isOpen) {
+    cancelFormatConfigEdit();
+    return;
+  }
+  ta.style.display = 'block';
+  acts.style.display = 'flex';
+  btn.textContent = 'Remove';
+  if (!_formatConfigLoaded) {
+    const show = document.getElementById('fmt-show-b').value;
+    ta.value = 'Loading…';
+    try {
+      const res  = await fetch('/api/formats/' + show);
+      const data = await res.json();
+      ta.value = JSON.stringify(data, null, 2);
+    } catch(e) {
+      ta.value = '{}';
+    }
+    _formatConfigLoaded = true;
+  }
+}
+
+function onFormatConfigEdit() {
+  const pill = document.getElementById('format-config-pill');
+  pill.textContent = 'modified ✓';
+  pill.style.background = 'var(--accent-light)';
+  pill.style.color = 'var(--accent)';
+  document.getElementById('format-config-override').dataset.modified = '1';
+  updateChangeCount();
+}
+
+function cancelFormatConfigEdit() {
+  const ta = document.getElementById('format-config-override');
+  ta.style.display = 'none';
+  ta.dataset.modified = '';
+  _formatConfigLoaded = false;
+  document.getElementById('format-config-actions').style.display = 'none';
+  document.getElementById('format-config-edit-btn').textContent = 'Edit';
+  const pill = document.getElementById('format-config-pill');
+  pill.textContent = 'default';
+  pill.style.background = '#f3f0ed';
+  pill.style.color = 'var(--subtle)';
+  updateChangeCount();
+}
+
+function _getFormatConfigB() {
+  const ta = document.getElementById('format-config-override');
+  return (ta.dataset.modified && ta.value.trim()) ? ta.value.trim() : null;
 }
 
 let _fmtJobA = null, _fmtJobB = null;
@@ -3615,6 +3715,7 @@ async function runPromptCompare() {
       show_name_b: showB,
       outline_prompt_b: _getOutlinePromptB(),
       transcript_prompt_b: _getTranscriptPromptB(),
+      format_config_b: _getFormatConfigB(),
       change_note: changeNote,
     })
   });
