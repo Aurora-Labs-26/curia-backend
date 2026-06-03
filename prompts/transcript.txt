@@ -45,23 +45,16 @@ From the briefing, hold in mind:
 - source_primitives                      → the only facts you are allowed to draw from. Do not invent.
 - listener_context (if present)          → apply subtly. Never address the listener directly about their preferences.
 
-DISTRIBUTION MODE — read whichever applies:
-
-  If episode_constraints.per_segment_word_budgets is present:
-    Use those exact word counts per segment (ordered by segment number).
-    Do not redistribute. The budget difference between segments is intentional.
-
-  If episode_constraints.per_segment_word_budgets is absent:
-    You decide how to distribute the body words across segments.
-    The body = target_words minus intro and outro (~145 words fixed).
-    Distribute based on argumentative weight:
-    - Segments that carry the main claim, the expansion, or the reframe: develop fully.
-      These are the load-bearing segments. Give them more words.
-    - Segments that introduce a counterpoint, pivot, or transition: stay tight.
-      Land the point and move. Do not over-develop connective tissue.
-    Use the segment purpose field in the outline and format_config.structure_pattern
-    to judge which segments are load-bearing vs transitional.
-    The total across all segments must reach target_words. Track as you write.
+DISTRIBUTION: You decide how to distribute the body words across segments.
+  The body = target_words minus intro and outro (~220 words fixed).
+  Distribute based on argumentative weight:
+  - Segments that carry the main claim, the expansion, or the reframe: develop fully.
+    These are the load-bearing segments. Give them more words.
+  - Segments that introduce a counterpoint, pivot, or transition: stay tight.
+    Land the point and move. Do not over-develop connective tissue.
+  Use the segment purpose field in the outline and format_config.structure_pattern
+  to judge which segments are load-bearing vs transitional.
+  The total across all segments must reach target_words. Track as you write.
 </briefing_guide>
 
 <speaker_guide>
@@ -192,16 +185,15 @@ INTRO TOPIC NAMING
 
 <length>
 Total words = episode_constraints.target_words. Tolerance +/-10%. Hard constraint.
-Intro = ~150 words. Outro = ~70 words. The rest is body.
+Intro = intro_budget_min to intro_budget_max words. Outro = outro_budget_min to outro_budget_max words. The rest is body.
 
 Finishing under 90% of target_words is a content failure, not an efficiency win.
 It means ideas were stated but not developed. The listener set aside time for a
 full episode. Ending early shortchanges the argument and the listener.
 
-If per_segment_word_budgets is present: hit each segment's budget. Heavier = more developed.
-If per_segment_word_budgets is absent: distribute body words by argumentative weight.
-  Load-bearing segments (claim, expansion, reframe) get more. Pivots get less.
-  The sum must reach target_words. Do not distribute evenly.
+Distribute body words by argumentative weight.
+Load-bearing segments (claim, expansion, reframe) get more. Pivots get less.
+The sum must reach target_words. Do not distribute evenly.
 
 A JSON line is one spoken beat — a fragment, one sentence, or two sentences that belong
 together. Let rhythm decide the break. Short and long lines should alternate.
@@ -238,7 +230,7 @@ Do not race through the most important idea to hit a word count.
 </depth>
 
 <intro>
-Mandatory. Always first. Budget: ~150 words (larger than default — this intro has real work to do).
+Mandatory. Always first. Budget: intro_budget_min to intro_budget_max words (target: intro_budget_words).
 
 Follow this order exactly:
 
@@ -269,7 +261,7 @@ Do not rush from greeting to material. The intro earns the listener's attention.
 </intro>
 
 <outro>
-Mandatory. Always last. Budget: outro_budget_words (~70 words).
+Mandatory. Always last. Budget: outro_budget_min to outro_budget_max words (target: outro_budget_words).
 - Opening line: warmly close the episode. Acknowledge the listener spent real time with it.
 - Middle lines: brief genuine reflection, not a summary. Must name something specific from
   this episode. If the line could be dropped into any other episode unchanged, it is wrong.
@@ -305,28 +297,21 @@ Before writing a single line, do this:
   giving an example, restating from a second angle, following an implication through.
   A listener cannot pause and reread. Every idea needs more room than you think.
 
-If per_segment_word_budgets is present:
-  Allocate each segment's budget before writing it. If you finish a segment and it
-  feels complete but is short, you have stated the idea, not developed it. Go deeper:
-  add the example, show the mechanism, take the implication one step further.
-  A segment that earns its budget feels developed. One that doesn't feels like a sketch.
-
-If per_segment_word_budgets is absent:
-  Before writing segment 1, divide target_words by segment_count. That is your rough
-  per-segment floor — no segment should be much shorter than that unless it is
-  explicitly a pivot or transition. Track a running total as you write.
-  If you finish all segments under 90% of target_words, return to the heaviest
-  segments and develop further — not filler, real depth.
+Before writing segment 1, divide target_words by segment_count. That is your rough
+per-segment floor — no segment should be much shorter than that unless it is
+explicitly a pivot or transition. Track a running total as you write.
+If you finish all segments under 90% of target_words, return to the heaviest
+segments and develop further — not filler, real depth.
 
 Write in this order:
-1. Intro (~75 words)
+1. Intro (intro_budget_min to intro_budget_max words)
 2. Body — each outline segment in order:
    a. Draw only from that segment's primitives_used
    b. Apply format_config.energy_curve as you go
    c. Each line is one spoken beat — let rhythm decide the break
    d. Load-bearing segments: show the mechanism, give an example, restate from a second angle
    e. Pivot segments: land the point and move
-3. Outro (~70 words)
+3. Outro (outro_budget_min to outro_budget_max words)
 
 Output format — no wrapper, no fences, raw JSON only:
 [
