@@ -2764,6 +2764,160 @@ async def compare_page():
     return HTMLResponse(content=COMPARE_HTML)
 
 
+# ---------------------------------------------------------------------------
+# Transformation Lab API
+# ---------------------------------------------------------------------------
+
+_TRANSFORM_TASKS = {
+    "key_insights":  "extract_key_insights",
+    "core_tensions": "extract_core_tensions",
+    "counterpoints": "extract_counterpoints",
+    "human_stakes":  "extract_human_stakes",
+    "examples":      "extract_examples",
+    "summary":       "extract_summary",
+    "metadata":      "extract_metadata",
+}
+
+
+@app.get("/api/transform/prompts/{insight_type}")
+async def get_transform_prompt(insight_type: str):
+    if insight_type not in _TRANSFORM_TASKS:
+        return JSONResponse(content={"error": "unknown type"}, status_code=404)
+    from core.prompts.loader import load_prompt, PROMPTS_DIR
+    from core.prompts.transformations import (
+        ExtractKeyInsights, ExtractCoreTensions, ExtractCounterpoints,
+        ExtractHumanStakes, ExtractExamples, ExtractSummary, ExtractMetadata,
+    )
+    _sig_map = {
+        "key_insights": ExtractKeyInsights,
+        "core_tensions": ExtractCoreTensions,
+        "counterpoints": ExtractCounterpoints,
+        "human_stakes": ExtractHumanStakes,
+        "examples": ExtractExamples,
+        "summary": ExtractSummary,
+        "metadata": ExtractMetadata,
+    }
+    task = _TRANSFORM_TASKS[insight_type]
+    txt = load_prompt(task)
+    if not txt:
+        txt = (_sig_map[insight_type].__doc__ or "").strip()
+    return JSONResponse(content={"prompt": txt, "task": task})
+
+
+@app.get("/api/transform/sources")
+async def list_transform_sources(q: str = "", limit: int = 50, offset: int = 0):
+    from core.db.connection import db_query
+    try:
+        where = "WHERE s.status = 'ready'"
+        params: dict = {"limit": limit, "offset": offset}
+        if q:
+            where += " AND (s.title ILIKE $q OR s.url ILIKE $q)"
+            params["q"] = f"%{q}%"
+        rows = await db_query(
+            f"""SELECT s.id::text, s.title, s.url, s.created_at,
+                       COUNT(si.id) AS insight_count
+                FROM source s
+                LEFT JOIN source_insight si ON si.source_id = s.id
+                {where}
+                GROUP BY s.id, s.title, s.url, s.created_at
+                ORDER BY s.created_at DESC
+                LIMIT $limit OFFSET $offset""",
+            params,
+        )
+        return JSONResponse(content=_json.loads(_json.dumps(rows or [], default=_json_serial)))
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.get("/api/transform/source/{source_id}")
+async def get_transform_source(source_id: str):
+    from core.db.connection import db_fetchrow, db_query
+    try:
+        row = await db_fetchrow(
+            "SELECT id::text, title, url, full_text, created_at FROM source WHERE id = $id::uuid",
+            {"id": source_id},
+        )
+        if not row:
+            return JSONResponse(content={"error": "Not found"}, status_code=404)
+        data = _json.loads(_json.dumps(dict(row), default=_json_serial))
+        insights_rows = await db_query(
+            "SELECT insight_type, content FROM source_insight WHERE source_id = $id::uuid",
+            {"id": source_id},
+        )
+        data["insights"] = {r["insight_type"]: r["content"] for r in (insights_rows or [])}
+        return JSONResponse(content=data)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.post("/api/transform/run-b")
+async def run_transform_b(request: Request):
+    """Run a single transformation with a custom prompt on an existing source."""
+    body = await request.json()
+    source_id    = (body.get("source_id") or "").strip()
+    insight_type = (body.get("insight_type") or "").strip()
+    prompt_b     = (body.get("prompt") or "").strip()
+    if not source_id or not insight_type or not prompt_b:
+        return JSONResponse(content={"error": "source_id, insight_type, prompt required"}, status_code=400)
+    if insight_type not in _TRANSFORM_TASKS:
+        return JSONResponse(content={"error": "unknown insight_type"}, status_code=400)
+
+    from core.db.connection import db_fetchrow
+
+    async def _run():
+        import asyncio as _aio
+        import dspy as _dspy
+        from core.prompts.transformations import (
+            ExtractKeyInsights, ExtractCoreTensions, ExtractCounterpoints,
+            ExtractHumanStakes, ExtractExamples, ExtractSummary, ExtractMetadata,
+        )
+        from dspy.utils.usage_tracker import track_usage as _track_usage
+
+        _sig_map = {
+            "key_insights":  (ExtractKeyInsights,  "insights"),
+            "core_tensions": (ExtractCoreTensions,  "tension"),
+            "counterpoints": (ExtractCounterpoints, "counterpoint"),
+            "human_stakes":  (ExtractHumanStakes,   "stakes"),
+            "examples":      (ExtractExamples,       "example"),
+            "summary":       (ExtractSummary,         "summary"),
+            "metadata":      (ExtractMetadata,        "metadata_json"),
+        }
+        base_sig, out_field = _sig_map[insight_type]
+        custom_sig = type("OverrideTransform", (base_sig,), {"__doc__": prompt_b})
+        module = _dspy.Predict(custom_sig)
+
+        row = await db_fetchrow(
+            "SELECT full_text FROM source WHERE id = $id::uuid", {"id": source_id}
+        )
+        if not row or not row["full_text"]:
+            return {"error": "Source not found or has no text"}
+
+        full_text = row["full_text"][:50_000]
+        loop = _aio.get_event_loop()
+        import time as _time
+
+        def _call():
+            with _track_usage() as tracker:
+                pred = module(article=full_text)
+            result = getattr(pred, out_field, "").strip()
+            tokens = sum(
+                v.get("completion_tokens") or v.get("output_tokens") or 0
+                for v in tracker.get_total_tokens().values()
+            )
+            return result, tokens
+
+        t0 = _time.time()
+        try:
+            result, tokens = await loop.run_in_executor(None, _call)
+        except Exception as exc:
+            return {"error": str(exc)}
+        duration = round(_time.time() - t0, 2)
+        return {"output": result, "tokens": tokens, "duration_s": duration}
+
+    result = await _run()
+    return JSONResponse(content=result)
+
+
 COMPARE_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3048,6 +3202,7 @@ select:focus{outline:none;border-color:var(--accent)}
 <div class="tabs-bar">
   <button class="tab-btn active" id="tab-btn-format" onclick="switchTab('format')">Prompt A vs B</button>
   <button class="tab-btn" id="tab-btn-external" onclick="switchTab('external')">vs External</button>
+  <button class="tab-btn" id="tab-btn-transform" onclick="switchTab('transform')">Transformation Lab</button>
   <button class="tab-btn" id="tab-btn-history" onclick="switchTab('history');loadHistory()">History</button>
 </div>
 
@@ -3400,6 +3555,145 @@ Respond in JSON only.</pre>
   </div>
 </div>
 
+<!-- ── Tab: Transformation Lab ── -->
+<div class="tab-panel" id="tab-transform">
+  <style>
+    #tlab-layout { display:flex; gap:16px; height:calc(100vh - 120px); overflow:hidden; }
+    #tlab-sidebar { width:240px; flex-shrink:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); display:flex; flex-direction:column; overflow:hidden; }
+    #tlab-sidebar-header { padding:10px 12px; border-bottom:1px solid var(--border); flex-shrink:0; }
+    #tlab-search { width:100%; padding:6px 9px; font-size:12px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); outline:none; font-family:inherit; }
+    #tlab-source-list { flex:1; overflow-y:auto; }
+    .tlab-src { padding:9px 12px; cursor:pointer; border-bottom:1px solid var(--border); transition:background .1s; }
+    .tlab-src:hover { background:var(--bg); }
+    .tlab-src.active { background:var(--accent-light); border-left:2px solid var(--accent); padding-left:10px; }
+    .tlab-src-title { font-size:12px; font-weight:500; color:var(--text); line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tlab-src-meta { font-size:10px; color:var(--muted); margin-top:2px; }
+    .tlab-src-badge { display:inline-block; font-size:9px; padding:1px 5px; border-radius:3px; background:var(--good-bg); color:var(--good); font-weight:600; margin-left:4px; }
+
+    #tlab-main { flex:1; display:flex; flex-direction:column; overflow:hidden; gap:12px; }
+    #tlab-url-row { display:flex; gap:8px; flex-shrink:0; }
+    #tlab-url-input { flex:1; padding:8px 11px; font-size:12px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); outline:none; font-family:inherit; }
+    #tlab-url-input:focus { border-color:var(--accent); }
+    #tlab-load-btn { padding:8px 14px; font-size:12px; font-weight:600; border-radius:6px; border:1.5px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; white-space:nowrap; }
+    #tlab-load-btn:hover { opacity:.85; }
+    #tlab-load-btn:disabled { opacity:.4; cursor:not-allowed; }
+
+    #tlab-source-info { flex-shrink:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; display:none; }
+    #tlab-source-info-header { padding:9px 14px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--border); }
+    #tlab-source-title { font-size:13px; font-weight:600; color:var(--text); flex:1; }
+    #tlab-source-url { font-size:11px; color:var(--muted); }
+    #tlab-rawtext-toggle { font-size:11px; color:var(--accent); cursor:pointer; white-space:nowrap; }
+    #tlab-rawtext { display:none; padding:10px 14px; font-size:11px; color:var(--muted); line-height:1.65; max-height:180px; overflow-y:auto; white-space:pre-wrap; font-family:ui-monospace,monospace; border-top:1px solid var(--border); }
+
+    #tlab-type-row { flex-shrink:0; display:flex; gap:6px; flex-wrap:wrap; }
+    .tlab-type-btn { padding:5px 12px; font-size:11px; font-weight:600; border-radius:20px; border:1px solid var(--border); background:var(--surface); color:var(--muted); cursor:pointer; font-family:inherit; transition:all .12s; }
+    .tlab-type-btn:hover { border-color:var(--accent); color:var(--accent); }
+    .tlab-type-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+    #tlab-cols { flex:1; display:grid; grid-template-columns:1fr 1fr; gap:12px; overflow:hidden; }
+    .tlab-col { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); display:flex; flex-direction:column; overflow:hidden; }
+    .tlab-col-label { padding:9px 14px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+    .tlab-col-label.col-a { color:var(--blue); }
+    .tlab-col-label.col-b { color:#7c3aed; }
+    .tlab-col-body { flex:1; overflow-y:auto; padding:12px 14px; }
+    .tlab-prompt-area { margin-bottom:12px; }
+    .tlab-prompt-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:5px; display:flex; align-items:center; justify-content:space-between; }
+    .tlab-prompt-toggle { font-size:10px; color:var(--accent); cursor:pointer; text-transform:none; letter-spacing:0; font-weight:500; }
+    .tlab-prompt-text { font-size:11px; font-family:ui-monospace,monospace; line-height:1.65; color:var(--text); white-space:pre-wrap; background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; display:none; max-height:220px; overflow-y:auto; }
+    .tlab-prompt-ta { font-size:11px; font-family:ui-monospace,monospace; line-height:1.65; color:var(--text); background:var(--bg); border:1px solid var(--border-strong); border-radius:6px; padding:10px 12px; width:100%; height:220px; resize:vertical; outline:none; box-sizing:border-box; }
+    .tlab-prompt-ta:focus { border-color:var(--accent); }
+    .tlab-output-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:6px; }
+    .tlab-output { font-size:12px; line-height:1.8; color:var(--text); white-space:pre-wrap; }
+    .tlab-empty { color:var(--muted); font-size:12px; font-style:italic; }
+    .tlab-run-btn { padding:7px 16px; font-size:12px; font-weight:600; border-radius:6px; border:1.5px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; width:100%; margin-bottom:12px; }
+    .tlab-run-btn:hover { opacity:.85; }
+    .tlab-run-btn:disabled { opacity:.4; cursor:not-allowed; }
+    .tlab-meta { font-size:10px; color:var(--muted); margin-top:8px; }
+    .tlab-status { font-size:11px; color:var(--accent); }
+  </style>
+
+  <div id="tlab-layout">
+    <!-- Sidebar: source browser -->
+    <div id="tlab-sidebar">
+      <div id="tlab-sidebar-header">
+        <input id="tlab-search" type="text" placeholder="Search sources…" oninput="tlabSearchSources(this.value)">
+      </div>
+      <div id="tlab-source-list"><div style="padding:14px;color:var(--muted);font-size:12px">Loading…</div></div>
+    </div>
+
+    <!-- Main area -->
+    <div id="tlab-main">
+      <!-- URL input -->
+      <div id="tlab-url-row">
+        <input id="tlab-url-input" type="url" placeholder="Paste article URL to ingest or lookup…"
+               onkeydown="if(event.key==='Enter') tlabLoadUrl()">
+        <button id="tlab-load-btn" onclick="tlabLoadUrl()">Load →</button>
+      </div>
+
+      <!-- Source info + raw text -->
+      <div id="tlab-source-info">
+        <div id="tlab-source-info-header">
+          <div style="flex:1;min-width:0">
+            <div id="tlab-source-title">—</div>
+            <div id="tlab-source-url"></div>
+          </div>
+          <span id="tlab-rawtext-toggle" onclick="tlabToggleRaw()">Show raw text ↓</span>
+        </div>
+        <pre id="tlab-rawtext"></pre>
+      </div>
+
+      <!-- Transformation type selector -->
+      <div id="tlab-type-row">
+        <button class="tlab-type-btn active" data-type="key_insights"  onclick="tlabSelectType('key_insights')">key_insights</button>
+        <button class="tlab-type-btn"         data-type="core_tensions" onclick="tlabSelectType('core_tensions')">core_tensions</button>
+        <button class="tlab-type-btn"         data-type="counterpoints" onclick="tlabSelectType('counterpoints')">counterpoints</button>
+        <button class="tlab-type-btn"         data-type="human_stakes"  onclick="tlabSelectType('human_stakes')">human_stakes</button>
+        <button class="tlab-type-btn"         data-type="examples"      onclick="tlabSelectType('examples')">examples</button>
+        <button class="tlab-type-btn"         data-type="summary"       onclick="tlabSelectType('summary')">summary</button>
+        <button class="tlab-type-btn"         data-type="metadata"      onclick="tlabSelectType('metadata')">metadata</button>
+      </div>
+
+      <!-- A vs B columns -->
+      <div id="tlab-cols">
+        <!-- A: stored output -->
+        <div class="tlab-col">
+          <div class="tlab-col-label col-a">
+            <span>A — Current (from DB)</span>
+          </div>
+          <div class="tlab-col-body">
+            <div class="tlab-prompt-area">
+              <div class="tlab-prompt-label">
+                Prompt
+                <span class="tlab-prompt-toggle" onclick="tlabTogglePrompt('a')">Show ↓</span>
+              </div>
+              <pre class="tlab-prompt-text" id="tlab-prompt-a"></pre>
+            </div>
+            <div class="tlab-output-label">Output</div>
+            <div class="tlab-output tlab-empty" id="tlab-output-a">Load a source to see stored output</div>
+          </div>
+        </div>
+
+        <!-- B: editable prompt + run -->
+        <div class="tlab-col">
+          <div class="tlab-col-label col-b">
+            <span>B — Variant</span>
+            <span id="tlab-b-meta" class="tlab-meta"></span>
+          </div>
+          <div class="tlab-col-body">
+            <div class="tlab-prompt-area">
+              <div class="tlab-prompt-label">Prompt (editable)</div>
+              <textarea class="tlab-prompt-ta" id="tlab-prompt-b" placeholder="Edit prompt then run…"></textarea>
+            </div>
+            <button class="tlab-run-btn" id="tlab-run-btn" onclick="tlabRunB()" disabled>Run B →</button>
+            <div class="tlab-output-label">Output</div>
+            <div class="tlab-output tlab-empty" id="tlab-output-b">Run B to see output</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -3409,6 +3703,213 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   document.getElementById('tab-btn-' + name).classList.add('active');
+  if (name === 'transform') tlabInit();
+}
+
+// ── Transformation Lab ────────────────────────────────────────────────────────
+
+let _tlabSourceId   = null;
+let _tlabType       = 'key_insights';
+let _tlabPromptA    = {};   // cache: type → prompt text
+let _tlabInitDone   = false;
+
+async function tlabInit() {
+  if (_tlabInitDone) return;
+  _tlabInitDone = true;
+  await tlabLoadSources();
+  await tlabSelectType('key_insights');
+}
+
+async function tlabLoadSources(q) {
+  const url = '/api/transform/sources?limit=80' + (q ? '&q=' + encodeURIComponent(q) : '');
+  try {
+    const res  = await fetch(url);
+    const rows = await res.json();
+    const list = document.getElementById('tlab-source-list');
+    if (!rows.length) {
+      list.innerHTML = '<div style="padding:14px;color:var(--muted);font-size:12px">No sources found</div>';
+      return;
+    }
+    list.innerHTML = rows.map(r => `
+      <div class="tlab-src${_tlabSourceId === r.id ? ' active' : ''}" onclick="tlabSelectSource('${r.id}')">
+        <div class="tlab-src-title">${esc(r.title || r.url)}</div>
+        <div class="tlab-src-meta">${esc((r.url||'').replace(/^https?:\/\//,'').split('/')[0])}
+          <span class="tlab-src-badge">${r.insight_count} insights</span>
+        </div>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+let _tlabSearchTimer = null;
+function tlabSearchSources(q) {
+  clearTimeout(_tlabSearchTimer);
+  _tlabSearchTimer = setTimeout(() => tlabLoadSources(q), 350);
+}
+
+async function tlabLoadUrl() {
+  const url = document.getElementById('tlab-url-input').value.trim();
+  if (!url) return;
+  const btn = document.getElementById('tlab-load-btn');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  try {
+    // Check if already ingested
+    const res  = await fetch('/api/transform/sources?q=' + encodeURIComponent(url) + '&limit=1');
+    const rows = await res.json();
+    if (rows.length) {
+      await tlabSelectSource(rows[0].id);
+    } else {
+      // Trigger ingest via eval pipeline
+      btn.textContent = 'Ingesting…';
+      const ingestRes = await fetch('/api/ingest', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({url, show_name: 'clarity_engine', mode: 'single'})
+      });
+      const d = await ingestRes.json();
+      if (d.error) { alert(d.error); return; }
+      // Poll until source ready (max 60s)
+      let attempts = 0;
+      while (attempts < 30) {
+        await new Promise(r => setTimeout(r, 2000));
+        const check = await fetch('/api/transform/sources?q=' + encodeURIComponent(url) + '&limit=1');
+        const found = await check.json();
+        if (found.length && found[0].insight_count >= 3) {
+          await tlabSelectSource(found[0].id);
+          await tlabLoadSources();
+          break;
+        }
+        attempts++;
+      }
+      if (attempts >= 30) alert('Ingest timed out — source may still be processing');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Load →';
+  }
+}
+
+async function tlabSelectSource(id) {
+  _tlabSourceId = id;
+  // Highlight sidebar
+  document.querySelectorAll('.tlab-src').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('onclick')?.includes(id));
+  });
+  // Load source data
+  try {
+    const res  = await fetch('/api/transform/source/' + id);
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    document.getElementById('tlab-source-info').style.display = '';
+    document.getElementById('tlab-source-title').textContent = data.title || data.url;
+    document.getElementById('tlab-source-url').textContent   = data.url || '';
+    document.getElementById('tlab-rawtext').textContent       = (data.full_text || '').slice(0, 3000) + (data.full_text?.length > 3000 ? '\n…' : '');
+    document.getElementById('tlab-run-btn').disabled = false;
+    // Show A output for current type
+    tlabShowA(data.insights || {});
+  } catch(e) { alert('Failed to load source'); }
+}
+
+function tlabShowA(insights) {
+  const out = document.getElementById('tlab-output-a');
+  const val = insights[_tlabType];
+  if (val && val.toLowerCase() !== 'null') {
+    out.textContent = val;
+    out.className   = 'tlab-output';
+  } else {
+    out.textContent = 'No stored output for this transformation type';
+    out.className   = 'tlab-output tlab-empty';
+  }
+}
+
+async function tlabSelectType(type) {
+  _tlabType = type;
+  document.querySelectorAll('.tlab-type-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.type === type);
+  });
+  // Load prompt for A (read-only display) and pre-fill B
+  if (!_tlabPromptA[type]) {
+    try {
+      const res  = await fetch('/api/transform/prompts/' + type);
+      const data = await res.json();
+      _tlabPromptA[type] = data.prompt || '';
+    } catch(e) { _tlabPromptA[type] = ''; }
+  }
+  const prompt = _tlabPromptA[type];
+  document.getElementById('tlab-prompt-a').textContent = prompt;
+  // Pre-fill B only if user hasn't modified it yet
+  const taB = document.getElementById('tlab-prompt-b');
+  if (!taB.dataset.userEdited || taB.dataset.lastType !== type) {
+    taB.value = prompt;
+    taB.dataset.lastType = type;
+    delete taB.dataset.userEdited;
+  }
+  // Refresh A output if source loaded
+  if (_tlabSourceId) {
+    try {
+      const res  = await fetch('/api/transform/source/' + _tlabSourceId);
+      const data = await res.json();
+      tlabShowA(data.insights || {});
+    } catch(e) {}
+  }
+  // Clear B output
+  const outB = document.getElementById('tlab-output-b');
+  outB.textContent = 'Run B to see output';
+  outB.className   = 'tlab-output tlab-empty';
+  document.getElementById('tlab-b-meta').textContent = '';
+}
+
+document.getElementById('tlab-prompt-b')?.addEventListener('input', function() {
+  this.dataset.userEdited = '1';
+});
+
+function tlabTogglePrompt(col) {
+  const pre = document.getElementById('tlab-prompt-' + col);
+  const btn = pre.previousElementSibling.querySelector('.tlab-prompt-toggle');
+  const open = pre.style.display !== 'none';
+  pre.style.display = open ? 'none' : 'block';
+  if (btn) btn.textContent = open ? 'Show ↓' : 'Hide ↑';
+}
+
+function tlabToggleRaw() {
+  const raw = document.getElementById('tlab-rawtext');
+  const btn = document.getElementById('tlab-rawtext-toggle');
+  const open = raw.style.display !== 'none';
+  raw.style.display = open ? 'none' : 'block';
+  btn.textContent = open ? 'Show raw text ↓' : 'Hide raw text ↑';
+}
+
+async function tlabRunB() {
+  if (!_tlabSourceId) return;
+  const prompt = document.getElementById('tlab-prompt-b').value.trim();
+  if (!prompt) return;
+  const btn   = document.getElementById('tlab-run-btn');
+  const outB  = document.getElementById('tlab-output-b');
+  const meta  = document.getElementById('tlab-b-meta');
+  btn.disabled    = true;
+  btn.textContent = 'Running…';
+  outB.textContent = 'Generating…';
+  outB.className   = 'tlab-output tlab-status';
+  meta.textContent = '';
+  try {
+    const res  = await fetch('/api/transform/run-b', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({source_id: _tlabSourceId, insight_type: _tlabType, prompt}),
+    });
+    const data = await res.json();
+    if (data.error) {
+      outB.textContent = 'Error: ' + data.error;
+      outB.className   = 'tlab-output';
+    } else {
+      outB.textContent = data.output || '(empty)';
+      outB.className   = 'tlab-output';
+      meta.textContent = `${data.duration_s}s · ${(data.tokens||0).toLocaleString()} tokens`;
+    }
+  } catch(e) {
+    outB.textContent = 'Network error';
+    outB.className   = 'tlab-output';
+  }
+  btn.disabled    = false;
+  btn.textContent = 'Run B →';
 }
 
 // ── Prompt lab sidebar ────────────────────────────────────────────────────────
