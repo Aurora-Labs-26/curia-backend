@@ -4,6 +4,14 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-04 · Aditya + Claude (claude-sonnet-4-6) [3]
+
+### Feature
+Copy buttons on A and B columns in Transformation Lab (tab 4).
+- **`studio/eval_server.py`** — "Copy" button in each column header; copies full output as plain text with `**Label**` bold headings per field; combined mode copies all 6 fields separated by `---`; button flashes "Copied!" on success; `_tlabCopyData` stores plain-text version whenever outputs are set; stale B copy cleared on type switch
+
+---
+
 ## 2026-06-04 · Aditya + Claude (claude-sonnet-4-6) [2]
 
 ### Docs

@@ -3715,6 +3715,9 @@ Respond in JSON only.</pre>
     .tlab-run-btn:disabled { opacity:.4; cursor:not-allowed; }
     .tlab-meta { font-size:10px; color:var(--muted); margin-top:8px; }
     .tlab-status { font-size:11px; color:var(--accent); }
+    .tlab-copy-btn { font-size:10px; font-weight:600; padding:2px 8px; border-radius:4px; border:1px solid var(--border); background:var(--bg); color:var(--muted); cursor:pointer; font-family:inherit; transition:all .12s; }
+    .tlab-copy-btn:hover { border-color:var(--accent); color:var(--accent); }
+    .tlab-copy-btn.copied { border-color:var(--good); color:var(--good); }
   </style>
 
   <div id="tlab-layout">
@@ -3766,7 +3769,10 @@ Respond in JSON only.</pre>
         <div class="tlab-col">
           <div class="tlab-col-label col-a">
             <span>A — Current (from DB)</span>
-            <span style="font-size:9px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0">no token data — cached</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:9px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0">no token data — cached</span>
+              <button class="tlab-copy-btn" id="tlab-copy-a" onclick="tlabCopy('a')">Copy</button>
+            </div>
           </div>
           <div class="tlab-col-body">
             <div class="tlab-prompt-area">
@@ -3785,7 +3791,10 @@ Respond in JSON only.</pre>
         <div class="tlab-col">
           <div class="tlab-col-label col-b">
             <span>B — Variant</span>
-            <span id="tlab-b-meta" class="tlab-meta"></span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="tlab-b-meta" class="tlab-meta"></span>
+              <button class="tlab-copy-btn" id="tlab-copy-b" onclick="tlabCopy('b')">Copy</button>
+            </div>
           </div>
           <div class="tlab-col-body">
             <div class="tlab-prompt-area">
@@ -3993,6 +4002,7 @@ function fmtexPoll(jobId, side, phase, example, show) {
 let _tlabSourceId   = null;
 let _tlabType       = 'key_insights';
 let _tlabPromptA    = {};   // cache: type → prompt text
+let _tlabCopyData   = {a: '', b: ''};  // plain-text copy buffer per column
 let _tlabInitDone   = false;
 
 async function tlabInit() {
@@ -4100,27 +4110,34 @@ const _COMBINED_FIELD_LABELS = {
 function tlabShowA(insights) {
   const out = document.getElementById('tlab-output-a');
   if (_tlabType === 'combined') {
-    // Show all 6 stored fields stacked
     const fields = ['key_insights','core_tensions','counterpoints','human_stakes','examples','summary'];
+    const copyParts = [];
     const parts = fields.map(f => {
       const v = insights[f];
-      const content = (v && v.toLowerCase() !== 'null') ? esc(v) : '<em style="color:var(--muted)">not stored</em>';
+      const label = _COMBINED_FIELD_LABELS[f] || f;
+      const hasVal = v && v.toLowerCase() !== 'null';
+      const content = hasVal ? esc(v) : '<em style="color:var(--muted)">not stored</em>';
+      if (hasVal) copyParts.push(`**${label}**\n\n${v}`);
       return `<div style="margin-bottom:14px">
-        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin-bottom:4px">${esc(_COMBINED_FIELD_LABELS[f]||f)}</div>
+        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--accent);margin-bottom:4px">${esc(label)}</div>
         <div style="font-size:12px;line-height:1.75;color:var(--text);white-space:pre-wrap">${content}</div>
       </div>`;
     }).join('');
     out.innerHTML = parts || '<em style="color:var(--muted)">no stored data</em>';
     out.className = 'tlab-output';
+    _tlabCopyData.a = copyParts.join('\n\n---\n\n');
     return;
   }
   const val = insights[_tlabType];
   if (val && val.toLowerCase() !== 'null') {
     out.textContent = val;
     out.className   = 'tlab-output';
+    const label = _COMBINED_FIELD_LABELS[_tlabType] || _tlabType;
+    _tlabCopyData.a = `**${label}**\n\n${val}`;
   } else {
     out.textContent = 'No stored output for this transformation type';
     out.className   = 'tlab-output tlab-empty';
+    _tlabCopyData.a = '';
   }
 }
 
@@ -4159,6 +4176,7 @@ async function tlabSelectType(type) {
   outB.textContent = 'Run B to see output';
   outB.className   = 'tlab-output tlab-empty';
   document.getElementById('tlab-b-meta').textContent = '';
+  _tlabCopyData.b  = '';
 }
 
 document.getElementById('tlab-prompt-b')?.addEventListener('input', function() {
@@ -4179,6 +4197,17 @@ function tlabToggleRaw() {
   const open = raw.style.display !== 'none';
   raw.style.display = open ? 'none' : 'block';
   btn.textContent = open ? 'Show raw text ↓' : 'Hide raw text ↑';
+}
+
+function tlabCopy(col) {
+  const text = _tlabCopyData[col] || '';
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('tlab-copy-' + col);
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  });
 }
 
 async function tlabRunB() {
@@ -4202,21 +4231,28 @@ async function tlabRunB() {
     if (data.error) {
       outB.textContent = 'Error: ' + data.error;
       outB.className   = 'tlab-output';
+      _tlabCopyData.b  = '';
     } else if (data.combined && data.fields) {
-      // Combined: render parsed XML fields
       const fields = ['key_insights','core_tensions','counterpoints','human_stakes','examples','summary'];
+      const copyParts = [];
       outB.innerHTML = fields.map(f => {
         const v = data.fields[f];
-        const content = (v && v.toLowerCase() !== 'null') ? esc(v) : '<em style="color:var(--muted)">null</em>';
+        const label = _COMBINED_FIELD_LABELS[f] || f;
+        const hasVal = v && v.toLowerCase() !== 'null';
+        const content = hasVal ? esc(v) : '<em style="color:var(--muted)">null</em>';
+        if (hasVal) copyParts.push(`**${label}**\n\n${v}`);
         return `<div style="margin-bottom:14px">
-          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;margin-bottom:4px">${esc(_COMBINED_FIELD_LABELS[f]||f)}</div>
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;margin-bottom:4px">${esc(label)}</div>
           <div style="font-size:12px;line-height:1.75;color:var(--text);white-space:pre-wrap">${content}</div>
         </div>`;
       }).join('');
-      outB.className = 'tlab-output';
+      outB.className  = 'tlab-output';
+      _tlabCopyData.b = copyParts.join('\n\n---\n\n');
     } else {
       outB.textContent = data.output || '(empty)';
       outB.className   = 'tlab-output';
+      const label = _COMBINED_FIELD_LABELS[_tlabType] || _tlabType;
+      _tlabCopyData.b  = data.output ? `**${label}**\n\n${data.output}` : '';
       const inToks  = (data.input_tokens  || 0).toLocaleString();
       const outToks = (data.output_tokens || 0).toLocaleString();
       const costStr = data.cost_usd != null ? ` · ~$${data.cost_usd.toFixed(5)}` : '';
