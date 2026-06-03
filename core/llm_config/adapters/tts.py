@@ -342,7 +342,7 @@ class TTSAdapter:
             "style": self.settings.get("style", 0.0),
             "use_speaker_boost": self.settings.get("use_speaker_boost", True),
         }
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 url,
                 params={"output_format": output_format},
@@ -370,7 +370,7 @@ class TTSAdapter:
             "response_format": self.settings.get("response_format", "wav"),
             "speed": self.settings.get("speed", 1.0),
         }
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -393,7 +393,7 @@ class TTSAdapter:
                 "sample_rate": self.settings.get("sample_rate", 22050),
             },
         }
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 url,
                 headers={
@@ -421,7 +421,7 @@ class TTSAdapter:
                 "speed": self.settings.get("speed", 1.0),
                 "add_wav_header": True,
             }
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
                     url,
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -435,7 +435,7 @@ class TTSAdapter:
             from pydub import AudioSegment
             import tempfile, os
             combined = AudioSegment.empty()
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 for chunk in chunks:
                     body = {
                         "voice_id": self.voice_id,
@@ -485,7 +485,7 @@ class TTSAdapter:
         import tempfile, os
         time_offset = 0.0
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             for chunk in chunks:
                 body = {
                     "voice_id": self.voice_id,
@@ -578,7 +578,7 @@ class TTSAdapter:
                 "pitch": self.settings.get("pitch", 0.0),
             },
         }
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(url, params={"key": api_key}, headers={"Content-Type": "application/json"}, json=body)
         if resp.status_code != 200:
             raise RuntimeError(f"Google TTS error {resp.status_code}: {resp.text[:300]}")
@@ -619,7 +619,7 @@ class TTSAdapter:
             **{k: v for k, v in self.settings.items() if k not in ("endpoint_path", "audio_format")},
         }
         audio_format = self.settings.get("audio_format", "wav")
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -647,7 +647,7 @@ class TTSAdapter:
         }
 
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 resp = client.post(
                     url,
                     params={"output_format": output_format},
@@ -699,7 +699,7 @@ class TTSAdapter:
         }
 
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 resp = client.post(
                     url,
                     headers={
@@ -739,7 +739,7 @@ class TTSAdapter:
         }
 
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 resp = client.post(
                     url,
                     headers={
@@ -808,7 +808,7 @@ class TTSAdapter:
         }
 
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 resp = client.post(
                     url,
                     headers={
@@ -849,7 +849,7 @@ class TTSAdapter:
         time_offset = 0.0
 
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 for chunk in chunks:
                     body = {
                         "voice_id": self.voice_id,
@@ -995,7 +995,7 @@ class TTSAdapter:
         }
 
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 resp = client.post(
                     url,
                     params={"key": api_key},
@@ -1055,7 +1055,7 @@ class TTSAdapter:
         audio_format = self.settings.get("audio_format", "wav")
 
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 resp = client.post(
                     url,
                     headers={
@@ -1098,7 +1098,7 @@ class TTSAdapter:
         if gen_id:
             body["context"] = {"generation_id": gen_id}
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=120) as client:
                 resp = client.post(
                     url,
                     params={"api_key": api_key},
@@ -1133,7 +1133,7 @@ class TTSAdapter:
         gen_id = getattr(self, "_hume_generation_id", None)
         if gen_id:
             body["context"] = {"generation_id": gen_id}
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 url,
                 params={"api_key": api_key},

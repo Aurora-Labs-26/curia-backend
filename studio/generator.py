@@ -183,13 +183,25 @@ def generate_transcript(
 
 
 def _parse_json_response(raw: str, label: str) -> list | dict:
-    """Strip markdown fences and parse JSON from an LLM response."""
+    """Strip markdown fences, DSPy markers, and parse JSON from an LLM response."""
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
+    # Strip DSPy completion markers
+    if "[[ ##" in raw:
+        raw = raw[:raw.index("[[ ##")]
     raw = raw.strip()
+    # Find the JSON array/object boundaries
+    if raw.startswith("["):
+        end = raw.rfind("]")
+        if end != -1:
+            raw = raw[:end + 1]
+    elif raw.startswith("{"):
+        end = raw.rfind("}")
+        if end != -1:
+            raw = raw[:end + 1]
     try:
         return json.loads(raw)
     except json.JSONDecodeError:

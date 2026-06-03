@@ -77,7 +77,7 @@ def _hard_split(text: str, max_chars: int) -> list[str]:
 
 def split_into_segments(
     paragraphs: list[dict],
-    max_chars: int = 4500,
+    max_chars: int = 2000,
 ) -> list[dict]:
     """
     Split paragraphs into segments suitable for individual TTS calls.
