@@ -4,6 +4,13 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-04 · Aditya + Claude (claude-sonnet-4-6) [2]
+
+### Docs
+- **`prompts/examples_exploration_engine.txt`** — added Counter format example: calibrates argumentative tempo, fact/opinion separation, counterpoint weight, and closing style for the exploration_engine format
+
+---
+
 ## 2026-06-04 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Config

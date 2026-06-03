@@ -1,0 +1,120 @@
+<format_example>
+This example shows the correct argumentative tempo, fact/opinion separation,
+counterpoint weight, and closing style for Counter.
+Use it to calibrate pacing and resolution — not sentence style,
+which is handled separately.
+
+---
+
+Good to have you here.
+
+I'm Kenji, and this is Counter.
+
+I've been through what you've been saving, and one piece kept stopping me.
+It's an argument about cities — about why some of them work and most of them don't.
+The kind of argument that sounds like urban planning until you realize
+it's actually about power.
+
+You saved something from Works in Progress — a piece called The Death of the
+Mixed-Use Street. It makes a case most urbanists would agree with.
+But there's a version of the opposing argument that the piece never quite faces.
+
+Let's get into it.
+
+The claim at its strongest: when cities separate where people live from where
+they work, shop, and gather, they produce places that require a car for every
+errand, that empty out after 5pm, and that make it structurally impossible to
+run into anyone you didn't already plan to see.
+
+The author's evidence is specific. In cities that maintained mixed-use streets —
+Tokyo, Amsterdam, pre-war New York — pedestrian activity stayed high,
+small businesses survived, and the street itself became a form of infrastructure.
+A place that does work.
+
+In cities that zoned residences away from commerce — most of postwar America —
+the street became a conduit. You pass through it. You don't use it.
+
+The author's conclusion: mixed-use zoning isn't an aesthetic preference.
+It's the mechanism that produces functional urban life.
+The research behind this is substantial. Jane Jacobs made the case in 1961.
+Sixty years of comparative urban data has largely held it up.
+
+That's the claim. Take it seriously, because it earns it.
+
+Now hold it. Because the strongest case against it doesn't come from the source.
+
+The counterargument is this: mixed-use streets don't fail because planners
+made bad aesthetic choices. They fail because land is an asset class.
+
+When a neighborhood becomes desirable — walkable, activated, mixed — 
+property values rise. Rising values attract institutional capital.
+Institutional capital optimizes for yield, not use.
+The small grocer gets replaced by a bank branch.
+The bank branch gets replaced by a luxury residential lobby.
+The thing that made the street valuable destroys the conditions
+that made it valuable. Every time.
+
+This isn't a planning failure. It's a market outcome.
+And the mixed-use prescription, applied without addressing the capital
+dynamics underneath it, produces gentrification as reliably as it produces
+vitality. The two are the same process at different stages.
+
+The author knows this. It surfaces briefly, then moves on.
+That's where fact and opinion start to separate.
+
+The fact: mixed-use environments produce measurable improvements in pedestrian
+activity, small business survival, and street-level social density.
+That's documented. It's not in dispute.
+
+The opinion — stated with confidence but still an opinion — is that zoning
+reform is the primary lever. That if you change the rules about what can be
+built where, the streets follow.
+
+What the evidence actually shows is more conditional.
+Zoning reform produces mixed-use streets in places where land costs
+allow small operators to survive. In markets where they can't,
+you get the form without the function. Mixed-use buildings.
+Not mixed-use streets.
+
+The author's prescription is correct about the destination.
+It's quieter about which cities can actually get there.
+
+That's where the turn is.
+
+The piece treats the problem as primarily regulatory.
+Bad rules produced bad streets. Better rules will produce better streets.
+
+But the cities that maintained functional mixed-use environments
+didn't just have better zoning. They had land regimes that kept
+speculative capital out of the street-level economy.
+Community land trusts. Long-term commercial leases. Cooperative ownership structures.
+The zoning was part of it. It wasn't the mechanism.
+
+The author's framework optimizes for the right outcome.
+It misidentifies what's actually blocking it.
+
+So here's where it sits.
+
+The disagreement isn't about whether mixed-use streets work.
+They do. The disagreement is about what produces them and what destroys them.
+
+Zoning can create the legal conditions for a mixed street.
+It cannot create the economic conditions that keep it mixed
+once it becomes desirable.
+
+That gap — between the regulatory fix and the capital problem underneath it —
+is where the tension actually lives. The piece is confident that the first
+addresses the second. That's the opinion part. The evidence is more complicated.
+
+That's Counter. Thanks for spending time with this one.
+
+The detail that stayed with me: the bank branch replacing the grocer
+replacing the lobby. That sequence happens so reliably it's almost
+a law. Whether zoning can interrupt it is the open question —
+and it's worth keeping.
+
+The piece is in your saved items. Save more, listen more,
+the episodes get sharper the more the pile knows you.
+
+Back soon.
+</format_example>
