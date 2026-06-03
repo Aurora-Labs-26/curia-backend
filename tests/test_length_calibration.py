@@ -59,14 +59,17 @@ class TestFormatConfigDict:
         assert len(d["display_name"]) > 0
 
     @pytest.mark.parametrize("fmt", list(FORMATS.values()))
-    def test_dict_does_not_include_target_words(self, fmt):
+    def test_dict_includes_target_words(self, fmt):
         d = format_config_to_dict(fmt)
-        assert "target_words" not in d
+        assert "target_words" in d
+        assert isinstance(d["target_words"], int)
+        assert d["target_words"] > 0
 
     @pytest.mark.parametrize("fmt", list(FORMATS.values()))
-    def test_dict_does_not_include_segment_weights(self, fmt):
+    def test_dict_includes_segment_weights(self, fmt):
         d = format_config_to_dict(fmt)
-        assert "segment_weights" not in d
+        assert "segment_weights" in d
+        assert isinstance(d["segment_weights"], list)
 
     @pytest.mark.parametrize("fmt", list(FORMATS.values()))
     def test_dict_includes_structure_and_rules(self, fmt):
