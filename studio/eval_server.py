@@ -3738,6 +3738,15 @@ async function runTranscripts() {
   document.getElementById('fmt-result-a').innerHTML = '';
   document.getElementById('fmt-result-b').innerHTML = '';
 
+  // Re-render B's outline immediately so column isn't blank during transcript generation
+  if (_fmtJobB) {
+    try {
+      const jRes = await fetch('/api/jobs/' + _fmtJobB);
+      const jData = await jRes.json();
+      if (jData.outline) renderOutlineInColumn(jData.outline, 'b');
+    } catch(e) {}
+  }
+
   const _epTranscript = _existingEp?.transcript;
   const _hasExistingTranscript = Array.isArray(_epTranscript) && _epTranscript.length > 0;
 
@@ -3886,11 +3895,16 @@ async function loadEpisodeIntoColumn(episodeId, side, jobData) {
     }
   }
 
-  if (outline.title) {
+  if (outline.title || outline.thread || (outline.segments||[]).length) {
     div.innerHTML += `<div class="result-section">
-      <div class="result-section-label">Episode</div>
-      <div class="result-title">${esc(outline.title)}</div>
+      <div class="result-section-label">Outline</div>
+      ${outline.title ? `<div class="result-title">${esc(outline.title)}</div>` : ''}
       ${outline.thread ? `<div class="result-thread">${esc(outline.thread)}</div>` : ''}
+      ${(outline.segments||[]).map((s,i) => `
+        <div style="margin-bottom:8px;font-size:13px">
+          <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--subtle)">Seg ${s.segment||i+1}</span>
+          <span style="margin-left:8px;color:var(--text)">${esc(s.title||s.focus||s.purpose||'')}</span>
+        </div>`).join('')}
     </div>`;
   }
 
