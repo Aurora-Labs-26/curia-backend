@@ -66,12 +66,6 @@ class TestFormatConfigDict:
         assert d["target_words"] > 0
 
     @pytest.mark.parametrize("fmt", list(FORMATS.values()))
-    def test_dict_includes_segment_weights(self, fmt):
-        d = format_config_to_dict(fmt)
-        assert "segment_weights" in d
-        assert isinstance(d["segment_weights"], list)
-
-    @pytest.mark.parametrize("fmt", list(FORMATS.values()))
     def test_dict_includes_structure_and_rules(self, fmt):
         d = format_config_to_dict(fmt)
         assert "structure_pattern" in d

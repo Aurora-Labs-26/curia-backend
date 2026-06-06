@@ -136,26 +136,33 @@ async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str
 
 async def _scrape_trafilatura(url: str) -> tuple[str, str]:
     import asyncio
+    import httpx
     import trafilatura
 
-    def _fetch_and_extract():
-        downloaded = trafilatura.fetch_url(url)
-        if not downloaded:
-            return "", ""
-        content = trafilatura.extract(
-            downloaded, include_comments=False, include_tables=False
-        ) or ""
+    async def _fetch_html() -> str:
+        async with httpx.AsyncClient(
+            timeout=20,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+        ) as client:
+            resp = await client.get(url)
+            return resp.text
+
+    html = await _fetch_html()
+
+    def _extract(html: str):
+        content = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
         title = ""
         try:
             from trafilatura.metadata import extract_metadata
-            meta = extract_metadata(downloaded)
+            meta = extract_metadata(html)
             if meta and meta.title:
                 title = meta.title
         except Exception:
             pass
         return content, title
 
-    return await asyncio.to_thread(_fetch_and_extract)
+    return await asyncio.to_thread(_extract, html)
 
 
 async def _scrape_firecrawl(url: str) -> tuple[str, str]:

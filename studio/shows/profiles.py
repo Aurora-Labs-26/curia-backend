@@ -145,9 +145,7 @@ CLARITY_ENGINE_SPEAKERS = SpeakerProfile(
             name="kenji",
             backstory=(
                 "Former wire journalist who reported from three continents. "
-                "In this show, he's the teacher — he's done the reading, understands the mechanism, "
-                "and wants to make it land clearly. He explains step by step, uses concrete examples, "
-                "and doesn't move on until the point is made."
+                "Stepped back to think more carefully about what he was actually witnessing."
             ),
             speech_patterns=(
                 "Keeps sentences tight. "
@@ -161,10 +159,7 @@ CLARITY_ENGINE_SPEAKERS = SpeakerProfile(
             name="arjun",
             backstory=(
                 "Economist turned essayist. Spent a decade in policy before deciding "
-                "the interesting questions were upstream of any policy solution. "
-                "In this show, he's the student — not unintelligent, but encountering this "
-                "material for the first time. He asks the questions the listener would ask. "
-                "Forces clarity by refusing to let vague explanations pass."
+                "the interesting questions were upstream of any policy solution."
             ),
             speech_patterns=(
                 "Asks short, pointed questions. "
@@ -202,9 +197,7 @@ EXPLORATION_ENGINE_SPEAKERS = SpeakerProfile(
             name="kenji",
             backstory=(
                 "Former wire journalist who reported from three continents. "
-                "In this show, he holds the thesis — he read the material and formed a strong "
-                "interpretation. He states it early and builds evidence for it. He's not defensive "
-                "but he's committed to his reading."
+                "Stepped back to think more carefully about what he was actually witnessing."
             ),
             speech_patterns=(
                 "Keeps sentences tight. "
@@ -218,10 +211,7 @@ EXPLORATION_ENGINE_SPEAKERS = SpeakerProfile(
             name="arjun",
             backstory=(
                 "Economist turned essayist. Spent a decade in policy before deciding "
-                "the interesting questions were upstream of any policy solution. "
-                "In this show, he holds the antithesis — he read the same material and genuinely "
-                "sees it differently. He's not playing devil's advocate; he has his own interpretation. "
-                "He steelmans his position and waits for the strongest moment to land it."
+                "the interesting questions were upstream of any policy solution."
             ),
             speech_patterns=(
                 "Builds arguments step by step. "

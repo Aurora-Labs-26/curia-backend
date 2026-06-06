@@ -35,7 +35,7 @@ from core.db.connection import db_execute, db_fetchrow, db_query
 from core.kb import UserKB, load_kb
 from core.llm_config import resolve
 from core.prompts.outline import generate_outline as _outline_module
-from core.prompts.transcript import generate_transcript as _transcript_module, TRANSCRIPT_EXAMPLES
+from core.prompts.transcript import generate_transcript as _transcript_module
 from core.prompts.transcript_two_host import (
     generate_host_a as _host_a_module,
     generate_host_b as _host_b_module,
@@ -43,7 +43,6 @@ from core.prompts.transcript_two_host import (
 )
 from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
 from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
-from optimization.guidelines.transcript import TRANSCRIPT_GUIDELINES_V1
 from optimization.rubrics.judge import judge as _rubric_judge
 
 # Audio output dir — container-friendly. CURIA_AUDIO_DIR env var overrides.
@@ -161,8 +160,6 @@ def generate_transcript(
             briefing=f"<briefing>\n{briefing}\n</briefing>",
             speaker=f"<speaker>\n{speaker_definition}\n</speaker>",
             outline=f"<outline>\n{json.dumps(outline, indent=2)}\n</outline>",
-            quality_constraints=f"<constraints>\n{TRANSCRIPT_GUIDELINES_V1}\n</constraints>",
-            examples=f"<examples>\n{TRANSCRIPT_EXAMPLES}\n</examples>",
         )
     _elapsed = _time.time() - _start
     raw = prediction.transcript_json.strip()
@@ -253,8 +250,6 @@ def generate_transcript_two_host(
     outline_json = json.dumps(outline, indent=2)
     briefing_tagged = f"<briefing>\n{briefing}\n</briefing>"
     outline_tagged = f"<outline>\n{outline_json}\n</outline>"
-    constraints_tagged = f"<constraints>\n{TRANSCRIPT_GUIDELINES_V1}\n</constraints>"
-    examples_tagged = f"<examples>\n{TRANSCRIPT_EXAMPLES}\n</examples>"
 
     # ── Call 1: Host A ──────────────────────────────────────────────────
     llm_log.info(f"LLM_CALL_START | task=transcript_host_a show={show_name}")
@@ -264,8 +259,6 @@ def generate_transcript_two_host(
             briefing=briefing_tagged,
             speaker=f"<speaker>\n{speaker_a_def}\n</speaker>",
             outline=outline_tagged,
-            quality_constraints=constraints_tagged,
-            examples=examples_tagged,
         )
     _e1 = _time.time() - _t1
     host_a_transcript = _parse_json_response(pred_a.host_a_json, "Host A")
@@ -284,8 +277,6 @@ def generate_transcript_two_host(
             speaker=f"<speaker>\n{speaker_b_def}\n</speaker>",
             outline=outline_tagged,
             host_a_transcript=f"<host_a_transcript>\n{host_a_json_str}\n</host_a_transcript>",
-            quality_constraints=constraints_tagged,
-            examples=examples_tagged,
         )
     _e2 = _time.time() - _t2
     host_b_transcript = _parse_json_response(pred_b.host_b_json, "Host B")

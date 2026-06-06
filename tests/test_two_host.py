@@ -45,25 +45,22 @@ class TestTwoHostProfiles:
         names = [s.name for s in SHOW_PROFILES["exploration_engine"].speaker_config.speakers]
         assert names == ["kenji", "arjun"]
 
-    def test_clarity_host_a_is_teacher(self):
-        from studio.shows.profiles import SHOW_PROFILES
-        speaker_a = SHOW_PROFILES["clarity_engine"].speaker_config.speakers[0]
-        assert "teacher" in speaker_a.backstory.lower()
+    def test_clarity_host_roles_in_format(self):
+        from studio.formats import FORMATS
+        fmt = FORMATS["clarity_engine"]
+        assert fmt.host_a_role == "teacher"
+        assert fmt.host_b_role == "student"
 
-    def test_clarity_host_b_is_student(self):
-        from studio.shows.profiles import SHOW_PROFILES
-        speaker_b = SHOW_PROFILES["clarity_engine"].speaker_config.speakers[1]
-        assert "student" in speaker_b.backstory.lower()
+    def test_exploration_host_roles_in_format(self):
+        from studio.formats import FORMATS
+        fmt = FORMATS["exploration_engine"]
+        assert fmt.host_a_role == "thesis holder"
+        assert fmt.host_b_role == "antithesis holder"
 
-    def test_exploration_host_a_is_thesis(self):
-        from studio.shows.profiles import SHOW_PROFILES
-        speaker_a = SHOW_PROFILES["exploration_engine"].speaker_config.speakers[0]
-        assert "thesis" in speaker_a.backstory.lower()
-
-    def test_exploration_host_b_is_antithesis(self):
-        from studio.shows.profiles import SHOW_PROFILES
-        speaker_b = SHOW_PROFILES["exploration_engine"].speaker_config.speakers[1]
-        assert "antithesis" in speaker_b.backstory.lower()
+    def test_single_host_formats_have_no_roles(self):
+        from studio.formats import FORMATS
+        assert FORMATS["narrative_drift"].host_a_role is None
+        assert FORMATS["momentum_loop"].host_a_role is None
 
     def test_all_two_host_speakers_have_backstory_and_patterns(self):
         from studio.shows.profiles import SHOW_PROFILES
@@ -101,8 +98,6 @@ class TestTwoHostSignatures:
         assert "briefing" in fields
         assert "speaker" in fields
         assert "outline" in fields
-        assert "quality_constraints" in fields
-        assert "examples" in fields
         assert "host_a_json" in fields
 
     def test_host_b_signature_has_host_a_transcript(self):
@@ -228,19 +223,13 @@ class TestRoleDifferentiation:
     """Verify that clarity_engine and exploration_engine have distinct speaker roles."""
 
     def test_clarity_and_exploration_have_different_host_a_roles(self):
-        from studio.shows.profiles import SHOW_PROFILES
-        clarity_a = SHOW_PROFILES["clarity_engine"].speaker_config.speakers[0]
-        exploration_a = SHOW_PROFILES["exploration_engine"].speaker_config.speakers[0]
-        # Same person (kenji) but different backstory
-        assert clarity_a.name == exploration_a.name == "kenji"
-        assert clarity_a.backstory != exploration_a.backstory
+        from studio.formats import FORMATS
+        # Role differentiation is now in formats.py, not speaker backstories
+        assert FORMATS["clarity_engine"].host_a_role != FORMATS["exploration_engine"].host_a_role
 
     def test_clarity_and_exploration_have_different_host_b_roles(self):
-        from studio.shows.profiles import SHOW_PROFILES
-        clarity_b = SHOW_PROFILES["clarity_engine"].speaker_config.speakers[1]
-        exploration_b = SHOW_PROFILES["exploration_engine"].speaker_config.speakers[1]
-        assert clarity_b.name == exploration_b.name == "arjun"
-        assert clarity_b.backstory != exploration_b.backstory
+        from studio.formats import FORMATS
+        assert FORMATS["clarity_engine"].host_b_role != FORMATS["exploration_engine"].host_b_role
 
     def test_clarity_and_exploration_have_different_speech_patterns(self):
         from studio.shows.profiles import SHOW_PROFILES
