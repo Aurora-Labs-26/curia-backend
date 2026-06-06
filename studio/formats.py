@@ -15,7 +15,7 @@ class FormatRules:
 
 WORDS_PER_MINUTE = 150  # standard spoken English TTS rate
 
-# Intro/outro word budgets — subtracted before allocating body words to segments
+# Default intro/outro word budgets — used for all formats unless overridden in FormatConfig
 INTRO_WORDS = 150  # ~8-12 sentences — host intro, show name, pile reference, source name, tease
 OUTRO_WORDS = 70   # ~4-5 sentences
 
@@ -33,10 +33,20 @@ class FormatConfig:
     default_length_minutes: int
     host_a_role: str | None = None  # e.g. "teacher", "thesis holder" — None for single-host formats
     host_b_role: str | None = None  # e.g. "student", "antithesis holder" — None for single-host formats
+    intro_words: int | None = None  # override global INTRO_WORDS for this format
+    outro_words: int | None = None  # override global OUTRO_WORDS for this format
 
     @property
     def target_words(self) -> int:
         return round(self.default_length_minutes * WORDS_PER_MINUTE)
+
+    @property
+    def effective_intro_words(self) -> int:
+        return self.intro_words if self.intro_words is not None else INTRO_WORDS
+
+    @property
+    def effective_outro_words(self) -> int:
+        return self.outro_words if self.outro_words is not None else OUTRO_WORDS
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +110,7 @@ MOMENTUM_LOOP = FormatConfig(
     pacing="fast",
     resolution_style="implication",
     energy_curve="linear",
-    structure_pattern=["hook", "stakes", "mechanism", "payoff", "landing"],
+    structure_pattern=["hook", "mechanism", "landing"],
     voice_style="complete sentences, editorial confidence, no fragments",
     rules=FormatRules(
         must_do=[
@@ -112,14 +122,20 @@ MOMENTUM_LOOP = FormatConfig(
         ],
         must_avoid=[
             "re-hooking mid-episode — the listener chose brevity, trust that",
-            "closing with a question or an open thread — Live Wire completes, it does not open",
+            "closing with a question or an open thread — Quickie completes, it does not open",
             "padding to fill time — if the source is thin, the episode is short",
-            "more than one core idea — Live Wire carries one thing, carried well",
+            "more than one core idea — Quickie carries one thing, carried well",
             "forward-momentum transitions that tease what's next — each segment completes itself",
+            "restating an idea from a second angle — state it once, move on",
+            "setup before the point — lead with the claim, not the context",
+            "elaboration after the idea has landed — when the point is made, stop",
+            "developing an idea further after the first sentence makes it clear",
         ]
     ),
-    default_segment_count=5,
+    default_segment_count=3,
     default_length_minutes=4,
+    intro_words=60,
+    outro_words=30,
 )
 
 EXPLORATION_ENGINE = FormatConfig(
@@ -175,10 +191,10 @@ _SLUG_TO_BACKEND: dict[str, str] = {
 
 # Human-readable show names for use in intros/outros
 DISPLAY_NAMES: dict[str, str] = {
-    "narrative_drift":    "Slow Burn",
-    "clarity_engine":     "Sharp Take",
-    "momentum_loop":      "Live Wire",
-    "exploration_engine": "Open Verdict",
+    "narrative_drift":    "Drift",
+    "clarity_engine":     "Unpack",
+    "momentum_loop":      "Quickie",
+    "exploration_engine": "Explore",
 }
 
 

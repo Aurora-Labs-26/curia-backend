@@ -74,7 +74,7 @@ async def list_episodes(
             """
             SELECT id, show_name, title, status, created_at, error, quality_score,
                    length_minutes, speaker_override, source_ids, outline,
-                   play_progress, listened, last_played_at
+                   play_progress, listened, last_played_at, show_idea_id
             FROM episode
             WHERE user_id = $user_id AND status = $status
             ORDER BY created_at DESC LIMIT $limit
@@ -86,7 +86,7 @@ async def list_episodes(
             """
             SELECT id, show_name, title, status, created_at, error, quality_score,
                    length_minutes, speaker_override, source_ids, outline,
-                   play_progress, listened, last_played_at
+                   play_progress, listened, last_played_at, show_idea_id
             FROM episode
             WHERE user_id = $user_id
             ORDER BY created_at DESC LIMIT $limit

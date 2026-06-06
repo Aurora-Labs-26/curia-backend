@@ -4,6 +4,45 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-07 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+Renamed show display names to match new brand language. These names are used by hosts in spoken intros/outros and in the frontend format picker.
+- **`studio/formats.py`** — `DISPLAY_NAMES`: `narrative_drift→Drift`, `clarity_engine→Unpack`, `momentum_loop→Quickie`, `exploration_engine→Explore`
+- **`data/mock.ts`** (frontend) — `FORMAT_LABELS`: same mapping applied to frontend slugs
+
+---
+
+## 2026-06-06 · Bhabani + Claude (claude-sonnet-4-6) [third entry]
+
+### Bug Fix
+Remixed episodes pulled sources from the user's full archive instead of the original episode's sources, producing extra/wrong sources. Root cause: `GET /episodes` list endpoint didn't include `show_idea_id` in its SELECT, so `EpisodeSummary` returned `null` for that field. The remix screen reads `show.showIdeaId` to lock the new episode to the same sources — but since it was null, the backend had no `show_idea_id`, fell through to `select_episode_sources`, and picked whatever was relevant in the archive.
+- **`api/routes/episodes.py`** — added `show_idea_id` to both `GET /episodes` SELECT queries (status-filtered and unfiltered).
+- **`api/schemas.py`** — added `show_idea_id: Optional[UUID] = None` to `EpisodeSummary` so the field passes through the response model instead of being silently dropped.
+
+---
+
+## 2026-06-06 · Bhabani + Claude (claude-sonnet-4-6) [second entry]
+
+### Bug Fix
+Duplicate `line_index` in `tts_timings` when a single-speaker transcript exceeded the TTS chunk size. When all transcript lines belong to one speaker (e.g. `momentum_loop`), `merge_paragraphs` produces one large paragraph. If its text exceeds `max_chars=4500`, `_split_at_sentences` cuts it mid-line — causing `_assign_line_metadata_to_chunk` to assign the straddling line to both chunks, producing two `tts_timings` entries with the same `line_index`.
+- **`studio/generator.py`** — after building `tts_timings`, deduplicate by `line_index` keeping the entry with the largest duration (i.e. the chunk that contains the majority of the line). This is done before the final sort. The `daa2ee9e` episode (momentum_loop) had line_index 20 duplicated; this fix corrects that class of issue for all future generations.
+
+---
+
+## 2026-06-06 · Bhabani + Claude (claude-sonnet-4-6)
+
+### Feature
+Smallest.ai is now the default TTS provider. Hume is kept as a commented-out fallback for when word-level timestamps are needed.
+- **`config/models.yaml`** — switched default `speaker` bindings from `hume-octave` to `smallest-lightning` for all three hosts: `kenji→william` (Canadian, composed), `arjun→zorin` (American, friendly/powerful), `emeka→julia` (British, dignified). Hume config preserved as commented block for future use.
+- **`studio/run_episode_gen.py`** — reordered steps: Step 4 now runs Smallest.ai using default config (no patching needed); Step 5 patches bindings to Hume voices and runs Hume synthesis. Updated header labels to reflect correct voice assignments.
+- **`studio/test_tts_integration.py`** — `test_smallest` simplified to use default config directly (no patching); `test_hume` now patches speaker bindings to `hume-octave` voices before synthesis and restores them in a `finally` block.
+
+### Chore
+- Changed arjun's Smallest.ai voice from `alec` to `zorin` for better acoustic distinction from kenji.
+
+---
+
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
 
 ### Bug Fix

@@ -208,6 +208,11 @@ Before writing a single line:
   You are not summarising the hosts. You are shaping their arguments into a full episode
   at a length the listener has set aside real time for.
 
+  LINE BREAKS: Each JSON line is one complete thought. Preserve the line granularity from
+  Host A and Host B where possible — do not merge their lines. A line boundary is a breath
+  and a beat. For lines you write yourself (intro, outro), break at thought boundaries:
+  a new idea, a new beat, a shift in energy starts a new line. Never split a sentence.
+
 Apply format_config.pacing, energy_curve, voice_style, and rules.must_do/must_avoid to every line you write.
 
 Write in this order:

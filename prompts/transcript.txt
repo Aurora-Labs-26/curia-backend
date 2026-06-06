@@ -77,9 +77,11 @@ are load-bearing vs transitional.
 <rules>
 
 WORD BUDGET:
-Total words = episode_constraints.target_words. Tolerance +/-10%. Hard constraint.
+Total words = episode_constraints.target_words. Tolerance +/-10%. Hard two-sided constraint.
 Intro = intro_budget_words. Outro = outro_budget_words. The rest is body.
 Finishing under 90% of target_words is a content failure, not an efficiency win.
+Finishing over 110% of target_words is also a failure — the listener chose this format for
+its length. If target_words is 600, you must stop at or before 660 words total.
 
 INTRO (mandatory, always first):
 Follow this order exactly:
@@ -287,16 +289,27 @@ years to average life expectancy. Aging is a multi-headed beast."
 <execution>
 Before writing a single line:
 
-  target_words is in episode_constraints. Convert it to a felt sense of length:
-  You are not writing a summary. You are writing the full development of an argument
-  at a length the listener has set aside real time for.
+  target_words is in episode_constraints. This is a hard two-sided constraint:
+  - Minimum: 90% of target_words. Finishing short is a content failure.
+  - Maximum: 110% of target_words. Finishing long is also a failure — the listener
+    chose this format for its length. Exceeding it breaks the contract.
 
-  Before writing segment 1, divide the body word budget (target_words minus
-  intro_budget_words minus outro_budget_words) by segment_count. That is your rough
-  per-segment floor. No segment should be much shorter than that unless it is
-  explicitly a pivot or transition.
-  Track a running total as you write. If you finish all segments under 90% of
-  target_words, return to the heaviest segments and develop further — not filler, real depth.
+  Compute before writing:
+    body_budget = target_words - intro_budget_words - outro_budget_words
+    per_segment = body_budget / segment_count
+
+  That per_segment number is both your floor AND your ceiling per segment.
+  A segment should not be much longer than per_segment unless it is the single
+  most load-bearing segment in the episode — and even then, cap it at 2× per_segment.
+
+  Track a running word total as you write each JSON line.
+  When you finish a segment, check: is this segment close to per_segment?
+  If a segment is running long, land the point and stop. The depth requirement
+  is satisfied by being precise and concrete, not by adding more words.
+  If you finish all segments and the total is under 90% of target_words, return
+  to the heaviest segments and develop further — not filler, real depth.
+  If you finish all segments and the total exceeds 110% of target_words, trim
+  the longest segments until you are within range.
 
 Apply format_config.pacing, energy_curve, voice_style, and rules.must_do/must_avoid to every segment as you write.
 
@@ -304,7 +317,9 @@ Write in this order:
 1. Intro (intro_budget_words)
 2. Body — each outline segment in order:
    a. Draw only from that segment's primitives_used
-   b. Each JSON line is one spoken beat — let rhythm decide the break
+   b. Each JSON line is one complete thought. Break when the idea shifts — a new assertion,
+      a new example, a new angle. Never split a sentence across lines. A sentence that
+      continues the same idea stays in the same line. A new idea starts a new line.
    c. Load-bearing segments: show the mechanism, give an example, restate from a second angle
    d. Pivot segments: land the point and move
 3. Outro (outro_budget_words)

@@ -31,6 +31,8 @@ dependencies = [
     "firebase-admin>=6.5",           # Firebase Auth token verification
     "boto3>=1.34",                   # R2/S3 audio upload + presigned URLs
     "uvicorn>=0.47.0",
+    "hume>=0.7",
+    "smallestai>=1.0",
 ]
 
 [project.optional-dependencies]

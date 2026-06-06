@@ -41,8 +41,7 @@ from core.prompts.transcript_two_host import (
     generate_host_b as _host_b_module,
     merge_dialogue as _merge_module,
 )
-from core.tts import synthesize_for_speaker as _tts_synthesize_for_speaker
-from core.tts import synthesize_for_speaker_with_timings as _tts_synthesize_with_timings
+from core.llm_config import resolve as _resolve_config
 from optimization.rubrics.judge import judge as _rubric_judge
 
 # Audio output dir — container-friendly. CURIA_AUDIO_DIR env var overrides.
@@ -350,24 +349,6 @@ OUTRO_FADE_OUT_MS = 2000   # outro fades to silence
 OUTRO_GAIN_DB     = 0.0    # dB relative to episode level (matched, sits underneath)
 
 
-def synthesize_line_by_speaker(text: str, speaker: str, output_path: str) -> str:
-    """
-    Synthesize one transcript line. Speaker name → resolver looks up voice_id +
-    TTS provider from config/models.yaml. Returns output format ('wav' or 'mp3').
-    """
-    return _tts_synthesize_for_speaker(text=text, speaker=speaker, output_path=output_path)
-
-
-def synthesize_line_by_speaker_with_timings(
-    text: str, speaker: str, output_path: str
-) -> tuple[str, list[dict]]:
-    """
-    Synthesize one line and return (output_format, word_timings).
-    word_timings may be [] for providers that don't support timestamps.
-    """
-    return _tts_synthesize_with_timings(text=text, speaker=speaker, output_path=output_path)
-
-
 def _load_optional_segment(path: str | None, label: str) -> "AudioSegment | None":
     """Load a sound file from disk if the path is set + the file exists. Logs and skips otherwise."""
     if not path:
@@ -424,127 +405,113 @@ def _derive_display_fields(
     return description, chapters
 
 
-def synthesize_and_stitch(
+def _map_word_timings_to_lines(
+    word_timings: list[dict],
+    segment_text: str,
+    line_indices: list[int],
+    line_char_ranges: list[tuple[int, int]],
+    segment_start_ms: int,
     transcript: list[dict],
-    show_name: str,
-    output_path: str,
-    speaker_override: str | None = None,
-) -> tuple[str, list[dict]]:
+) -> list[dict]:
     """
-    Synthesize + stitch all transcript lines into an MP3.
-    Returns (output_path, tts_timings) where tts_timings is a list of:
-      { line_index, start_ms, end_ms, speaker, text }
-    representing the absolute playback position of each transcript line.
-    The start_ms accounts for any prepended intro audio.
+    Map word-level timestamps from a merged segment back to original transcript line indices.
+
+    Word timings are in seconds relative to segment start.
+    Returns line-level tts_timings: [{line_index, start_ms, end_ms, speaker, text}]
     """
-    profile = SHOW_PROFILES[show_name]
-    if speaker_override and speaker_override in SPEAKER_PROFILES:
-        allowed_speakers = {speaker_override.lower()}
-    else:
-        allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
+    if not line_indices:
+        return []
 
-    bitrate = os.getenv("CURIA_AUDIO_BITRATE", "128k")
-    gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
+    if not word_timings:
+        # Fallback: proportional split by character count
+        total_chars = sum(end - start for start, end in line_char_ranges) or 1
+        # We don't have duration here — caller will use clip length
+        return []  # handled by caller's proportional fallback
 
-    logger.info(
-        f"Synthesizing {len(transcript)} lines "
-        f"(bitrate={bitrate}, gap={gap_ms}ms)..."
-    )
-    clips = []
-    word_timings_per_line: list[list[dict]] = []
+    # Build list of (char_position, word_timing) by scanning segment_text for each word
+    # We walk the text sequentially matching words to avoid index errors
+    text_lower = segment_text.lower()
+    cursor = 0
+    word_char_positions: list[tuple[int, int]] = []  # (start_char, end_char) per word timing
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for i, line in enumerate(transcript):
-            raw_speaker = (line.get("speaker") or "").strip().lower()
-            if not raw_speaker:
-                raise ValueError(f"Transcript line {i} has no speaker name")
-            if raw_speaker not in allowed_speakers:
-                raw_speaker = next(iter(allowed_speakers))
-            clip_path = os.path.join(tmpdir, f"line_{i:04d}.wav")
-            logger.info(f"  [{i+1}/{len(transcript)}] {raw_speaker}: {line['text'][:60]}...")
-            fmt, word_timings = synthesize_line_by_speaker_with_timings(
-                line["text"], raw_speaker, clip_path
-            )
-            word_timings_per_line.append(word_timings)
-            if fmt == "mp3":
-                clips.append(AudioSegment.from_mp3(clip_path))
-            else:
-                clips.append(AudioSegment.from_wav(clip_path))
+    for wt in word_timings:
+        word = (wt.get("word") or "").strip().lower()
+        # Strip punctuation for matching
+        word_stripped = word.strip(".,!?;:\"'()-")
+        if not word_stripped:
+            word_char_positions.append((cursor, cursor))
+            continue
+        # Find word in text starting from cursor
+        idx = text_lower.find(word_stripped, cursor)
+        if idx == -1:
+            # Fuzzy: try from beginning of segment (handles minor mismatches)
+            idx = text_lower.find(word_stripped, 0)
+        if idx == -1:
+            word_char_positions.append((cursor, cursor))
+        else:
+            end_idx = idx + len(word_stripped)
+            word_char_positions.append((idx, end_idx))
+            cursor = end_idx
 
-        logger.info("Stitching speech...")
-        gap = AudioSegment.silent(duration=gap_ms)
-        body = AudioSegment.empty()
-        for clip in clips:
-            body += clip + gap
+    # Assign each word to a line based on char ranges
+    line_word_timings: dict[int, list[dict]] = {idx: [] for idx in line_indices}
+    for wt, (wchar_start, wchar_end) in zip(word_timings, word_char_positions):
+        # Find which line range this word falls in
+        best_idx = line_indices[0]
+        for line_idx, (range_start, range_end) in zip(line_indices, line_char_ranges):
+            if wchar_start >= range_start:
+                best_idx = line_idx
+        line_word_timings[best_idx].append(wt)
 
-        # Optional intro / outro / music — driven by show profile
-        intro = _load_optional_segment(profile.intro_audio_path, "intro")
-        outro = _load_optional_segment(profile.outro_audio_path, "outro")
-        music = _load_optional_segment(profile.music_audio_path, "music")
-
-        # intro_offset_ms = how far into the final MP3 the first spoken word lands.
-        # With crossfade: speech starts at INTRO_FULL_MS (not at end of full intro clip).
-        intro_offset_ms = 0
-
-        if intro is not None:
-            logger.info(f"  crossfading intro ({len(intro)/1000:.1f}s source)")
-            # Gain-match intro to episode level, then boost by INTRO_GAIN_DB
-            episode_dbfs = body.dBFS
-            intro_gain = (episode_dbfs - intro.dBFS + INTRO_GAIN_DB) if intro.dBFS != float("-inf") else 0
-            intro = intro.apply_gain(intro_gain)
-            # Cut: full section + fade section
-            intro_full_clip = intro[:INTRO_FULL_MS]
-            intro_fade_clip = intro[INTRO_FULL_MS: INTRO_FULL_MS + INTRO_FADE_MS].fade_out(INTRO_FADE_MS)
-            # Assemble: full intro + body, then overlay fade zone over TTS start
-            body = intro_full_clip + body
-            body = body.overlay(intro_fade_clip, position=INTRO_FULL_MS)
-            intro_offset_ms = INTRO_FULL_MS  # speech starts here in the final file
-
-        if outro is not None:
-            logger.info(f"  crossfading outro ({len(outro)/1000:.1f}s source)")
-            episode_dbfs = body.dBFS
-            outro_gain = (episode_dbfs - outro.dBFS + OUTRO_GAIN_DB) if outro.dBFS != float("-inf") else 0
-            outro = outro.apply_gain(outro_gain)
-            # Cut outro clip: fade-in + full + fade-out
-            outro_fade_in  = outro[:OUTRO_FADE_IN_MS].fade_in(OUTRO_FADE_IN_MS)
-            outro_full_clip = outro[OUTRO_FADE_IN_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS]
-            outro_fade_out = outro[OUTRO_FADE_IN_MS + OUTRO_FULL_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS + OUTRO_FADE_OUT_MS].fade_out(OUTRO_FADE_OUT_MS)
-            outro_ready = outro_fade_in + outro_full_clip + outro_fade_out
-            # Outro fade-in starts OUTRO_FADE_IN_MS before TTS ends; tail extends after
-            tts_end_pos = len(body)
-            outro_start_pos = tts_end_pos - OUTRO_FADE_IN_MS
-            tail_ms = OUTRO_FULL_MS + OUTRO_FADE_OUT_MS
-            body = body + AudioSegment.silent(duration=tail_ms)
-            body = body.overlay(outro_ready, position=max(0, outro_start_pos))
-
-        if music is not None:
-            logger.info(
-                f"  overlaying music ({len(music)/1000:.1f}s loop) "
-                f"at {profile.music_gain_db:+.1f} dB"
-            )
-            body = _overlay_music(body, music, profile.music_gain_db)
-
-        body.export(output_path, format="mp3", bitrate=bitrate)
-
-    # Build absolute tts_timings from clip durations + gap
-    tts_timings: list[dict] = []
-    cursor_ms = intro_offset_ms
-    for i, (clip, line) in enumerate(zip(clips, transcript)):
-        clip_ms = len(clip)
-        raw_speaker = (line.get("speaker") or "").strip().lower()
-        if raw_speaker not in allowed_speakers:
-            raw_speaker = next(iter(allowed_speakers))
-        tts_timings.append({
-            "line_index": i,
-            "start_ms": cursor_ms,
-            "end_ms": cursor_ms + clip_ms,
-            "speaker": raw_speaker,
-            "text": line.get("text", ""),
+    # Build line-level timings
+    result: list[dict] = []
+    for line_idx, (range_start, range_end) in zip(line_indices, line_char_ranges):
+        words = line_word_timings.get(line_idx, [])
+        line_info = transcript[line_idx] if line_idx < len(transcript) else {}
+        if words:
+            start_ms = segment_start_ms + int(words[0].get("start", 0) * 1000)
+            end_ms = segment_start_ms + int(words[-1].get("end", 0) * 1000)
+        else:
+            # Proportional fallback for lines with no matched words
+            total_chars = sum(e - s for s, e in line_char_ranges) or 1
+            line_chars = range_end - range_start
+            # Use 0 duration as placeholder — will be filled by adjacent lines
+            start_ms = segment_start_ms
+            end_ms = segment_start_ms
+        result.append({
+            "line_index": line_idx,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "speaker": line_info.get("speaker", ""),
+            "text": line_info.get("text", ""),
         })
-        cursor_ms += clip_ms + gap_ms
+    return result
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), {len(tts_timings)} timing entries")
-    return output_path, tts_timings
+
+def _proportional_line_timings(
+    line_indices: list[int],
+    line_char_ranges: list[tuple[int, int]],
+    segment_start_ms: int,
+    segment_duration_ms: int,
+    transcript: list[dict],
+) -> list[dict]:
+    """Fallback when no word timings available — split by character proportion."""
+    total_chars = sum(end - start for start, end in line_char_ranges) or 1
+    result: list[dict] = []
+    cursor = segment_start_ms
+    for line_idx, (start_char, end_char) in zip(line_indices, line_char_ranges):
+        line_chars = end_char - start_char
+        line_duration = int(segment_duration_ms * line_chars / total_chars)
+        line_info = transcript[line_idx] if line_idx < len(transcript) else {}
+        result.append({
+            "line_index": line_idx,
+            "start_ms": cursor,
+            "end_ms": cursor + line_duration,
+            "speaker": line_info.get("speaker", ""),
+            "text": line_info.get("text", ""),
+        })
+        cursor += line_duration
+    return result
 
 
 def synthesize_and_stitch_v2(
@@ -552,10 +519,18 @@ def synthesize_and_stitch_v2(
     show_name: str,
     output_path: str,
     speaker_override: str | None = None,
-) -> str:
+) -> tuple[str, list[dict]]:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
     makes far fewer TTS calls, and produces more natural prosody.
+
+    Returns (output_path, tts_timings) matching synthesize_and_stitch's signature.
+    tts_timings: [{line_index, start_ms, end_ms, speaker, text}]
+
+    Key improvements over v1:
+    - Reuses TTS adapter per speaker → generation_id chaining (voice consistency)
+    - Word-level timestamps from Hume/Smallest.ai → accurate line timings
+    - Proportional fallback for other providers
     """
     from core.audio.stitcher import prepare_segments
 
@@ -573,16 +548,31 @@ def synthesize_and_stitch_v2(
         f"Synthesizing {len(transcript)} lines as {len(segments)} segments "
         f"(bitrate={bitrate}, gap={gap_ms}ms)..."
     )
-    clips = []
+
+    clips: list[AudioSegment] = []
+    segment_word_timings: list[list[dict]] = []
+
+    # Reuse one adapter per speaker — preserves generation_id state for voice consistency
+    adapters: dict[str, object] = {}
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for i, seg in enumerate(segments):
             raw_speaker = seg["speaker"]
             if raw_speaker not in allowed_speakers:
                 raw_speaker = next(iter(allowed_speakers))
+
+            # Get or create adapter for this speaker
+            if raw_speaker not in adapters:
+                adapters[raw_speaker] = _resolve_config.tts(speaker=raw_speaker)
+            adapter = adapters[raw_speaker]
+
             clip_path = os.path.join(tmpdir, f"segment_{i:04d}.wav")
             logger.info(f"  [{i+1}/{len(segments)}] {raw_speaker}: {seg['text'][:60]}...")
-            fmt = synthesize_line_by_speaker(seg["text"], raw_speaker, clip_path)
+
+            word_timings = adapter.synthesize_with_timings(seg["text"], clip_path)
+            segment_word_timings.append(word_timings)
+
+            fmt = adapter.output_format
             if fmt == "mp3":
                 clips.append(AudioSegment.from_mp3(clip_path))
             else:
@@ -635,8 +625,51 @@ def synthesize_and_stitch_v2(
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), intro_offset={intro_offset_ms}ms")
-    return output_path, intro_offset_ms
+    # Build tts_timings — map word timestamps back to original transcript line indices
+    tts_timings: list[dict] = []
+    cursor_ms = intro_offset_ms
+
+    for seg, clip, word_timings in zip(segments, clips, segment_word_timings):
+        clip_ms = len(clip)
+        line_indices = seg.get("line_indices", [])
+        line_char_ranges = seg.get("line_char_ranges", [])
+
+        if word_timings and line_indices:
+            line_entries = _map_word_timings_to_lines(
+                word_timings=word_timings,
+                segment_text=seg["text"],
+                line_indices=line_indices,
+                line_char_ranges=line_char_ranges,
+                segment_start_ms=cursor_ms,
+                transcript=transcript,
+            )
+            tts_timings.extend(line_entries)
+        elif line_indices:
+            # No word timings — proportional fallback
+            tts_timings.extend(_proportional_line_timings(
+                line_indices=line_indices,
+                line_char_ranges=line_char_ranges,
+                segment_start_ms=cursor_ms,
+                segment_duration_ms=clip_ms,
+                transcript=transcript,
+            ))
+
+        cursor_ms += clip_ms + gap_ms
+
+    # Sort by line_index to match expected order
+    tts_timings.sort(key=lambda x: x["line_index"])
+
+    # Deduplicate: a line that straddles a chunk boundary gets an entry from each chunk.
+    # Keep the entry with the largest duration (the chunk containing most of the line).
+    seen: dict[int, dict] = {}
+    for entry in tts_timings:
+        idx = entry["line_index"]
+        if idx not in seen or (entry["end_ms"] - entry["start_ms"]) > (seen[idx]["end_ms"] - seen[idx]["start_ms"]):
+            seen[idx] = entry
+    tts_timings = [seen[k] for k in sorted(seen)]
+
+    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), {len(tts_timings)} timing entries")
+    return output_path, tts_timings
 
 
 # ---------------------------------------------------------------------------
@@ -930,7 +963,7 @@ async def process_episode(episode_id: str) -> None:
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
         _, tts_timings = await loop.run_in_executor(
-            None, synthesize_and_stitch,
+            None, synthesize_and_stitch_v2,
             transcript, show_name, audio_path, speaker_override,
         )
 

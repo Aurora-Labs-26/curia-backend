@@ -119,6 +119,8 @@ def build_briefing_packet(
     target_minutes = length_override or fmt.default_length_minutes
     segment_count = segment_count_override or fmt.default_segment_count
     target_words = round(target_minutes * WORDS_PER_MINUTE)
+    intro_w = fmt.effective_intro_words
+    outro_w = fmt.effective_outro_words
 
     packet = {
         "format": format_name,
@@ -127,12 +129,12 @@ def build_briefing_packet(
             "target_length_minutes": target_minutes,
             "segment_count": segment_count,
             "target_words": target_words,
-            "intro_budget_words": INTRO_WORDS,
-            "intro_budget_min": round(INTRO_WORDS * 0.8),
-            "intro_budget_max": round(INTRO_WORDS * 1.2),
-            "outro_budget_words": OUTRO_WORDS,
-            "outro_budget_min": round(OUTRO_WORDS * 0.8),
-            "outro_budget_max": round(OUTRO_WORDS * 1.2),
+            "intro_budget_words": intro_w,
+            "intro_budget_min": round(intro_w * 0.8),
+            "intro_budget_max": round(intro_w * 1.2),
+            "outro_budget_words": outro_w,
+            "outro_budget_min": round(outro_w * 0.8),
+            "outro_budget_max": round(outro_w * 1.2),
         },
         "editorial_direction": editorial_direction or "Follow the most interesting thread in the material.",
         "source_primitives": build_source_primitives(sources, insights),
