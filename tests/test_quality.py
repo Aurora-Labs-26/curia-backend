@@ -27,6 +27,6 @@ def test_prompt_files_contain_quality_rules():
         assert "signposting" in prompt.lower() or "SIGNPOSTING" in prompt
         assert "negative parallelism" in prompt.lower() or "NEGATIVE PARALLELISM" in prompt
 
-    # Single-host prompt retains depth rules; host_b and merger do not need them
+    # Single-host prompt and host_b (the builder) retain depth rules
     assert "EXPLAIN, DO NOT ASSERT" in transcript
-    assert "EXPLAIN, DO NOT ASSERT" in host_a
+    assert "EXPLAIN, DO NOT ASSERT" in host_b

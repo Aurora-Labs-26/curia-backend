@@ -101,8 +101,8 @@ CLARITY_ENGINE = FormatConfig(
     ),
     default_segment_count=6,
     default_length_minutes=10,
-    host_a_role="teacher",
-    host_b_role="student",
+    host_a_role="student",
+    host_b_role="teacher",
 )
 
 MOMENTUM_LOOP = FormatConfig(
@@ -165,8 +165,8 @@ EXPLORATION_ENGINE = FormatConfig(
     ),
     default_segment_count=6,
     default_length_minutes=12,
-    host_a_role="thesis holder",
-    host_b_role="antithesis holder",
+    host_a_role="antithesis holder",
+    host_b_role="thesis holder",
 )
 
 

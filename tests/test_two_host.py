@@ -48,14 +48,14 @@ class TestTwoHostProfiles:
     def test_clarity_host_roles_in_format(self):
         from studio.formats import FORMATS
         fmt = FORMATS["clarity_engine"]
-        assert fmt.host_a_role == "teacher"
-        assert fmt.host_b_role == "student"
+        assert fmt.host_a_role == "student"
+        assert fmt.host_b_role == "teacher"
 
     def test_exploration_host_roles_in_format(self):
         from studio.formats import FORMATS
         fmt = FORMATS["exploration_engine"]
-        assert fmt.host_a_role == "thesis holder"
-        assert fmt.host_b_role == "antithesis holder"
+        assert fmt.host_a_role == "antithesis holder"
+        assert fmt.host_b_role == "thesis holder"
 
     def test_single_host_formats_have_no_roles(self):
         from studio.formats import FORMATS
