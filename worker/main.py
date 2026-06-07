@@ -18,6 +18,8 @@ import socket
 import time
 import traceback
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -153,6 +155,19 @@ async def _process_one(worker_id: str) -> bool:
     return True
 
 
+def _start_scheduler() -> AsyncIOScheduler:
+    from core.notifications import send_listen_reminders, send_reengagement_reminders
+
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    # 8:00 PM IST = 14:30 UTC
+    scheduler.add_job(send_listen_reminders, CronTrigger(hour=14, minute=30, timezone="UTC"))
+    # 11:00 AM IST = 05:30 UTC
+    scheduler.add_job(send_reengagement_reminders, CronTrigger(hour=5, minute=30, timezone="UTC"))
+    scheduler.start()
+    logger.info("[worker] scheduler started: listen_reminder@14:30UTC reengagement@05:30UTC")
+    return scheduler
+
+
 async def main() -> None:
     from core.logging import setup_logging
     from core.prompt_watcher import check_prompt_changes, init_prompt_hashes
@@ -167,6 +182,8 @@ async def main() -> None:
     hostname = socket.gethostname()
     logger.info(f"[worker] starting id={worker_id} host={hostname} pid={os.getpid()}")
     _install_signal_handlers()
+
+    scheduler = _start_scheduler()
 
     while not _shutdown.is_set():
         try:
@@ -191,6 +208,7 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 pass
 
+    scheduler.shutdown(wait=False)
     logger.info(f"[worker] shutting down id={worker_id}")
 
 

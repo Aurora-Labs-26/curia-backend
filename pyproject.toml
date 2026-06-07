@@ -33,6 +33,7 @@ dependencies = [
     "uvicorn>=0.47.0",
     "hume>=0.7",
     "smallestai>=1.0",
+    "apscheduler>=3.10",             # cron scheduling for push notifications
 ]
 
 [project.optional-dependencies]

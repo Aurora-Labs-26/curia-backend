@@ -4,6 +4,19 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-08 · Claude (claude-sonnet-4-6)
+
+### Feature
+Scheduled push notifications via APScheduler — two daily jobs targeting IST users.
+- **`core/notifications.py`** — new file; `send_listen_reminders()` (14:30 UTC) sends batched unplayed-episode nudge; `send_reengagement_reminders()` (05:30 UTC) sends daily for 7 days post-signup to users with zero sources
+- **`worker/main.py`** — `_start_scheduler()` starts AsyncIOScheduler with two CronTrigger jobs; scheduler shut down cleanly on SIGTERM
+- **`pyproject.toml`** — added `apscheduler>=3.10` dependency
+
+### Migration
+- **`alembic/versions/0025_notification_log.py`** — `notification_log` table with UNIQUE(user_id, type, sent_date) to prevent duplicate sends on restarts
+
+---
+
 ## 2026-06-07 · Bhabani + Claude (claude-sonnet-4-6)
 
 ### Feature
@@ -35,8 +48,6 @@ Duplicate `line_index` in `tts_timings` when a single-speaker transcript exceede
 ### Feature
 Smallest.ai is now the default TTS provider. Hume is kept as a commented-out fallback for when word-level timestamps are needed.
 - **`config/models.yaml`** — switched default `speaker` bindings from `hume-octave` to `smallest-lightning` for all three hosts: `kenji→william` (Canadian, composed), `arjun→zorin` (American, friendly/powerful), `emeka→julia` (British, dignified). Hume config preserved as commented block for future use.
-- **`studio/run_episode_gen.py`** — reordered steps: Step 4 now runs Smallest.ai using default config (no patching needed); Step 5 patches bindings to Hume voices and runs Hume synthesis. Updated header labels to reflect correct voice assignments.
-- **`studio/test_tts_integration.py`** — `test_smallest` simplified to use default config directly (no patching); `test_hume` now patches speaker bindings to `hume-octave` voices before synthesis and restores them in a `finally` block.
 
 ### Chore
 - Changed arjun's Smallest.ai voice from `alec` to `zorin` for better acoustic distinction from kenji.
