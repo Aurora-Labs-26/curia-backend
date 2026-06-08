@@ -176,7 +176,7 @@ class TestNarrativeDrift:
 
 
 class TestClarityEngine:
-    """Two-host format — kenji (teacher) + arjun (student)."""
+    """Two-host format — kenji (teacher) + emeka (student)."""
 
     @pytest.mark.asyncio
     async def test_generate(self, source_ids):
@@ -192,10 +192,10 @@ class TestClarityEngine:
         assert len(transcript) > 10
         speakers = {line["speaker"].lower() for line in transcript}
         assert "kenji" in speakers, f"Missing kenji in speakers: {speakers}"
-        assert "arjun" in speakers, f"Missing arjun in speakers: {speakers}"
+        assert "emeka" in speakers, f"Missing emeka in speakers: {speakers}"
         kenji_lines = sum(1 for l in transcript if l["speaker"] == "kenji")
-        arjun_lines = sum(1 for l in transcript if l["speaker"] == "arjun")
-        print(f"[{show}] Transcript: {len(transcript)} lines (kenji={kenji_lines}, arjun={arjun_lines})")
+        emeka_lines = sum(1 for l in transcript if l["speaker"] == "emeka")
+        print(f"[{show}] Transcript: {len(transcript)} lines (kenji={kenji_lines}, emeka={emeka_lines})")
 
         out_path = str(OUTPUT_DIR / f"test_e2e_{show}.mp3")
         await _synthesize(transcript, show, out_path)
@@ -231,7 +231,7 @@ class TestMomentumLoop:
 
 
 class TestExplorationEngine:
-    """Two-host format — kenji (thesis) + arjun (antithesis)."""
+    """Two-host format — kenji (thesis) + emeka (antithesis)."""
 
     @pytest.mark.asyncio
     async def test_generate(self, source_ids):
@@ -247,10 +247,10 @@ class TestExplorationEngine:
         assert len(transcript) > 10
         speakers = {line["speaker"].lower() for line in transcript}
         assert "kenji" in speakers, f"Missing kenji in speakers: {speakers}"
-        assert "arjun" in speakers, f"Missing arjun in speakers: {speakers}"
+        assert "emeka" in speakers, f"Missing emeka in speakers: {speakers}"
         kenji_lines = sum(1 for l in transcript if l["speaker"] == "kenji")
-        arjun_lines = sum(1 for l in transcript if l["speaker"] == "arjun")
-        print(f"[{show}] Transcript: {len(transcript)} lines (kenji={kenji_lines}, arjun={arjun_lines})")
+        emeka_lines = sum(1 for l in transcript if l["speaker"] == "emeka")
+        print(f"[{show}] Transcript: {len(transcript)} lines (kenji={kenji_lines}, emeka={emeka_lines})")
 
         out_path = str(OUTPUT_DIR / f"test_e2e_{show}.mp3")
         await _synthesize(transcript, show, out_path)
