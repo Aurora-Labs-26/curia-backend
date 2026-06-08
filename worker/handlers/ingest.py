@@ -2,7 +2,7 @@
 worker/handlers/ingest.py
 Worker handler for the 'ingest' job type.
 
-Payload: { "source_id": "<uuid>", "user_id": "<id>", "standalone": true|false }
+Payload: { "source_id": "<uuid>", "user_id": "<id>", "url": "<url>", "standalone": true|false }
 The source row already exists (created by API). Worker scrapes → transforms → embeds,
 then triggers generation:
   standalone=True  → evaluate this source alone (_run_standalone)
@@ -12,13 +12,25 @@ Seed short-circuit: if the URL is a known seed URL, skip the full pipeline and
 promote the placeholder source in place + copy the pre-baked episode to the user instantly.
 """
 
+import uuid as _uuid
+
 from loguru import logger
 
 from core.db.connection import db_execute, db_fetchrow, db_query
 from core.ingest import process_source
 from core.queue import enqueue
 from core.seeds import find_seed
+from studio.formats import FORMATS
+from intelligence.idea_generator import (
+    has_complete_insights,
+    format_group,
+    parse_json_response,
+)
 
+
+# ---------------------------------------------------------------------------
+# Seed short-circuit
+# ---------------------------------------------------------------------------
 
 async def _attach_seed_to_user(user_id: str, url: str, source_id: str) -> bool:
     """
@@ -51,9 +63,6 @@ async def _attach_seed_to_user(user_id: str, url: str, source_id: str) -> bool:
     seed_episode_id = str(seed_row["episode_id"])
 
     # ── Promote the placeholder source row in place ──────────────────────────
-    # The placeholder already occupies (user_id, url) in the unique index.
-    # Copy title, full_text from the seed source and mark it ready.
-    # If the user somehow already has a ready copy (re-submission), skip.
     already_ready = await db_fetchrow(
         "SELECT id FROM source WHERE id = $id::uuid AND status = 'ready' AND is_seed = true",
         {"id": source_id},
@@ -123,7 +132,6 @@ async def _attach_seed_to_user(user_id: str, url: str, source_id: str) -> bool:
     if existing_episode:
         logger.info(f"[handle_ingest] user already has seed episode, skipping copy")
     else:
-        import uuid as _uuid
         user_episode_id = str(_uuid.uuid4())
         await db_execute(
             """
@@ -150,6 +158,162 @@ async def _attach_seed_to_user(user_id: str, url: str, source_id: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Standalone generation helpers
+# ---------------------------------------------------------------------------
+
+def _validate_format(fmt: str | None) -> str:
+    """Return canonical format name, falling back to clarity_engine."""
+    if fmt and fmt in FORMATS:
+        return fmt
+    return "clarity_engine"
+
+
+async def _load_source_with_insights(source_id: str, user_id: str) -> dict | None:
+    """Load a single source row + its insights for a given user."""
+    row = await db_fetchrow(
+        "SELECT id, title FROM source WHERE id = $id::uuid AND user_id = $user_id",
+        {"id": source_id, "user_id": user_id},
+    )
+    if not row:
+        return None
+
+    insight_rows = await db_query(
+        "SELECT insight_type, content FROM source_insight WHERE source_id = $id::uuid",
+        {"id": source_id},
+    )
+    insights = {r["insight_type"]: r.get("content") for r in (insight_rows or [])}
+    return {"id": str(row["id"]), "title": row.get("title", "Untitled"), "insights": insights}
+
+
+async def _create_episode_and_enqueue(
+    *,
+    user_id: str,
+    idea_row: dict,
+    show_name: str | None,
+    speaker: str | None,
+    length_minutes: int | None,
+    angle_override: str | None,
+) -> str:
+    """
+    Insert an episode row and enqueue a generate_episode job.
+    Returns the new episode_id.
+    """
+    fmt = _validate_format(show_name or idea_row.get("format"))
+    base_direction = idea_row.get("angle", "")
+    if angle_override:
+        editorial_direction = f"{base_direction}. {angle_override}" if base_direction else angle_override
+    else:
+        editorial_direction = base_direction
+
+    episode_id = str(_uuid.uuid4())
+    idea_id = str(idea_row.get("id")) if idea_row.get("id") else None
+    source_ids = idea_row.get("source_ids") or []
+    await db_execute(
+        """
+        INSERT INTO episode
+            (id, user_id, show_name, show_idea_id, editorial_direction,
+             length_minutes, speaker_override, source_ids, status)
+        VALUES
+            ($id::uuid, $user_id, $show, $idea_id::uuid, $direction,
+             $length_minutes, $speaker_override, $source_ids, 'queued')
+        """,
+        {
+            "id": episode_id,
+            "user_id": user_id,
+            "show": fmt,
+            "idea_id": idea_id,
+            "direction": editorial_direction,
+            "length_minutes": length_minutes,
+            "speaker_override": speaker,
+            "source_ids": source_ids,
+        },
+    )
+    if idea_id:
+        await db_execute(
+            "UPDATE show_idea SET generated = true WHERE id = $id::uuid",
+            {"id": idea_id},
+        )
+    await enqueue(
+        type="generate_episode",
+        payload={"episode_id": episode_id, "user_id": user_id},
+        user_id=user_id,
+    )
+    logger.info(f"[ingest] episode {episode_id} enqueued")
+    return episode_id
+
+
+async def _run_standalone(
+    *,
+    user_id: str,
+    source_id: str,
+    show_name: str | None,
+    speaker: str | None,
+    length_minutes: int | None,
+    angle_override: str | None,
+) -> None:
+    """
+    Evaluate a single source using the LLM, write a show_idea, then create
+    an episode with any overrides applied.
+    """
+    source = await _load_source_with_insights(source_id, user_id)
+    if not source:
+        raise ValueError(f"source {source_id} not found for user {user_id}")
+
+    if not has_complete_insights(source):
+        logger.warning(f"[ingest] source {source_id} has no key_insights; proceeding anyway")
+
+    group_id = "g0"
+    group_text = format_group(group_id, "STANDALONE", [source])
+
+    from core.prompts.idea_evaluation import evaluate_single_idea
+    try:
+        prediction = evaluate_single_idea(group_text=group_text)
+        idea = parse_json_response(prediction.idea_json)
+        if isinstance(idea, list):
+            idea = idea[0]
+    except Exception as e:
+        logger.warning(f"[ingest] LLM call failed: {e}; using blank angle")
+        idea = {"type": "standalone", "angle": "", "format": "clarity_engine"}
+
+    fmt = _validate_format(show_name or idea.get("format"))
+    angle = idea.get("angle", "")
+
+    idea_id = str(_uuid.uuid4())
+    from uuid import UUID
+    source_uuid = UUID(source_id.replace("source:", ""))
+    await db_execute(
+        """
+        INSERT INTO show_idea
+            (id, user_id, angle, idea_type, format, source_ids, generated)
+        VALUES
+            ($id::uuid, $user_id, $angle, 'standalone', $format, $source_ids, true)
+        """,
+        {
+            "id": idea_id,
+            "user_id": user_id,
+            "angle": angle,
+            "format": fmt,
+            "source_ids": [source_uuid],
+        },
+    )
+
+    idea_row = {"id": idea_id, "angle": angle, "format": fmt, "source_ids": [source_uuid]}
+    await _create_episode_and_enqueue(
+        user_id=user_id,
+        idea_row=idea_row,
+        show_name=show_name,
+        speaker=speaker,
+        length_minutes=length_minutes,
+        angle_override=angle_override,
+    )
+    logger.info(f"[ingest] standalone: 1 episode created for source {source_id}")
+
+
+# ---------------------------------------------------------------------------
+# Ingest handler
+# ---------------------------------------------------------------------------
+
 async def handle_ingest(payload: dict) -> None:
     source_id = payload.get("source_id")
     if not source_id:
@@ -171,11 +335,9 @@ async def handle_ingest(payload: dict) -> None:
         )
         if short_circuited:
             logger.info(f"[handle_ingest] seed short-circuit complete for url={url}")
-            # Source is already status='ready', hidden=false — nothing more to do.
             return
 
     # ── Normal pipeline ──────────────────────────────────────────────────────
-    # Raises on failure — generation code below never runs if scraping fails
     await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
 
     source_row = await db_fetchrow(
@@ -189,8 +351,6 @@ async def handle_ingest(payload: dict) -> None:
     user_id = source_row["user_id"]
 
     if standalone:
-        # Evaluate this source alone — one focused episode
-        from worker.handlers.generate_from_source import _run_standalone
         logger.info(f"[handle_ingest] standalone=True — running _run_standalone for source_id={source_id}")
         await _run_standalone(
             user_id=user_id,
@@ -201,7 +361,6 @@ async def handle_ingest(payload: dict) -> None:
             angle_override=None,
         )
     else:
-        # Run the full cluster pipeline across all user sources
         existing_job = await db_fetchrow(
             """
             SELECT id FROM jobs

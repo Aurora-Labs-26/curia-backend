@@ -75,7 +75,7 @@ async def setup_seed(url: str) -> None:
     else:
         # ── 3. Generate episode ───────────────────────────────────────────────
         logger.info(f"[setup_seeds] generating seed episode for format={entry.format_name}")
-        from worker.handlers.generate_from_source import _run_standalone
+        from worker.handlers.ingest import _run_standalone
         from worker.handlers.generate_episode import handle_generate_episode
 
         # _run_standalone creates a queued episode row + enqueues a generate_episode job.
