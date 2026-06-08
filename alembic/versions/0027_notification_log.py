@@ -1,14 +1,14 @@
 """Add notification_log table for dedup of scheduled push notifications
 
-Revision ID: 0026_notification_log
-Revises: 0025_source_thumbnail_url
+Revision ID: 0027_notification_log
+Revises: 0026_speaker_pair
 Create Date: 2026-06-08
 """
 
 from alembic import op
 
-revision = "0026_notification_log"
-down_revision = "0025_source_thumbnail_url"
+revision = "0027_notification_log"
+down_revision = "0026_speaker_pair"
 branch_labels = None
 depends_on = None
 
