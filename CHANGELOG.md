@@ -2,6 +2,23 @@
 
 Each entry: **date · who made the change · what changed and why.**
 
+> Companion doc: **`CHANGETHOUGHT.md`** holds the design rationale, AWS-migration plan,
+> frontend↔backend contract, and decision log. This file stays the per-file ledger.
+
+---
+
+## 2026-06-07 · Arihant + Claude (claude-opus-4-8)
+
+### Docs
+Seeded living project-tracking docs ahead of the coordinated frontend + backend changes and
+the Railway→AWS migration. Grounded entirely in a fresh read of both repos (backend `v2.7-final`,
+frontend `v2.8` cloned from `github.com/Aurora-Labs-26/curia-frontend`), correcting stale README claims.
+- **`CHANGETHOUGHT.md`** — new cross-repo design/decision log: two-repo topology, code-grounded
+  backend + frontend summaries, doc-drift corrections (TTS is Hume Octave not edge-tts; S3 storage
+  already implemented; mobile app exists), AWS migration readiness map, frontend↔backend contract
+  mismatches, open questions, and a decision log we maintain during development.
+- **`CHANGELOG.md`** — added pointer to `CHANGETHOUGHT.md` and this seed entry.
+
 ---
 
 ## 2026-05-28 · Arihant + Claude (claude-opus-4-6)
