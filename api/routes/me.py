@@ -57,6 +57,16 @@ async def put_kb(payload: UserKB, user: CurrentUser = Depends(current_user)) -> 
     return payload
 
 
+@router.get("/me/speaker-preference")
+async def get_speaker_preference(user: CurrentUser = Depends(current_user)) -> dict:
+    """Return just the speaker preference fields from user_kb."""
+    kb = await load_kb(user.id)
+    return {
+        "preferred_speaker": kb.preferences.preferred_speaker,
+        "preferred_pair": kb.preferences.preferred_pair,
+    }
+
+
 @router.put("/me/speaker-preference", status_code=204)
 async def put_speaker_preference(
     payload: SpeakerPreferenceRequest,
