@@ -6,10 +6,10 @@ Pydantic request/response models for the FastAPI surface.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -83,8 +83,25 @@ class CreateEpisodeRequest(BaseModel):
     )
     speaker: Optional[Literal["kenji", "arjun", "emeka"]] = Field(
         default=None,
-        description="Override speaker name. One of: kenji, arjun, emeka.",
+        description="Solo speaker override. One of: kenji, arjun, emeka. Mutually exclusive with speaker_pair.",
     )
+    speaker_pair: Optional[List[Literal["kenji", "arjun", "emeka"]]] = Field(
+        default=None,
+        description="Two-host pair override. Exactly 2 distinct names. Ignored if speaker is set.",
+    )
+
+    @field_validator("speaker_pair")
+    @classmethod
+    def validate_speaker_pair(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        if len(v) != 2:
+            raise ValueError("speaker_pair must contain exactly 2 names")
+        if v[0] == v[1]:
+            raise ValueError("speaker_pair must contain 2 distinct names")
+        # Sort by priority: kenji=1, arjun=2, emeka=3
+        priority = {"kenji": 1, "arjun": 2, "emeka": 3}
+        return sorted(v, key=lambda s: priority.get(s, 99))
 
 
 class EpisodeSummary(BaseModel):

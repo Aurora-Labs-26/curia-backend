@@ -7,13 +7,147 @@ The source row already exists (created by API). Worker scrapes → transforms �
 then triggers generation:
   standalone=True  → evaluate this source alone (_run_standalone)
   standalone=False → run full cluster pipeline (generate_ideas)
+
+Seed short-circuit: if the URL is a known seed URL, skip the full pipeline and
+promote the placeholder source in place + copy the pre-baked episode to the user instantly.
 """
 
 from loguru import logger
 
-from core.db.connection import db_fetchrow
+from core.db.connection import db_execute, db_fetchrow, db_query
 from core.ingest import process_source
 from core.queue import enqueue
+from core.seeds import find_seed
+
+
+async def _attach_seed_to_user(user_id: str, url: str, source_id: str) -> bool:
+    """
+    If url is a seed URL and the seed has been set up, promote the placeholder
+    source row in place and copy the pre-baked episode to user_id.
+    Returns True if short-circuit succeeded, False otherwise.
+
+    Key design decisions:
+    - We CANNOT insert a new source row because (user_id, url) is unique — the
+      API already created a placeholder with that pair. Instead we UPDATE the
+      placeholder in place, copying title/full_text from the seed source.
+    - We do NOT set hidden=true on the source. It must remain visible in the pile.
+    """
+    entry = find_seed(url)
+    if not entry:
+        return False
+
+    # Use the canonical URL from the SeedEntry for the DB lookup — the payload
+    # url may have been normalised (trailing slash stripped, etc.) and won't
+    # match the stored key if they differ.
+    seed_row = await db_fetchrow(
+        "SELECT source_id, episode_id FROM seed_url WHERE url = $url",
+        {"url": entry.url},
+    )
+    if not seed_row or not seed_row["source_id"] or not seed_row["episode_id"]:
+        logger.info(f"[handle_ingest] seed URL detected but not yet set up — running normal pipeline for {url}")
+        return False
+
+    seed_source_id = str(seed_row["source_id"])
+    seed_episode_id = str(seed_row["episode_id"])
+
+    # ── Promote the placeholder source row in place ──────────────────────────
+    # The placeholder already occupies (user_id, url) in the unique index.
+    # Copy title, full_text from the seed source and mark it ready.
+    # If the user somehow already has a ready copy (re-submission), skip.
+    already_ready = await db_fetchrow(
+        "SELECT id FROM source WHERE id = $id::uuid AND status = 'ready' AND is_seed = true",
+        {"id": source_id},
+    )
+    if already_ready:
+        logger.info(f"[handle_ingest] placeholder already promoted, skipping: source_id={source_id}")
+    else:
+        await db_execute(
+            """
+            UPDATE source
+            SET title      = s.title,
+                full_text  = s.full_text,
+                is_seed    = true,
+                status     = 'ready',
+                hidden     = false,
+                pool       = 'user',
+                updated_at = now()
+            FROM source s
+            WHERE source.id = $placeholder_id::uuid
+              AND s.id       = $seed_source_id::uuid
+            """,
+            {"placeholder_id": source_id, "seed_source_id": seed_source_id},
+        )
+
+        # Copy source_insight rows
+        await db_execute(
+            """
+            INSERT INTO source_insight (id, source_id, insight_type, content)
+            SELECT gen_random_uuid(), $source_id::uuid, insight_type, content
+            FROM source_insight WHERE source_id = $seed_source_id::uuid
+            ON CONFLICT DO NOTHING
+            """,
+            {"source_id": source_id, "seed_source_id": seed_source_id},
+        )
+
+        # Copy source_embedding rows
+        await db_execute(
+            """
+            INSERT INTO source_embedding (id, source_id, chunk_index, chunk_text, embedding)
+            SELECT gen_random_uuid(), $source_id::uuid, chunk_index, chunk_text, embedding
+            FROM source_embedding WHERE source_id = $seed_source_id::uuid
+            """,
+            {"source_id": source_id, "seed_source_id": seed_source_id},
+        )
+
+        # Copy source_primitive_embedding
+        await db_execute(
+            """
+            INSERT INTO source_primitive_embedding (source_id, embedding)
+            SELECT $source_id::uuid, embedding
+            FROM source_primitive_embedding WHERE source_id = $seed_source_id::uuid
+            ON CONFLICT (source_id) DO NOTHING
+            """,
+            {"source_id": source_id, "seed_source_id": seed_source_id},
+        )
+
+        logger.info(f"[handle_ingest] promoted placeholder to seed source: source_id={source_id}")
+
+    # ── Copy seed episode to user ────────────────────────────────────────────
+    existing_episode = await db_fetchrow(
+        """
+        SELECT id FROM episode
+        WHERE user_id = $user_id AND $source_id::uuid = ANY(source_ids) AND is_seed = true
+        """,
+        {"user_id": user_id, "source_id": source_id},
+    )
+    if existing_episode:
+        logger.info(f"[handle_ingest] user already has seed episode, skipping copy")
+    else:
+        import uuid as _uuid
+        user_episode_id = str(_uuid.uuid4())
+        await db_execute(
+            """
+            INSERT INTO episode
+                (id, user_id, show_name, title, transcript, outline, editorial_direction,
+                 source_ids, audio_path, audio_url, status, quality_score, tts_timings,
+                 duration_seconds, description, chapters, is_seed)
+            SELECT
+                $new_id::uuid, $user_id, show_name, title, transcript, outline,
+                editorial_direction,
+                ARRAY[$source_id::uuid], audio_path, audio_url, status,
+                quality_score, tts_timings, duration_seconds, description, chapters, true
+            FROM episode WHERE id = $seed_episode_id::uuid
+            """,
+            {
+                "new_id": user_episode_id,
+                "user_id": user_id,
+                "source_id": source_id,
+                "seed_episode_id": seed_episode_id,
+            },
+        )
+        logger.info(f"[handle_ingest] copied seed episode to user: episode_id={user_episode_id}")
+
+    return True
 
 
 async def handle_ingest(payload: dict) -> None:
@@ -25,9 +159,22 @@ async def handle_ingest(payload: dict) -> None:
     max_attempts = payload.get("__max_attempts__", 1)
     is_final_attempt = attempt >= max_attempts
     standalone = payload.get("standalone", True)
+    url = payload.get("url", "")
+    user_id_from_payload = payload.get("user_id", "")
 
     logger.info(f"[handle_ingest] source_id={source_id} attempt={attempt}/{max_attempts} standalone={standalone}")
 
+    # ── Seed short-circuit ───────────────────────────────────────────────────
+    if url and user_id_from_payload:
+        short_circuited = await _attach_seed_to_user(
+            user_id=user_id_from_payload, url=url, source_id=source_id
+        )
+        if short_circuited:
+            logger.info(f"[handle_ingest] seed short-circuit complete for url={url}")
+            # Source is already status='ready', hidden=false — nothing more to do.
+            return
+
+    # ── Normal pipeline ──────────────────────────────────────────────────────
     # Raises on failure — generation code below never runs if scraping fails
     await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
 

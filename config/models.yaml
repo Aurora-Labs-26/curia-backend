@@ -394,7 +394,7 @@ bindings:
       voice_id: zorin
     emeka:
       model: smallest-lightning
-      voice_id: julia
+      voice_id: vanessa
 
   # ── Hume (premium, word-level timestamps) ─────────────────────────────────
   # Uncomment and comment out Smallest.ai above to switch back to Hume.

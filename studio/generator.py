@@ -28,7 +28,7 @@ sys.path.insert(0, str(CURIA_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 load_dotenv(dotenv_path=CURIA_ROOT / ".env")
 
-from shows.profiles import SHOW_PROFILES, SPEAKER_PROFILES
+from shows.profiles import EpisodeProfile, SpeakerProfile, SHOW_PROFILES, SPEAKER_PROFILES
 from briefing_builder import build_briefing_packet, briefing_packet_to_str
 from intelligence.selector import select_episode_sources, get_source_insights
 from core.db.connection import db_execute, db_fetchrow, db_query
@@ -210,6 +210,7 @@ def generate_transcript_two_host(
     outline: dict,
     show_name: str,
     user_kb: UserKB | None = None,
+    profile_override: "EpisodeProfile | None" = None,
 ) -> list[dict]:
     """
     Three-call two-host transcript pipeline:
@@ -218,11 +219,12 @@ def generate_transcript_two_host(
       3. Merger interleaves into natural dialogue with intro/outro
 
     The role difference is encoded in the speaker backstory/patterns in profiles.py.
+    profile_override: pass a dynamically-built EpisodeProfile to use custom speaker pairs.
     Returns the merged transcript as [{speaker, text}, ...].
     """
     import time as _time
 
-    profile = SHOW_PROFILES[show_name]
+    profile = profile_override if profile_override is not None else SHOW_PROFILES[show_name]
     llm_log = logger.bind(log_type="llm")
     logger.info(f"Generating two-host transcript (show={show_name})...")
 
@@ -519,6 +521,7 @@ def synthesize_and_stitch_v2(
     show_name: str,
     output_path: str,
     speaker_override: str | None = None,
+    speaker_pair: list[str] | None = None,
 ) -> tuple[str, list[dict]]:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
@@ -537,6 +540,8 @@ def synthesize_and_stitch_v2(
     profile = SHOW_PROFILES[show_name]
     if speaker_override and speaker_override in SPEAKER_PROFILES:
         allowed_speakers = {speaker_override.lower()}
+    elif speaker_pair and len(speaker_pair) == 2:
+        allowed_speakers = {s.lower() for s in speaker_pair}
     else:
         allowed_speakers = {s.name.lower() for s in profile.speaker_config.speakers}
 
@@ -823,7 +828,7 @@ async def process_episode(episode_id: str) -> None:
     row = await db_fetchrow(
         """
         SELECT user_id, show_name, show_idea_id, editorial_direction,
-               length_minutes, speaker_override
+               length_minutes, speaker_override, speaker_pair
         FROM episode WHERE id = $id::uuid
         """,
         {"id": episode_id},
@@ -837,6 +842,7 @@ async def process_episode(episode_id: str) -> None:
     editorial_direction = row.get("editorial_direction") or ""
     length_override: int | None = row.get("length_minutes")
     speaker_override: str | None = row.get("speaker_override")
+    speaker_pair: list[str] | None = row.get("speaker_pair")
 
     if show_name not in SHOW_PROFILES:
         raise ValueError(
@@ -848,6 +854,32 @@ async def process_episode(episode_id: str) -> None:
     worker_log = logger.bind(log_type="worker")
 
     profile = SHOW_PROFILES[show_name]
+
+    # If a speaker_pair override was provided (and no single-host override),
+    # build a dynamic two-host profile using the priority-sorted pair.
+    # Priority is already sorted at the API layer (kenji=1, arjun=2, emeka=3).
+    if speaker_pair and len(speaker_pair) == 2 and not speaker_override:
+        a, b = speaker_pair
+        if a not in SPEAKER_PROFILES or b not in SPEAKER_PROFILES:
+            logger.warning(f"  unknown speaker in pair {speaker_pair}, falling back to profile default")
+        else:
+            speaker_a = SPEAKER_PROFILES[a].speakers[0]
+            speaker_b = SPEAKER_PROFILES[b].speakers[0]
+            dynamic_config = SpeakerProfile(
+                name=f"{a}_{b}",
+                speakers=[speaker_a, speaker_b],
+            )
+            profile = EpisodeProfile(
+                name=profile.name,
+                format_name=profile.format_name,
+                language=profile.language,
+                speaker_config=dynamic_config,
+                intro_audio_path=profile.intro_audio_path,
+                outro_audio_path=profile.outro_audio_path,
+                music_audio_path=profile.music_audio_path,
+                music_gain_db=profile.music_gain_db,
+            )
+            logger.info(f"  speaker_pair override → {a} (role A) + {b} (role B)")
     logger.info(f"--- Processing episode {episode_id} (show={show_name}, user={user_id}) ---")
     worker_log.info(
         f"EPISODE_START | id={episode_id} show={show_name} user={user_id}"
@@ -897,7 +929,7 @@ async def process_episode(episode_id: str) -> None:
             logger.info(f"  two-host pipeline (speakers: {[s.name for s in profile.speaker_config.speakers]})")
             transcript = await loop.run_in_executor(
                 None, generate_transcript_two_host,
-                briefing, outline, show_name, user_kb,
+                briefing, outline, show_name, user_kb, profile,
             )
         else:
             transcript = await loop.run_in_executor(
@@ -929,7 +961,7 @@ async def process_episode(episode_id: str) -> None:
             if is_two_host:
                 transcript_v2 = await loop.run_in_executor(
                     None, generate_transcript_two_host,
-                    briefing, outline, show_name, user_kb,
+                    briefing, outline, show_name, user_kb, profile,
                 )
             else:
                 transcript_v2 = await loop.run_in_executor(
@@ -964,7 +996,7 @@ async def process_episode(episode_id: str) -> None:
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
         _, tts_timings = await loop.run_in_executor(
             None, synthesize_and_stitch_v2,
-            transcript, show_name, audio_path, speaker_override,
+            transcript, show_name, audio_path, speaker_override, speaker_pair,
         )
 
         # 6. Persist results onto the existing row
