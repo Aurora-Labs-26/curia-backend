@@ -855,9 +855,28 @@ async def process_episode(episode_id: str) -> None:
 
     profile = SHOW_PROFILES[show_name]
 
-    # If a speaker_pair override was provided (and no single-host override),
-    # build a dynamic two-host profile using the priority-sorted pair.
-    # Priority is already sorted at the API layer (kenji=1, arjun=2, emeka=3).
+    # Load the user's KB first — needed for speaker fallback + editorial hints.
+    try:
+        user_kb = await load_kb(user_id)
+    except Exception as e:
+        logger.warning(f"  could not load KB for {user_id}: {e}; proceeding without")
+        user_kb = None
+
+    # KB fallback for speaker selection — only when episode row has no explicit override.
+    # Remix and createEpisode always set speaker_pair/speaker_override on the row,
+    # so they are never affected. This path fires for ingest-triggered episodes.
+    if not speaker_pair and not speaker_override and user_kb is not None:
+        kb_pair = user_kb.preferences.preferred_pair
+        kb_speaker = user_kb.preferences.preferred_speaker
+        if kb_pair and len(kb_pair) == 2:
+            speaker_pair = kb_pair
+            logger.info(f"  speaker_pair from KB preference → {speaker_pair}")
+        elif kb_speaker:
+            speaker_override = kb_speaker
+            logger.info(f"  speaker_override from KB preference → {speaker_override}")
+
+    # If a speaker_pair is set (from episode row or KB fallback), build a dynamic
+    # two-host profile. Priority sort already applied at API layer or KB save time.
     if speaker_pair and len(speaker_pair) == 2 and not speaker_override:
         a, b = speaker_pair
         if a not in SPEAKER_PROFILES or b not in SPEAKER_PROFILES:
@@ -884,13 +903,6 @@ async def process_episode(episode_id: str) -> None:
     worker_log.info(
         f"EPISODE_START | id={episode_id} show={show_name} user={user_id}"
     )
-
-    # Load the user's KB once; propagate to selector, briefing, transcript.
-    try:
-        user_kb = await load_kb(user_id)
-    except Exception as e:
-        logger.warning(f"  could not load KB for {user_id}: {e}; proceeding without")
-        user_kb = None
 
     try:
         # 1. Select sources (KB seeds editorial direction when none was provided)

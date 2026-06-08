@@ -1,5 +1,8 @@
 """GET /me, GET/PUT /me/kb, GET /me/rubric/{task}, PUT /me/fcm-token — current user surface."""
 
+import json
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
 
@@ -15,6 +18,11 @@ router = APIRouter()
 
 class FcmTokenRequest(BaseModel):
     token: str
+
+
+class SpeakerPreferenceRequest(BaseModel):
+    preferred_speaker: Optional[str] = None   # single-host: "kenji" | "arjun" | "emeka"
+    preferred_pair: Optional[List[str]] = None  # two-host: ["kenji", "emeka"]
 
 
 @router.get("/me", response_model=MeResponse)
@@ -47,6 +55,40 @@ async def put_kb(payload: UserKB, user: CurrentUser = Depends(current_user)) -> 
     """
     await save_kb(user.id, payload)
     return payload
+
+
+@router.put("/me/speaker-preference", status_code=204)
+async def put_speaker_preference(
+    payload: SpeakerPreferenceRequest,
+    user: CurrentUser = Depends(current_user),
+) -> None:
+    """
+    Atomic update of speaker preferences in user_kb.
+    Uses a targeted jsonb_set so it never overwrites other KB fields.
+    """
+    await db_execute(
+        """
+        UPDATE users
+        SET user_kb = user_kb
+            || jsonb_build_object(
+                'preferences', COALESCE(user_kb->'preferences', '{}'::jsonb)
+                || jsonb_build_object(
+                    'preferred_speaker', $preferred_speaker::text,
+                    'preferred_pair',    $preferred_pair::jsonb
+                )
+            ),
+            updated_at = now()
+        WHERE id = $id
+        """,
+        {
+            "id": user.id,
+            "preferred_speaker": payload.preferred_speaker,
+            "preferred_pair": (
+                json.dumps(payload.preferred_pair)
+                if payload.preferred_pair is not None else "null"
+            ),
+        },
+    )
 
 
 @router.put("/me/fcm-token", status_code=204)
