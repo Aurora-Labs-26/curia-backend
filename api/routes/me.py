@@ -79,7 +79,7 @@ async def put_speaker_preference(
     await db_execute(
         """
         UPDATE users
-        SET user_kb = user_kb
+        SET user_kb = COALESCE(user_kb, '{}'::jsonb)
             || jsonb_build_object(
                 'preferences', COALESCE(user_kb->'preferences', '{}'::jsonb)
                 || jsonb_build_object(

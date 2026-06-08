@@ -865,13 +865,16 @@ async def process_episode(episode_id: str) -> None:
     # KB fallback for speaker selection — only when episode row has no explicit override.
     # Remix and createEpisode always set speaker_pair/speaker_override on the row,
     # so they are never affected. This path fires for ingest-triggered episodes.
+    # We check the format's default speaker count to decide which KB field applies:
+    # two-host formats → preferred_pair; single-host formats → preferred_speaker.
     if not speaker_pair and not speaker_override and user_kb is not None:
         kb_pair = user_kb.preferences.preferred_pair
         kb_speaker = user_kb.preferences.preferred_speaker
-        if kb_pair and len(kb_pair) == 2:
+        format_is_two_host = len(profile.speaker_config.speakers) >= 2
+        if format_is_two_host and kb_pair and len(kb_pair) == 2:
             speaker_pair = kb_pair
             logger.info(f"  speaker_pair from KB preference → {speaker_pair}")
-        elif kb_speaker:
+        elif not format_is_two_host and kb_speaker:
             speaker_override = kb_speaker
             logger.info(f"  speaker_override from KB preference → {speaker_override}")
 
