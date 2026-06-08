@@ -26,7 +26,7 @@ from core.prompts.idea_evaluation import (
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
 
-SIMILARITY_THRESHOLD = 0.70   # min cosine score on primitive embeddings to form a clique
+SIMILARITY_THRESHOLD = 0.55   # min cosine score on primitive embeddings to form a clique
 MAX_CLUSTER_SIZE = 5          # cap cluster size to keep episodes focused
 
 

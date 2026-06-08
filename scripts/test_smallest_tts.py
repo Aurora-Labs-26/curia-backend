@@ -21,7 +21,7 @@ from core.tts import synthesize_for_speaker
 TESTS = [
     ("kenji",  "emily",  "Memory isn't a recording device. It's a reconstruction machine."),
     ("arjun",  "george", "The interesting questions are always upstream of the policy solution."),
-    ("emeka",  "james",  "Most coordination problems look like technical problems until they don't."),
+    ("emeka",  "vanessa",  "Most coordination problems look like technical problems until they don't."),
 ]
 
 def main():

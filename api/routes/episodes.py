@@ -40,10 +40,10 @@ async def create_episode(
         """
         INSERT INTO episode
             (id, user_id, show_name, show_idea_id, editorial_direction,
-             length_minutes, speaker_override, status)
+             length_minutes, speaker_override, speaker_pair, status)
         VALUES
             ($id::uuid, $user_id, $show, $idea_id::uuid, $direction,
-             $length_minutes, $speaker_override, 'queued')
+             $length_minutes, $speaker_override, $speaker_pair, 'queued')
         """,
         {
             "id": episode_id,
@@ -53,6 +53,7 @@ async def create_episode(
             "direction": req.editorial_direction or "",
             "length_minutes": req.length_minutes,
             "speaker_override": req.speaker,
+            "speaker_pair": req.speaker_pair if not req.speaker else None,
         },
     )
     job_id = await enqueue(
@@ -113,7 +114,7 @@ async def list_episodes(
         src_rows = await db_query(
             """
             SELECT id, url, title FROM source
-            WHERE id = ANY($ids) AND user_id = $user_id
+            WHERE id = ANY($ids) AND (user_id = $user_id OR (is_seed = true AND user_id = 'seed'))
             """,
             {"ids": all_source_uuids, "user_id": user_id},
         )
@@ -153,7 +154,7 @@ async def get_episode(
                quality_score, quality_feedback, quality_violations, regenerated,
                length_minutes, speaker_override, tts_timings
         FROM episode
-        WHERE id = $id::uuid AND user_id = $user_id
+        WHERE id = $id::uuid AND (user_id = $user_id OR (is_seed = true AND user_id = 'seed'))
         """,
         {"id": str(episode_id), "user_id": user_id},
     )
@@ -175,7 +176,7 @@ async def get_episode(
             src_rows = await db_query(
                 """
                 SELECT id, url, title FROM source
-                WHERE id = ANY($ids) AND user_id = $user_id
+                WHERE id = ANY($ids) AND (user_id = $user_id OR (is_seed = true AND user_id = 'seed'))
                 """,
                 {"ids": source_uuids, "user_id": user_id},
             )
@@ -264,7 +265,7 @@ async def get_episode_audio(
     row = await db_fetchrow(
         """
         SELECT audio_path, audio_url, status, title FROM episode
-        WHERE id = $id::uuid AND user_id = $user_id
+        WHERE id = $id::uuid AND (user_id = $user_id OR (is_seed = true AND user_id = 'seed'))
         """,
         {"id": str(episode_id), "user_id": user_id},
     )

@@ -156,17 +156,17 @@ CLARITY_ENGINE_SPEAKERS = SpeakerProfile(
             ),
         ),
         Speaker(
-            name="arjun",
+            name="emeka",
             backstory=(
-                "Economist turned essayist. Spent a decade in policy before deciding "
-                "the interesting questions were upstream of any policy solution."
+                "Systems thinker with a background in infrastructure and urban planning. "
+                "Believes most interesting problems are coordination problems in disguise."
             ),
             speech_patterns=(
-                "Asks short, pointed questions. "
-                "Says 'wait' or 'hold on' when something doesn't click. "
-                "Paraphrases back what he heard to check understanding. "
-                "When satisfied, says so plainly: 'okay, that makes sense.' "
-                "Pushes for examples when the explanation stays abstract."
+                "Asks short, direct questions. "
+                "Says 'wait' or 'hold on' when the logic doesn't land. "
+                "Connects the explanation to a real-world system or mechanism. "
+                "When satisfied, moves on quickly without over-affirming. "
+                "Pushes for specifics when the answer stays abstract."
             ),
         ),
     ],
@@ -208,16 +208,16 @@ EXPLORATION_ENGINE_SPEAKERS = SpeakerProfile(
             ),
         ),
         Speaker(
-            name="arjun",
+            name="emeka",
             backstory=(
-                "Economist turned essayist. Spent a decade in policy before deciding "
-                "the interesting questions were upstream of any policy solution."
+                "Systems thinker with a background in infrastructure and urban planning. "
+                "Believes most interesting problems are coordination problems in disguise."
             ),
             speech_patterns=(
-                "Builds arguments step by step. "
-                "Sits with tension before resolving it. "
+                "Moves fast between ideas. "
                 "Uses 'but what if' and 'there's another way to read this' to pivot. "
-                "Concedes partial points clearly before pressing his own. "
+                "Connects counter-arguments to structural or systemic patterns. "
+                "Concedes partial points clearly before pressing her own. "
                 "Ends exchanges with a reframe that shifts the lens."
             ),
         ),
