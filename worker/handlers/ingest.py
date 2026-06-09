@@ -338,7 +338,15 @@ async def handle_ingest(payload: dict) -> None:
             return
 
     # ── Normal pipeline ──────────────────────────────────────────────────────
-    await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
+    try:
+        await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
+    except Exception as exc:
+        if is_final_attempt:
+            await db_execute(
+                "UPDATE source SET status = 'failed', error = $error WHERE id = $source_id::uuid",
+                {"source_id": source_id, "error": str(exc)},
+            )
+        raise
 
     source_row = await db_fetchrow(
         "SELECT user_id FROM source WHERE id = $source_id::uuid",

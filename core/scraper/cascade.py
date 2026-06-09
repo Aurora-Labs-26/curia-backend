@@ -85,10 +85,6 @@ async def scrape(url: str) -> tuple[str, str]:
     # Resolve any redirects (e.g. open.substack.com share links → real article URL)
     url = await resolve_redirects(url)
 
-    head = await head_check(url)
-    if not head.ok:
-        raise PermanentError(head.reason)
-
     hostname = (urlparse(url).hostname or "").lower()
     is_paywall_domain = is_likely_paywalled(hostname)
     is_twitter = is_twitter_url(url)
@@ -96,6 +92,10 @@ async def scrape(url: str) -> tuple[str, str]:
     if is_twitter:
         logger.info(f"[scraper] Twitter/X URL detected — going straight to firecrawl")
         return await _try_firecrawl_or_fail(url, is_paywall_domain)
+
+    head = await head_check(url)
+    if not head.ok:
+        raise PermanentError(head.reason)
 
     try:
         content, title = await _scrape_trafilatura(url)

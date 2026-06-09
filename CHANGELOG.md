@@ -4,6 +4,15 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-09 · Claude (claude-sonnet-4-6)
+
+### Bug Fix
+Two scraper fixes for stuck sources.
+- **`core/scraper/cascade.py`** — moved `is_twitter` check before `head_check` so X.com links go straight to Firecrawl instead of failing on the 403 HEAD response
+- **`worker/handlers/ingest.py`** — on final attempt failure, write `status='failed'` + error back to source row; previously sources stayed in `scraping` indefinitely
+
+---
+
 ## 2026-06-08 · Claude (claude-sonnet-4-6)
 
 ### Feature
