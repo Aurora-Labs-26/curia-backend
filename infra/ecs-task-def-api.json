@@ -15,6 +15,9 @@
       "essential": true,
       "environment": [
         { "name": "CURIA_ENV", "value": "prod" },
+        { "name": "CURIA_QUEUE_BACKEND", "value": "sqs" },
+        { "name": "CURIA_SQS_INTERACTIVE_URL", "value": "https://sqs.us-east-1.amazonaws.com/617341601034/curia-interactive" },
+        { "name": "CURIA_SQS_BACKGROUND_URL", "value": "https://sqs.us-east-1.amazonaws.com/617341601034/curia-background" },
         { "name": "CURIA_STORAGE_BACKEND", "value": "s3" },
         { "name": "CURIA_S3_BUCKET", "value": "curia-audio" },
         { "name": "CURIA_S3_REGION", "value": "us-east-1" },

@@ -19,6 +19,10 @@ SQS queue backend (Phase 4) — switchable transport behind the existing queue i
 - **`tests/test_worker_reliability.py`** — timeout-wrapper test follows the `_execute` refactor and now asserts both transport paths route through it
 
 ### Bug Fix
+- **`worker/handlers/ingest.py`** — idempotency guard made baton-aware: the original "source ready → skip" guard could drop the chained episode if ingest succeeded but the chain-enqueue failed (redelivery would skip and never spawn the episode). Now: ready + episode exists → skip (true duplicate); ready + no episode → skip the re-scrape but resume the chain.
+- **`infra/ecs-task-def-api.json`**, **`infra/ecs-task-def-worker-{interactive,background}.json`** — SQS env (backend toggle, queue URLs, worker lane); two lane worker families replace the single worker def
+
+### Bug Fix
 - **`core/notifications.py`** — notification dedup was check-then-send (racy across multiple worker tasks: both pass the NOT-EXISTS check, both push). Now claim-first: atomic `INSERT … ON CONFLICT DO NOTHING RETURNING` claims the (user, type, day) before sending; loser skips; claim released on send failure so the day isn't burned
 
 ### Config

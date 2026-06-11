@@ -1,0 +1,101 @@
+{
+  "family": "curia-worker-background",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::617341601034:role/curia-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::617341601034:role/curia-worker-task-role",
+  "containerDefinitions": [
+    {
+      "name": "worker",
+      "image": "617341601034.dkr.ecr.us-east-1.amazonaws.com/curia:latest",
+      "command": [
+        "python",
+        "-m",
+        "worker.main"
+      ],
+      "essential": true,
+      "stopTimeout": 120,
+      "environment": [
+        {
+          "name": "CURIA_ENV",
+          "value": "prod"
+        },
+        {
+          "name": "CURIA_STORAGE_BACKEND",
+          "value": "s3"
+        },
+        {
+          "name": "CURIA_S3_BUCKET",
+          "value": "curia-audio"
+        },
+        {
+          "name": "CURIA_S3_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "CURIA_WORKER_POLL_SECONDS",
+          "value": "2"
+        },
+        {
+          "name": "CURIA_HANDLER_TIMEOUT_SECONDS",
+          "value": "600"
+        },
+        {
+          "name": "CURIA_QUEUE_BACKEND",
+          "value": "sqs"
+        },
+        {
+          "name": "CURIA_SQS_INTERACTIVE_URL",
+          "value": "https://sqs.us-east-1.amazonaws.com/617341601034/curia-interactive"
+        },
+        {
+          "name": "CURIA_SQS_BACKGROUND_URL",
+          "value": "https://sqs.us-east-1.amazonaws.com/617341601034/curia-background"
+        },
+        {
+          "name": "CURIA_WORKER_LANE",
+          "value": "background"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/database-url"
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/anthropic-api-key"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/openai-api-key"
+        },
+        {
+          "name": "FIRECRAWL_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firecrawl-api-key"
+        },
+        {
+          "name": "SMALLEST_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/smallest-api-key"
+        },
+        {
+          "name": "FIREBASE_SERVICE_ACCOUNT_JSON",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firebase-service-account"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/curia-worker",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "worker-background",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

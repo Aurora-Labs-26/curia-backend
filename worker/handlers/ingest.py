@@ -329,15 +329,24 @@ async def handle_ingest(payload: dict) -> None:
     logger.info(f"[handle_ingest] source_id={source_id} attempt={attempt}/{max_attempts} standalone={standalone}")
 
     # ── Idempotency guard (SQS delivers at-least-once) ───────────────────────
-    # A duplicate delivery of a completed ingest must be a no-op. Mid-states
-    # (scraping/transforming/…) mean a previous attempt died — re-run is correct.
+    # Baton-aware: a redelivery may mean (a) true duplicate — ingest AND its
+    # chained generation both happened → no-op; or (b) dropped baton — ingest
+    # finished but the chain-enqueue failed → skip the re-scrape, resume the
+    # chain. Mid-states (scraping/…) mean a previous attempt died → full re-run.
     guard_row = await db_fetchrow(
         "SELECT status FROM source WHERE id = $source_id::uuid",
         {"source_id": source_id},
     )
-    if guard_row and guard_row["status"] == "ready":
-        logger.info(f"[handle_ingest] source {source_id} already ready — skipping (duplicate delivery)")
-        return
+    already_ingested = bool(guard_row and guard_row["status"] == "ready")
+    if already_ingested and standalone:
+        episode_row = await db_fetchrow(
+            "SELECT id FROM episode WHERE source_ids @> ARRAY[$source_id::uuid] LIMIT 1",
+            {"source_id": source_id},
+        )
+        if episode_row:
+            logger.info(f"[handle_ingest] source {source_id} ready + episode exists — skipping (duplicate delivery)")
+            return
+        logger.info(f"[handle_ingest] source {source_id} ready but no episode — resuming dropped chain")
 
     # ── Seed short-circuit ───────────────────────────────────────────────────
     if url and user_id_from_payload:
@@ -349,15 +358,18 @@ async def handle_ingest(payload: dict) -> None:
             return
 
     # ── Normal pipeline ──────────────────────────────────────────────────────
-    try:
-        await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
-    except Exception as exc:
-        if is_final_attempt:
-            await db_execute(
-                "UPDATE source SET status = 'failed', error = $error WHERE id = $source_id::uuid",
-                {"source_id": source_id, "error": str(exc)},
-            )
-        raise
+    if already_ingested:
+        logger.info(f"[handle_ingest] skipping re-ingest of ready source {source_id}; proceeding to chain")
+    else:
+        try:
+            await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
+        except Exception as exc:
+            if is_final_attempt:
+                await db_execute(
+                    "UPDATE source SET status = 'failed', error = $error WHERE id = $source_id::uuid",
+                    {"source_id": source_id, "error": str(exc)},
+                )
+            raise
 
     source_row = await db_fetchrow(
         "SELECT user_id FROM source WHERE id = $source_id::uuid",
