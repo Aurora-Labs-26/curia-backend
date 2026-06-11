@@ -364,7 +364,13 @@ async def handle_ingest(payload: dict) -> None:
         try:
             await process_source(source_id=source_id, is_final_attempt=is_final_attempt)
         except Exception as exc:
-            if is_final_attempt:
+            from core.errors import PermanentError
+
+            # Mark the source failed when no retry will follow: last attempt, OR a
+            # PermanentError (deleted immediately, never retried) on any attempt.
+            # Otherwise a 403/404 on attempt 1 leaves the source 'scraping' forever
+            # and the app shows a perpetual Queued card.
+            if is_final_attempt or isinstance(exc, PermanentError):
                 await db_execute(
                     "UPDATE source SET status = 'failed', error = $error WHERE id = $source_id::uuid",
                     {"source_id": source_id, "error": str(exc)},

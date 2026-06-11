@@ -191,6 +191,22 @@ resolution in §7.
 > Append decisions here as `### YYYY-MM-DD — <decision>` with the rationale and who decided.
 > Empty for now; we'll fill it as we make calls.
 
+### 2026-06-11 — Phase 4 SHIPPED: SQS live, e2e proven
+- Deployed on branch `v2.7-sqs` (commits 49a91bf + 7e21a52). API publishes to SQS; two lane
+  worker services with backlog autoscaling; old worker parked (= rollback path).
+- **E2E proof:** PG-essay save → interactive ingest <1 min → chained episode on background →
+  ready ~3 min, MP3 on S3, presigned playback works. Failure path proven via Wikipedia 403:
+  3 visibility-spaced retries, hard stop at maxReceiveCount, truthful audit row.
+- **Design lesson captured (from Arihant's "is there no other way" question):** handler-chaining
+  is the lightest of four pipeline patterns (vs one-big-job / Step Functions / event
+  choreography); its known weakness is the *dropped baton* — and the first idempotency guard
+  made it worse (ready→skip could swallow the chained episode after an enqueue failure). Fixed
+  with a **baton-aware guard**: ready + episode exists → skip; ready + no episode → resume
+  chain without re-scraping. If pipelines grow (daily briefs, fan-out), Step Functions is the
+  natural upgrade and the per-stage job split makes that migration cheap.
+- **Open:** DLQ-arrival confirmation; `source.status` cosmetic bug on 403 path; Phase 5
+  (domain+HTTPS, final data sync, cutover, alarms).
+
 ### 2026-06-11 — SQS implementation design locked (Phase 4)
 - **Queues:** `curia-interactive` + `curia-background`, standard, + one DLQ each.
   Visibility **900s** both (> proven 600s handler cap; prod history: episodes run ~3 min p50,

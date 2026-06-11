@@ -173,7 +173,19 @@ Fargate CPU architecture chosen in the task def, or use Fargate ARM64 and skip t
 - Create user via one-off task or temp public exec; `POST /sources` end-to-end; watch
   CloudWatch log groups `/ecs/curia-api`, `/ecs/curia-worker`.
 
-## Phase 4 — SQS swap (the only code work)
+## Phase 4 — SQS swap ✅ SHIPPED 2026-06-11 (branch `v2.7-sqs`)
+
+**Live state:** API `curia-api:2` publishes to SQS · workers `curia-worker-interactive:1` /
+`curia-worker-background:1` (autoscaling: interactive 1–4 @ backlog 1, background 1–6 @ backlog 3)
+· old `curia-worker` parked at 0 (rollback path: `curia-api:1` + rescale it).
+**E2E proven:** save URL → interactive ingest (<1 min) → chained episode on background →
+ready in ~3 min → 10.4MB MP3 on S3 → presigned playback (HTTP 206, valid MP3). Failure path
+proven by Wikipedia-403 run: 3 visibility-spaced retries → hard stop → audit `failed`.
+**Pending checks:** DLQ arrival of the failed message (redrive fires on next delivery attempt
+after final visibility window); `source.status` stuck at `scraping` (error column set) on the
+403 path — cosmetic, investigate.
+
+### Original design (implemented)
 - 2 queues + 2 DLQs: `curia-interactive` (visibility 180s, maxReceiveCount 3),
   `curia-background` (visibility **900s** > 600s handler timeout, maxReceiveCount 3).
 - Code: `lane` param + boto3 in `core/queue.py` (same signatures); `worker/main.py` long-poll +

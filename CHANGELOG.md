@@ -19,6 +19,9 @@ SQS queue backend (Phase 4) — switchable transport behind the existing queue i
 - **`tests/test_worker_reliability.py`** — timeout-wrapper test follows the `_execute` refactor and now asserts both transport paths route through it
 
 ### Bug Fix
+- **`worker/handlers/ingest.py`** — sources now marked `failed` on `PermanentError` at any attempt (previously only on the final attempt): a 403/404 on attempt 1 is never retried under SQS (`fail_permanently` deletes the message), so the source stayed `scraping` forever and the app showed a perpetual Queued card. Found via the Wikipedia-403 e2e run; stuck row healed manually on RDS.
+
+### Bug Fix
 - **`worker/handlers/ingest.py`** — idempotency guard made baton-aware: the original "source ready → skip" guard could drop the chained episode if ingest succeeded but the chain-enqueue failed (redelivery would skip and never spawn the episode). Now: ready + episode exists → skip (true duplicate); ready + no episode → skip the re-scrape but resume the chain.
 - **`infra/ecs-task-def-api.json`**, **`infra/ecs-task-def-worker-{interactive,background}.json`** — SQS env (backend toggle, queue URLs, worker lane); two lane worker families replace the single worker def
 
