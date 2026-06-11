@@ -19,6 +19,9 @@ SQS queue backend (Phase 4) — switchable transport behind the existing queue i
 - **`tests/test_worker_reliability.py`** — timeout-wrapper test follows the `_execute` refactor and now asserts both transport paths route through it
 
 ### Test
+- **`scripts/stress_test.py`** — stress harness: `reads` (read-path load, latency percentiles), `failburst` (queue-churn via bot-walled URLs, near-free), `genburst` (full-pipeline burst, costed + confirmed), `watch` (live queue/task/status dashboard). First runs: 1 API task ≈ 230 req/s sweet spot at 50 concurrent, graceful queuing (0 errors) but p99 11s at 100 concurrent → API autoscaling added to Phase 5 list; failburst ×10 all terminal in <40s, DLQ clean.
+
+### Test
 - **`tests/test_aws_smoke.py`** — live verification suite for the deployed stack, runnable anytime (`CURIA_SMOKE=1`, optional `CURIA_SMOKE_FULL=1`). Four layers: infra/config (services at desired counts, running image digests == ECR :latest, queue visibility/redrive, DLQ depth as alert, backlog sanity, task-def env drift, S3 public-block, secrets), API surface (health, auth edges, 404/422, presigned audio serves real MP3 bytes), full pipeline happy path (save→ingest→chained episode→ready→S3 object, API idempotency), failure invariant (permanently failing URLs must reach a terminal state — regression for the perpetual-Queued bug). Token self-served from Secrets Manager. Caught a stale curia-api image on its first run.
 - **`infra/RUNBOOK.md`** — smoke-suite usage section
 
