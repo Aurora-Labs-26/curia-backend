@@ -195,9 +195,12 @@ resolution in §7.
 - **Locked:** Compute = **ECS Fargate** (one image, two services: `api` behind ALB, `worker`).
   Queue = **SQS now** (two queues split by *trigger* — `curia-interactive` / `curia-background`
   — + DLQs), built this push (not deferred). DB = **RDS PostgreSQL + pgvector**. Storage =
-  keep **R2** for now (zero code), S3 later. IaC = **manual console now, Terraform later**
-  (maintain a runbook as we click). Audio/Firebase/keys/CORS all move via env/Secrets — **lift
-  is zero-code**; only SQS needs code.
+  **audio moves R2 → S3** (`curia-audio` bucket; decided 2026-06-09, supersedes earlier
+  keep-R2 lean — simpler IAM via task roles, native AWS, CloudFront later; accepts S3 egress
+  cost). Zero code: `blob.py` falls back to the boto3 credential chain when no explicit keys
+  are set, and `audio_url` stores keys not URLs, so the move is object-copy + env flip.
+  IaC = **manual console now, Terraform later** (maintain a runbook as we click).
+  Firebase/keys/CORS all move via env/Secrets — **lift is zero-code**; only SQS needs code.
 - **Code-change scope (verified from code):** Lift-and-shift = **no code changes**
   (`DATABASE_URL`, `FIREBASE_SERVICE_ACCOUNT_JSON` at `core/firebase.py:26`, `CURIA_STORAGE_*`
   already env-driven; `studio/generator.py:963` already uploads audio to object storage). SQS =

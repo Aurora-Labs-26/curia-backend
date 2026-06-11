@@ -7,6 +7,30 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-11 · Arihant + Claude (claude-fable-5)
+
+### Config
+- **`config/models.yaml`** — speaker TTS bindings reverted hume-octave → smallest-lightning (kenji→james, arjun→george, emeka→emily, recovered from pre-bdf4b42 state): no HUME_API_KEY exists in any environment, so Hume bindings would stub-silence TTS on the AWS deploy; SMALLEST_API_KEY is provisioned. Hume/voice work can resume later by re-adding the key.
+
+### Config
+AWS migration phases 0–2 executed (infra in account 617341601034, us-east-1): ECR `curia`, S3 `curia-audio` (private), VPC `curia` + NAT + 4 SGs, RDS `curia-db` (Postgres 18.4 — recreated from 16.11 for parity with Railway prod, pgvector 0.8.2), 7 Secrets Manager entries, prod DB restored (0 errors, all row counts match, alembic at 0028), audio sync R2→S3 started.
+- **`infra/RUNBOOK.md`** — registry filled with live resource IDs; CGNAT egress-IP gotcha; Railway env truths (OpenAI embeddings not Voyage; no Hume key; INTERNAL_SECRET/JINA unused by this branch); PG18 + branch-drift findings
+- **`infra/ecs-task-def-api.json`**, **`infra/ecs-task-def-worker.json`** — account id filled; secrets corrected to the real set (anthropic, openai, firecrawl, smallest, firebase SA)
+
+## 2026-06-09 · Arihant + Claude (claude-fable-5)
+
+### Config
+AWS migration Phase 0 — infra artifacts for the ECS deployment (no app code changes).
+- **`infra/ecs-task-def-api.json`** — Fargate task definition template for the API service (uvicorn, port 8000, Secrets Manager-injected env, awslogs, /health healthcheck)
+- **`infra/ecs-task-def-worker.json`** — Fargate task definition for the worker (same image, `python -m worker.main`, stopTimeout 120)
+- **`infra/RUNBOOK.md`** — phase-by-phase console/CLI runbook (VPC, SGs, RDS+pgvector, Secrets, data migration, ECS/ALB, SQS, cutover); doubles as the resource registry for the later Terraform pass
+
+### Config
+Audio storage decision changed: R2 → S3 (`curia-audio`). Task roles replace R2 keys (verified `core/storage/blob.py` falls back to the boto3 default credential chain when no explicit keys are set; `audio_url` stores keys not URLs, so migration is object-copy + env flip — no code change).
+- **`infra/ecs-task-def-api.json`** — dropped `CURIA_S3_ENDPOINT` + R2 key secrets; set `CURIA_S3_BUCKET=curia-audio`, `CURIA_S3_REGION=us-east-1`
+- **`infra/ecs-task-def-worker.json`** — same storage env changes
+- **`infra/RUNBOOK.md`** — added 1e (S3 bucket), 2b (R2→S3 object sync + delta re-sync at cutover), task-role S3 policies + presigned-URL/temp-credential caveat
+
 ## 2026-06-07 · Arihant + Claude (claude-opus-4-8)
 
 ### Docs

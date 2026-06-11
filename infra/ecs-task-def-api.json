@@ -1,0 +1,49 @@
+{
+  "family": "curia-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::617341601034:role/curia-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::617341601034:role/curia-api-task-role",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "617341601034.dkr.ecr.us-east-1.amazonaws.com/curia:latest",
+      "command": ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"],
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "essential": true,
+      "environment": [
+        { "name": "CURIA_ENV", "value": "prod" },
+        { "name": "CURIA_STORAGE_BACKEND", "value": "s3" },
+        { "name": "CURIA_S3_BUCKET", "value": "curia-audio" },
+        { "name": "CURIA_S3_REGION", "value": "us-east-1" },
+        { "name": "CURIA_CORS_ORIGINS", "value": "*" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/database-url" },
+        { "name": "ANTHROPIC_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/anthropic-api-key" },
+        { "name": "OPENAI_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/openai-api-key" },
+        { "name": "FIRECRAWL_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firecrawl-api-key" },
+        { "name": "SMALLEST_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/smallest-api-key" },
+        { "name": "FIREBASE_SERVICE_ACCOUNT_JSON", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firebase-service-account" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/curia-api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api",
+          "awslogs-create-group": "true"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      }
+    }
+  ]
+}

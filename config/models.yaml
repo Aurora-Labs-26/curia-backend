@@ -387,14 +387,14 @@ bindings:
   # replace with cloned voice IDs once the team creates them.
   speaker:
     kenji:
-      model: hume-octave
-      voice_id: Ito
+      model: smallest-lightning
+      voice_id: james
     arjun:
-      model: hume-octave
-      voice_id: Arjun
+      model: smallest-lightning
+      voice_id: george
     emeka:
-      model: hume-octave
-      voice_id: Vince Douglas
+      model: smallest-lightning
+      voice_id: emily
 
   # ── Example: switching providers ──────────────────────────────────────────
   # Uncomment provider + model alias above, then override bindings here.
