@@ -60,6 +60,7 @@ async def create_episode(
         type="generate_episode",
         payload={"episode_id": episode_id, "user_id": user_id},
         user_id=user_id,
+        lane="interactive",  # explicit create/remix — user watches the generating screen
     )
     return CreateJobResponse(id=uuid.UUID(episode_id), status="queued", job_id=job_id)
 

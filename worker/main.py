@@ -24,14 +24,31 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from core.errors import PermanentError
-from core.queue import ack, default_worker_id, dequeue, fail, fail_permanently, reap_stale
+from core.queue import (
+    ack,
+    default_worker_id,
+    dequeue,
+    fail,
+    fail_permanently,
+    get_queue_backend,
+    reap_stale,
+    sqs_ack,
+    sqs_fail,
+    sqs_fail_permanently,
+    sqs_receive,
+)
 from worker.handlers import HANDLERS
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 
 # Polling interval when the queue is empty. Trades latency for DB load.
+# (postgres backend only — under sqs, long polling waits server-side instead)
 EMPTY_QUEUE_SLEEP_SECONDS = float(os.getenv("CURIA_WORKER_POLL_SECONDS", "2"))
+
+# Which SQS lane this worker consumes (sqs backend only). Each ECS worker
+# service is pinned to one lane: interactive (user-watched) or background.
+WORKER_LANE = os.getenv("CURIA_WORKER_LANE", "background")
 
 # Hard timeout for any single job handler. Kills the handler if it exceeds this.
 HANDLER_TIMEOUT_SECONDS = int(os.getenv("CURIA_HANDLER_TIMEOUT_SECONDS", "600"))
@@ -94,20 +111,19 @@ def _install_signal_handlers() -> None:
         loop.add_signal_handler(sig, lambda: _shutdown.set())
 
 
-async def _process_one(worker_id: str) -> bool:
-    """Pull one job and run its handler. Returns True if a job was processed, False if idle."""
+async def _execute(job) -> tuple[str, str]:
+    """
+    Run a job's handler. Returns (outcome, error) where outcome is one of
+    "ok" | "no_handler" | "timeout" | "permanent" | "error". Transport-agnostic —
+    callers map the outcome to their backend's ack/fail semantics.
+    """
     from core.logging import worker_logger
-
-    job = await dequeue(worker_id=worker_id)
-    if job is None:
-        return False
 
     handler = HANDLERS.get(job.type)
     if handler is None:
         logger.error(f"[worker] no handler for job.type={job.type} id={job.id}; failing.")
         worker_logger.error(f"JOB_NO_HANDLER | type={job.type} id={job.id}")
-        await fail(job.id, f"unknown job type {job.type}")
-        return True
+        return "no_handler", f"unknown job type {job.type}"
 
     start = time.time()
     worker_logger.info(
@@ -122,10 +138,9 @@ async def _process_one(worker_id: str) -> bool:
             job.payload["__attempt__"] = job.attempts
             job.payload["__max_attempts__"] = job.max_attempts
         await asyncio.wait_for(handler(job.payload), timeout=HANDLER_TIMEOUT_SECONDS)
-        await ack(job.id)
         elapsed = time.time() - start
-        logger.info(f"[worker] acked id={job.id}")
         worker_logger.info(f"JOB_SUCCESS | type={job.type} id={job.id} duration={elapsed:.2f}s")
+        return "ok", ""
     except asyncio.TimeoutError:
         elapsed = time.time() - start
         logger.error(f"[worker] id={job.id} type={job.type} timed out after {HANDLER_TIMEOUT_SECONDS}s")
@@ -133,7 +148,7 @@ async def _process_one(worker_id: str) -> bool:
             f"JOB_TIMEOUT | type={job.type} id={job.id} "
             f"duration={elapsed:.2f}s timeout={HANDLER_TIMEOUT_SECONDS}s"
         )
-        await fail(job.id, f"handler timed out after {HANDLER_TIMEOUT_SECONDS}s")
+        return "timeout", f"handler timed out after {HANDLER_TIMEOUT_SECONDS}s"
     except PermanentError as exc:
         elapsed = time.time() - start
         tb = traceback.format_exc()
@@ -142,7 +157,7 @@ async def _process_one(worker_id: str) -> bool:
             f"JOB_PERMANENT_FAIL | type={job.type} id={job.id} "
             f"duration={elapsed:.2f}s error={exc}"
         )
-        await fail_permanently(job.id, f"{exc}\n{tb}")
+        return "permanent", f"{exc}\n{tb}"
     except Exception as exc:
         elapsed = time.time() - start
         tb = traceback.format_exc()
@@ -151,7 +166,46 @@ async def _process_one(worker_id: str) -> bool:
             f"JOB_FAIL | type={job.type} id={job.id} "
             f"duration={elapsed:.2f}s error={exc}"
         )
-        await fail(job.id, f"{exc}\n{tb}")
+        return "error", f"{exc}\n{tb}"
+
+
+async def _process_one(worker_id: str) -> bool:
+    """Postgres backend: claim one job via SKIP LOCKED, run it, ack/fail the row."""
+    job = await dequeue(worker_id=worker_id)
+    if job is None:
+        return False
+
+    outcome, error = await _execute(job)
+    if outcome == "ok":
+        await ack(job.id)
+        logger.info(f"[worker] acked id={job.id}")
+    elif outcome == "permanent":
+        await fail_permanently(job.id, error)
+    else:  # no_handler / timeout / error → retry while attempts remain
+        await fail(job.id, error)
+    return True
+
+
+async def _process_one_sqs(worker_id: str) -> bool:
+    """
+    SQS backend: long-poll this worker's lane for one message, run it.
+    Success/permanent → delete the message. Retryable failure → leave it; the
+    visibility timeout redelivers, and maxReceiveCount redrives to the DLQ.
+    """
+    received = await sqs_receive(WORKER_LANE, worker_id=worker_id)
+    if received is None:
+        return False
+    job, receipt = received
+
+    outcome, error = await _execute(job)
+    if outcome == "ok":
+        await sqs_ack(job.id, receipt, WORKER_LANE)
+        logger.info(f"[worker] acked id={job.id} lane={WORKER_LANE}")
+    elif outcome in ("permanent", "no_handler"):
+        await sqs_fail_permanently(job.id, receipt, WORKER_LANE, error)
+    else:  # timeout / error → stamp audit row; message retries via visibility expiry
+        final = job.attempts >= job.max_attempts
+        await sqs_fail(job.id, error, attempts=job.attempts, final=final)
     return True
 
 
@@ -180,29 +234,42 @@ async def main() -> None:
 
     worker_id = default_worker_id()
     hostname = socket.gethostname()
-    logger.info(f"[worker] starting id={worker_id} host={hostname} pid={os.getpid()}")
+    backend = get_queue_backend()
+    logger.info(
+        f"[worker] starting id={worker_id} host={hostname} pid={os.getpid()} "
+        f"backend={backend}" + (f" lane={WORKER_LANE}" if backend == "sqs" else "")
+    )
     _install_signal_handlers()
 
     scheduler = _start_scheduler()
 
     while not _shutdown.is_set():
         try:
-            processed = await _process_one(worker_id)
+            if backend == "sqs":
+                # Long poll blocks server-side (≤20s) when idle — no sleep needed.
+                processed = await _process_one_sqs(worker_id)
+            else:
+                processed = await _process_one(worker_id)
         except Exception as e:
-            # Defensive: if dequeue itself errors (DB hiccup), back off and retry.
+            # Defensive: if receive/dequeue itself errors (DB/SQS hiccup), back off and retry.
             logger.exception(f"[worker] dispatch loop error: {e}")
             processed = False
+            try:
+                await asyncio.wait_for(_shutdown.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
 
         # Check for prompt file changes each poll cycle
         check_prompt_changes(PROMPTS_DIR)
 
-        # Requeue jobs stuck in 'running' (throttled internally)
-        await _maybe_reap_stale()
+        # Requeue jobs stuck in 'running' (postgres only; SQS visibility replaces it)
+        if backend != "sqs":
+            await _maybe_reap_stale()
 
         # Backstop cleanup of stale failed sources (throttled internally)
         await _maybe_purge_failed_sources()
 
-        if not processed:
+        if not processed and backend != "sqs":
             try:
                 await asyncio.wait_for(_shutdown.wait(), timeout=EMPTY_QUEUE_SLEEP_SECONDS)
             except asyncio.TimeoutError:

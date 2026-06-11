@@ -22,6 +22,7 @@ async def generate_ideas(user_id: str = Depends(current_user_id)) -> GenerateIde
         type="generate_ideas",
         payload={"user_id": user_id},
         user_id=user_id,
+        lane="interactive",  # explicit user action — they're waiting on the result
     )
     return GenerateIdeasResponse(job_id=job_id, status="queued")
 

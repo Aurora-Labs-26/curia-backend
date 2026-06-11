@@ -20,6 +20,18 @@ async def handle_generate_episode(payload: dict) -> None:
     episode_id = payload.get("episode_id")
     if not episode_id:
         raise ValueError("generate_episode job: missing episode_id in payload")
+
+    # Idempotency guard (SQS delivers at-least-once): a duplicate delivery of a
+    # finished episode must not regenerate it. Mid-states mean a previous attempt
+    # died — process_episode restarts cleanly from the top.
+    row = await db_fetchrow(
+        "SELECT status FROM episode WHERE id = $episode_id::uuid",
+        {"episode_id": episode_id},
+    )
+    if row and row["status"] == "ready":
+        logger.info(f"[handle_generate_episode] episode {episode_id} already ready — skipping (duplicate delivery)")
+        return
+
     logger.info(f"[handle_generate_episode] processing episode_id={episode_id}")
     await process_episode(episode_id=episode_id)
     await _notify_episode_ready(episode_id)

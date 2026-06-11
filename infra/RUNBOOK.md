@@ -27,8 +27,14 @@
 | DB subnet group | `curia-db-subnets` (public subnets, temp public access) ✅ |
 | ECR repo URI | `617341601034.dkr.ecr.us-east-1.amazonaws.com/curia` ✅ created |
 | S3 audio bucket | `curia-audio` ✅ created, public access blocked |
-| ALB DNS / domain | `<...>` |
-| SQS queue URLs (interactive/background + DLQs) | `<...>` (Phase 4) |
+| ALB DNS / domain | `curia-alb-23430048.us-east-1.elb.amazonaws.com` ✅ (HTTP :80 listener; 443+cert pending domain decision) |
+| ALB / target group ARNs | `...loadbalancer/app/curia-alb/56b2ac3ea6270a4c` / `...targetgroup/curia-api-tg/3970159a0f5d7855` |
+| IAM roles | `curia-ecs-execution-role` (+secrets read) · `curia-api-task-role` (S3 read) · `curia-worker-task-role` (S3 rw) ✅ |
+| ECS | cluster `curia` ✅ · task defs `curia-api:1`, `curia-worker:1` ✅ · log groups `/ecs/curia-{api,worker}` (30d retention) ✅ |
+| Services (2026-06-11) | `curia-api` desired=1 **LIVE** — `/health` → `{"status":"ok","db":true}` through the ALB ✅ · `curia-worker` desired=2 running ✅ (friend-testing mode) |
+| Duplicate-push guard | All 40 copied `fcm_token`s **nulled on RDS** (2026-06-11) so the worker's APScheduler crons (05:30/14:30 UTC) can't double-push real users alongside Railway. Testers re-register tokens naturally on sign-in → they get real pushes from AWS. ⚠️ Cutover re-sync restores real tokens — by then Railway's worker must be stopped. |
+| Testing mode | AWS stack = **disposable sandbox** until cutover: anything testers create on it (sources/episodes/progress) is overwritten by the final Railway re-sync. Test URL (HTTP): `http://curia-alb-23430048.us-east-1.elb.amazonaws.com` — iOS dev builds may need an ATS exception or the CloudFront-HTTPS fallback (config drafted, not created). |
+| SQS queues (2026-06-11) | `https://sqs.us-east-1.amazonaws.com/617341601034/curia-interactive` + `…/curia-background` (visibility 900s, long-poll 20s, maxReceive 3 → `…-dlq` each, DLQ retention 14d) ✅ · IAM: api=send, worker=send+consume ✅ |
 
 ---
 
@@ -117,10 +123,17 @@ aws s3 ls s3://curia-audio/audio/ --recursive | wc -l
 
 ## Phase 3 — ECS live (still on Postgres queue; zero code changes)
 
-> **Pre-deploy TODO (parked, trivial):** `config/models.yaml` speaker bindings still point at
-> `hume-octave` but no HUME_API_KEY exists → TTS would stub-silence. Decision made: revert to
-> Smallest. The exact old bindings are in `git show bdf4b42`: `smallest-lightning` with
-> kenji→james, arjun→george, emeka→emily. Flip before (or with) the first image build.
+> **TTS: RESOLVED** — merged `origin/v2.7-final` (2026-06-11), which already binds
+> `smallest-lightning` (kenji→william, arjun→zorin, emeka→vanessa) with Hume kept as a
+> commented fallback. Local branch is now origin + our infra work; build the image from here.
+>
+> **⚠️ NEVER run `alembic upgrade head` from this branch against the restored DB.** The DB is
+> at `0028_daily_briefs` (from v2.7.2's chain); this branch tops at `0027` and will fail with
+> "Can't locate revision". Schema is a superset of what this code needs — no migration required.
+>
+> **Scheduler note:** this branch's worker now runs APScheduler daily-notification crons
+> (`core/notifications.py`, started in `worker/main.py`); duplicate sends across multiple
+> worker tasks are prevented by `notification_log` UNIQUE(user_id, type, sent_date).
 
 ### 3a. Build + push image
 ```bash

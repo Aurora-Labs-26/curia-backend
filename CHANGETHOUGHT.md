@@ -191,6 +191,26 @@ resolution in §7.
 > Append decisions here as `### YYYY-MM-DD — <decision>` with the rationale and who decided.
 > Empty for now; we'll fill it as we make calls.
 
+### 2026-06-11 — SQS implementation design locked (Phase 4)
+- **Queues:** `curia-interactive` + `curia-background`, standard, + one DLQ each.
+  Visibility **900s** both (> proven 600s handler cap; prod history: episodes run ~3 min p50,
+  zero timeout kills ever → no heartbeat code, accepted rare crash ⇒ ≤15 min redelivery).
+  Long-poll 20s · `maxReceiveCount=3` → DLQ (mirrors max_attempts=3) · DLQ retention 14d.
+- **Lanes by trigger, chosen at call site:** API routes (save URL, remix, generate ideas) →
+  interactive; pipeline-chained + optimize → background. Pipeline-spawned episodes =
+  **background** ("watched jobs vs announced jobs" — synthesis is announced by push).
+- **Backend toggle:** `CURIA_QUEUE_BACKEND=postgres|sqs` — Postgres impl stays for local dev,
+  tests, and one-env-var prod rollback.
+- **Topology:** **two worker services from day 1** (user call) — each polls only its lane's
+  queue via `CURIA_WORKER_LANE`; independent autoscaling on backlog-per-task.
+- **Audit:** existing `jobs` table kept as write-only history (zero schema migration; columns
+  fit). Worker stamps running/done/failed; on final attempt (ReceiveCount=3) stamp `failed`
+  before the message ages into the DLQ, so enqueue-side dedup never wedges on a dead job.
+- **Idempotency:** guards at top of handlers — `source.status=='ready'` / `episode.status=='ready'`
+  → ack & skip. Post-merge job surface: 4 types (`ingest`, `generate_ideas`, `generate_episode`,
+  `optimize`); `generate_from_source` retired; new producer in `intelligence/idea_generator.py`.
+- **Decided by:** Arihant (visibility A, two services, background lane, keep toggle).
+
 ### 2026-06-07 — AWS migration: target shape locked, execution started
 - **Locked:** Compute = **ECS Fargate** (one image, two services: `api` behind ALB, `worker`).
   Queue = **SQS now** (two queues split by *trigger* — `curia-interactive` / `curia-background`

@@ -77,6 +77,7 @@ async def create_source(
                     "standalone": req.standalone,
                 },
                 user_id=user_id,
+                lane="interactive",  # user just saved a URL and is watching the pile
             )
     return CreateJobResponse(
         id=uuid.UUID(source_id),

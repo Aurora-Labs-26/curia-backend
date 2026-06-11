@@ -17,12 +17,31 @@ from datetime import date
 from loguru import logger
 
 
-async def _record_sent(conn, user_id: str, notification_type: str) -> None:
-    await conn.execute(
+async def _claim_send(conn, user_id: str, notification_type: str) -> bool:
+    """
+    Atomically claim today's send for (user, type). Returns True if WE won the
+    claim. Claim-before-send makes concurrent workers (two ECS services both
+    running the cron) race-safe: only one inserts, only the winner sends.
+    """
+    row = await conn.fetchrow(
         """
         INSERT INTO notification_log (user_id, type, sent_date)
         VALUES ($1, $2, CURRENT_DATE)
         ON CONFLICT (user_id, type, sent_date) DO NOTHING
+        RETURNING 1
+        """,
+        user_id,
+        notification_type,
+    )
+    return row is not None
+
+
+async def _release_claim(conn, user_id: str, notification_type: str) -> None:
+    """Send failed after claiming — release so a later run can retry today."""
+    await conn.execute(
+        """
+        DELETE FROM notification_log
+        WHERE user_id = $1 AND type = $2 AND sent_date = CURRENT_DATE
         """,
         user_id,
         notification_type,
@@ -83,13 +102,15 @@ async def send_listen_reminders() -> None:
             title = "Your show is ready" if count == 1 else f"You have {count} shows waiting"
             body = "Tap to listen now." if count == 1 else "Tap to start listening."
 
+            if not await _claim_send(conn, user_id, "listen_reminder"):
+                continue  # another worker claimed this user today
             try:
                 await _send_fcm(token, title, body, data={"type": "listen_reminder"})
-                await _record_sent(conn, user_id, "listen_reminder")
                 sent += 1
                 logger.info(f"[notifications] listen_reminder sent user_id={user_id} unplayed={count}")
             except Exception as exc:
                 errors += 1
+                await _release_claim(conn, user_id, "listen_reminder")
                 logger.warning(f"[notifications] listen_reminder failed user_id={user_id}: {exc}")
 
     logger.info(f"[notifications] listen_reminder done sent={sent} errors={errors}")
@@ -129,6 +150,8 @@ async def send_reengagement_reminders() -> None:
             user_id = row["user_id"]
             token = row["fcm_token"]
 
+            if not await _claim_send(conn, user_id, "reengagement"):
+                continue  # another worker claimed this user today
             try:
                 await _send_fcm(
                     token,
@@ -136,11 +159,11 @@ async def send_reengagement_reminders() -> None:
                     body="Share an article link to produce your first show",
                     data={"type": "reengagement"},
                 )
-                await _record_sent(conn, user_id, "reengagement")
                 sent += 1
                 logger.info(f"[notifications] reengagement sent user_id={user_id}")
             except Exception as exc:
                 errors += 1
+                await _release_claim(conn, user_id, "reengagement")
                 logger.warning(f"[notifications] reengagement failed user_id={user_id}: {exc}")
 
     logger.info(f"[notifications] reengagement done sent={sent} errors={errors}")

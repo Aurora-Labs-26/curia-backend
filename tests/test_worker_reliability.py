@@ -96,12 +96,16 @@ class TestHandlerTimeout:
                 importlib.reload(wm)
 
     def test_process_one_uses_wait_for(self):
-        from worker.main import _process_one
-        source = inspect.getsource(_process_one)
+        # The timeout wrapper lives in the shared _execute core; BOTH transport
+        # paths (postgres _process_one, sqs _process_one_sqs) must route through it.
+        from worker.main import _execute, _process_one, _process_one_sqs
+        source = inspect.getsource(_execute)
         assert "asyncio.wait_for" in source, (
-            "_process_one must wrap handler call in asyncio.wait_for"
+            "_execute must wrap handler call in asyncio.wait_for"
         )
         assert "HANDLER_TIMEOUT_SECONDS" in source
+        assert "_execute" in inspect.getsource(_process_one)
+        assert "_execute" in inspect.getsource(_process_one_sqs)
 
     async def test_timeout_fires_on_slow_handler(self):
         """Simulate a handler that takes longer than the timeout."""

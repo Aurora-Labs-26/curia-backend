@@ -9,6 +9,18 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-06-11 · Arihant + Claude (claude-fable-5)
 
+### Feature
+SQS queue backend (Phase 4) — switchable transport behind the existing queue interface. `CURIA_QUEUE_BACKEND=postgres` (default, unchanged) or `sqs` (two lane queues: `curia-interactive` for user-watched jobs, `curia-background` for pipeline-chained work). Jobs table becomes a write-only audit record under sqs (powers /jobs polling + dedup). Retries via visibility expiry (900s > 600s handler cap, no heartbeat); 3 receives → DLQ; PermanentError deletes immediately.
+- **`core/queue.py`** — `lane` param + `_DEFAULT_LANE`; backend toggle; SQS send on enqueue (audit row first, `fail_permanently` if publish fails); new `sqs_receive/sqs_ack/sqs_fail/sqs_fail_permanently`; `reap_stale` documented postgres-only
+- **`worker/main.py`** — handler execution extracted to transport-agnostic `_execute()`; new `_process_one_sqs()` (lane-pinned via `CURIA_WORKER_LANE`, long-poll, delete-on-ack, leave-on-fail); main loop branches on backend; reap + empty-sleep gated to postgres
+- **`worker/handlers/ingest.py`**, **`worker/handlers/generate_episode.py`** — idempotency guards: skip (ack) when `source/episode.status='ready'` — makes SQS at-least-once redelivery a no-op
+- **`api/routes/sources.py`**, **`api/routes/ideas.py`**, **`api/routes/episodes.py`** — explicit `lane="interactive"` on user-triggered enqueues
+- **`tests/test_queue_sqs.py`** — 19 new tests (lane routing, send-failure handling, receive/ack/fail semantics, worker dispatch outcomes) with mocked boto3
+- **`tests/test_worker_reliability.py`** — timeout-wrapper test follows the `_execute` refactor and now asserts both transport paths route through it
+
+### Bug Fix
+- **`core/notifications.py`** — notification dedup was check-then-send (racy across multiple worker tasks: both pass the NOT-EXISTS check, both push). Now claim-first: atomic `INSERT … ON CONFLICT DO NOTHING RETURNING` claims the (user, type, day) before sending; loser skips; claim released on send failure so the day isn't burned
+
 ### Config
 - **`config/models.yaml`** — speaker TTS bindings reverted hume-octave → smallest-lightning (kenji→james, arjun→george, emeka→emily, recovered from pre-bdf4b42 state): no HUME_API_KEY exists in any environment, so Hume bindings would stub-silence TTS on the AWS deploy; SMALLEST_API_KEY is provisioned. Hume/voice work can resume later by re-adding the key.
 

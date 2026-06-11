@@ -328,6 +328,17 @@ async def handle_ingest(payload: dict) -> None:
 
     logger.info(f"[handle_ingest] source_id={source_id} attempt={attempt}/{max_attempts} standalone={standalone}")
 
+    # ── Idempotency guard (SQS delivers at-least-once) ───────────────────────
+    # A duplicate delivery of a completed ingest must be a no-op. Mid-states
+    # (scraping/transforming/…) mean a previous attempt died — re-run is correct.
+    guard_row = await db_fetchrow(
+        "SELECT status FROM source WHERE id = $source_id::uuid",
+        {"source_id": source_id},
+    )
+    if guard_row and guard_row["status"] == "ready":
+        logger.info(f"[handle_ingest] source {source_id} already ready — skipping (duplicate delivery)")
+        return
+
     # ── Seed short-circuit ───────────────────────────────────────────────────
     if url and user_id_from_payload:
         short_circuited = await _attach_seed_to_user(
