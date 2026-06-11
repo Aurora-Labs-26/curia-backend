@@ -181,9 +181,11 @@ Fargate CPU architecture chosen in the task def, or use Fargate ARM64 and skip t
 **E2E proven:** save URL → interactive ingest (<1 min) → chained episode on background →
 ready in ~3 min → 10.4MB MP3 on S3 → presigned playback (HTTP 206, valid MP3). Failure path
 proven by Wikipedia-403 run: 3 visibility-spaced retries → hard stop → audit `failed`.
-**Pending checks:** DLQ arrival of the failed message (redrive fires on next delivery attempt
-after final visibility window); `source.status` stuck at `scraping` (error column set) on the
-403 path — cosmetic, investigate.
+**Resolved (2026-06-11):** DLQ-empty was CORRECT — the 403 raised `PermanentError`
+(`JOB_PERMANENT_FAIL`, one attempt, message deleted by design; DLQ is only for retried-out
+jobs; audit "attempts=3" is `fail_permanently` stamping attempts=max). The real bug found:
+sources weren't marked `failed` on PermanentError at attempt 1 → perpetual Queued card; fixed
+in `worker/handlers/ingest.py`, stuck row healed, workers rolled.
 
 ### Original design (implemented)
 - 2 queues + 2 DLQs: `curia-interactive` (visibility 180s, maxReceiveCount 3),
@@ -194,6 +196,21 @@ after final visibility window); `source.status` stuck at `scraping` (error colum
 - IAM: api task role `sqs:SendMessage`; worker task role `ReceiveMessage/DeleteMessage/ChangeMessageVisibility`.
 - Worker autoscaling: target-tracking on backlog-per-task (interactive 0.5, background 1.5;
   min 2/1, max ≈ LLM concurrency ceiling).
+
+## Smoke suite — run anytime to verify the stack
+
+```bash
+CURIA_SMOKE=1 .venv/bin/pytest tests/test_aws_smoke.py -v                    # infra+API (~5s, free)
+CURIA_SMOKE=1 CURIA_SMOKE_FULL=1 .venv/bin/pytest tests/test_aws_smoke.py -v # + live pipeline (~10 min, LLM cents)
+```
+Needs AWS creds; the API token self-serves from Secrets Manager (`curia/smoke-test-token`,
+user `claude-e2e-test`). Covers: services at desired counts, **running digests == ECR :latest**
+(deploy-freshness — caught a stale API on its first run), queue visibility/redrive config,
+DLQ depth (failing = alert), backlog sanity, task-def env drift (backend/lane/URLs), S3
+public-block, secrets present, auth edges, list endpoints, 404/422 validation, presigned audio
+serves real MP3 bytes; FULL adds save→episode e2e (+API idempotency, S3 object check) and the
+terminal-state invariant for permanently failing URLs (regression for the perpetual-Queued bug).
+Post-cutover: update `CURIA_SMOKE_API` to the HTTPS domain.
 
 ## Phase 5 — Cutover + observability
 - Final data sync → flip RDS public access off → point frontend at AWS

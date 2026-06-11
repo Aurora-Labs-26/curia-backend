@@ -18,6 +18,10 @@ SQS queue backend (Phase 4) — switchable transport behind the existing queue i
 - **`tests/test_queue_sqs.py`** — 19 new tests (lane routing, send-failure handling, receive/ack/fail semantics, worker dispatch outcomes) with mocked boto3
 - **`tests/test_worker_reliability.py`** — timeout-wrapper test follows the `_execute` refactor and now asserts both transport paths route through it
 
+### Test
+- **`tests/test_aws_smoke.py`** — live verification suite for the deployed stack, runnable anytime (`CURIA_SMOKE=1`, optional `CURIA_SMOKE_FULL=1`). Four layers: infra/config (services at desired counts, running image digests == ECR :latest, queue visibility/redrive, DLQ depth as alert, backlog sanity, task-def env drift, S3 public-block, secrets), API surface (health, auth edges, 404/422, presigned audio serves real MP3 bytes), full pipeline happy path (save→ingest→chained episode→ready→S3 object, API idempotency), failure invariant (permanently failing URLs must reach a terminal state — regression for the perpetual-Queued bug). Token self-served from Secrets Manager. Caught a stale curia-api image on its first run.
+- **`infra/RUNBOOK.md`** — smoke-suite usage section
+
 ### Bug Fix
 - **`worker/handlers/ingest.py`** — sources now marked `failed` on `PermanentError` at any attempt (previously only on the final attempt): a 403/404 on attempt 1 is never retried under SQS (`fail_permanently` deletes the message), so the source stayed `scraping` forever and the app showed a perpetual Queued card. Found via the Wikipedia-403 e2e run; stuck row healed manually on RDS.
 
