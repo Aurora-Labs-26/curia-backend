@@ -191,6 +191,16 @@ resolution in §7.
 > Append decisions here as `### YYYY-MM-DD — <decision>` with the rationale and who decided.
 > Empty for now; we'll fill it as we make calls.
 
+### 2026-06-11 — Stress test results (scripts/stress_test.py)
+- **Reads:** 1 API task ≈ 230 req/s sweet spot @50 concurrent, 0 errors; saturates gracefully
+  @100 (p99 11s, still 0 errors) → **add API autoscaling in Phase 5** (workers have it, API doesn't).
+- **Failburst ×10:** all terminal `failed` <40s, queues drained, DLQ clean (permanent-fail fix at volume).
+- **Genburst ×10 (~$3.50 LLM spend):** all 10 episodes ready in **11.5 min**; one interactive
+  worker drained all ingests in 90s (lane isolation proven); background scaled 1→6 in ~4–8 min
+  (CloudWatch cadence — acceptable, push-announced); **zero 429s at 6 concurrent generations**
+  (rate-limit ceiling ≥6, untested beyond); zero retries/DLQ. Unit cost ≈ $0.35/episode, ~$0 AWS.
+- Scale-in is lazy (by design, 300s cooldown) — fleet idles a while post-drain, pennies.
+
 ### 2026-06-11 — Phase 4 SHIPPED: SQS live, e2e proven
 - Deployed on branch `v2.7-sqs` (commits 49a91bf + 7e21a52). API publishes to SQS; two lane
   worker services with backlog autoscaling; old worker parked (= rollback path).
