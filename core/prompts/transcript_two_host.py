@@ -2,16 +2,17 @@
 core/prompts/transcript_two_host.py
 DSPy modules for the three-call two-host transcript pipeline.
 
-Call 1: GenerateHostA — builds the case (teacher / thesis-holder depending on format)
-Call 2: GenerateHostB — reacts to Host A's actual words (student / antithesis)
-Call 3: MergeDialogue — interleaves both into natural conversation with intro/outro
+Call 1: GenerateHostA — builds the body argument (~60% of words). Role defined by
+         host_a_role in the briefing (e.g. teacher, thesis holder).
+Call 2: GenerateHostB — reacts to Host A's actual words (~40% of words). Role defined by
+         host_b_role in the briefing (e.g. student, antithesis holder).
+Call 3: MergeDialogue — interleaves both into natural conversation, writes intro and outro.
 
-The role difference (teacher vs thesis-holder, student vs antithesis) is encoded in
-the speaker backstory/patterns in profiles.py, not in these signatures. The prompts
-are generic — they say "build your side" and "react to Host A."
+All quality rules, AI tell bans, examples, and structural instructions live in the
+corresponding .txt prompt files (transcript_host_a.txt, transcript_host_b.txt,
+transcript_merge.txt). The signatures define inputs/outputs only.
 
 Model: all three use the transcript binding (Sonnet) since this is the quality point.
-Inputs use XML-tagged format matching this branch's conventions.
 """
 
 from __future__ import annotations
@@ -38,12 +39,6 @@ Output ONLY a valid JSON array. No prose, no explanation, no markdown."""
     )
     outline: str = dspy.InputField(
         desc="Episode outline as JSON, wrapped in <outline> tags."
-    )
-    quality_constraints: str = dspy.InputField(
-        desc="Hard quality constraints wrapped in <constraints> tags."
-    )
-    examples: str = dspy.InputField(
-        desc="Reference transcript examples wrapped in <examples> tags."
     )
     host_a_json: str = dspy.OutputField(
         desc='JSON array of {"speaker": str, "text": str}. No wrapper, no markdown fences.'
@@ -72,12 +67,6 @@ You are REACTING to Host A's actual words provided in <host_a_transcript>."""
     host_a_transcript: str = dspy.InputField(
         desc="Host A's full transcript JSON, wrapped in <host_a_transcript> tags. React to their actual words."
     )
-    quality_constraints: str = dspy.InputField(
-        desc="Hard quality constraints wrapped in <constraints> tags."
-    )
-    examples: str = dspy.InputField(
-        desc="Reference transcript examples wrapped in <examples> tags."
-    )
     host_b_json: str = dspy.OutputField(
         desc='JSON array of {"speaker": str, "text": str}. No wrapper, no markdown fences.'
     )
@@ -93,10 +82,10 @@ class MergeDialogue(dspy.Signature):
 Output ONLY a valid JSON array. No prose, no explanation, no markdown."""
 
     briefing: str = dspy.InputField(
-        desc="The full briefing packet as JSON, wrapped in <briefing> tags (for target_words and format rules)."
+        desc="The full briefing packet as JSON, wrapped in <briefing> tags (for target_words, format rules, and display_name)."
     )
     outline: str = dspy.InputField(
-        desc="Episode outline as JSON, wrapped in <outline> tags."
+        desc="Episode outline as JSON, wrapped in <outline> tags. Use this to verify segment coverage."
     )
     host_a_transcript: str = dspy.InputField(
         desc="Host A's full transcript JSON, wrapped in <host_a_transcript> tags."

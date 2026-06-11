@@ -32,5 +32,8 @@ gepa_logs/
 # Logs
 logs/
 
+# Editors / local tooling
+.obsidian/
+
 # Misc
 *.html

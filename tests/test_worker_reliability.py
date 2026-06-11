@@ -35,13 +35,13 @@ class TestGeneratorAsyncOffload:
         from studio.generator import generate_transcript
         assert not inspect.iscoroutinefunction(generate_transcript)
 
-    def test_synthesize_and_stitch_is_sync(self):
-        from studio.generator import synthesize_and_stitch
-        assert not inspect.iscoroutinefunction(synthesize_and_stitch)
+    def test_synthesize_and_stitch_v2_is_sync(self):
+        from studio.generator import synthesize_and_stitch_v2
+        assert not inspect.iscoroutinefunction(synthesize_and_stitch_v2)
 
     def test_process_episode_uses_run_in_executor(self):
         """The source code of process_episode must call run_in_executor for
-        generate_outline, generate_transcript, and synthesize_and_stitch."""
+        generate_outline, generate_transcript, and synthesize_and_stitch_v2."""
         from studio.generator import process_episode
         source = inspect.getsource(process_episode)
         assert "run_in_executor" in source, (
@@ -49,7 +49,7 @@ class TestGeneratorAsyncOffload:
         )
         assert source.count("run_in_executor") >= 3, (
             "Expected at least 3 run_in_executor calls "
-            "(outline, transcript, synthesize_and_stitch)"
+            "(outline, transcript, synthesize_and_stitch_v2)"
         )
 
 

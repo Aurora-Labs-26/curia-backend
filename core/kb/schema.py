@@ -65,16 +65,21 @@ class Interests(BaseModel):
 class Preferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    preferred_length_minutes: int = Field(default=11, ge=3, le=30)
+    preferred_length_minutes: int | None = Field(default=None, ge=3, le=30)
     preferred_formats: list[FormatName] = Field(default_factory=list)
     preferred_tone: Tone | None = None
-    tolerates_ambiguity: AmbiguityTolerance = "medium"
-    novelty_appetite: float = Field(
-        default=0.5,
+    tolerates_ambiguity: AmbiguityTolerance | None = None
+    novelty_appetite: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
         description="0=stay strictly in lane, 1=always surprise me",
     )
+    # Speaker preferences — set from the Profile screen host picker.
+    # preferred_speaker: single-host formats (Quickie, Drift).
+    # preferred_pair:    two-host formats (Unpack, Explore). Exactly 2 distinct names.
+    preferred_speaker: str | None = None
+    preferred_pair: list[str] | None = None
 
 
 class ListeningContext(BaseModel):

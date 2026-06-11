@@ -42,7 +42,7 @@ providers:
   smallest:
     type: smallest
     api_key_env: SMALLEST_API_KEY
-    base_url: https://waves-api.smallest.ai
+    base_url: https://api.smallest.ai
 
   hume:
     type: hume
@@ -382,23 +382,34 @@ bindings:
       outline:    haiku-4-5
       transcript: sonnet-4-6
 
-  # Per-speaker TTS — model alias + voice_id (replaces *_VOICE_ID env vars)
-  # Voice IDs default to ElevenLabs public sample voices;
-  # replace with cloned voice IDs once the team creates them.
+  # Per-speaker TTS — model alias + voice_id
+  # Default: Smallest.ai lightning-v3.1 (william/alec/julia)
+  # Hume config kept below — swap in when credits are available (word-level timestamps).
   speaker:
     kenji:
       model: smallest-lightning
-      voice_id: james
+      voice_id: william
     arjun:
       model: smallest-lightning
-      voice_id: george
+      voice_id: zorin
     emeka:
       model: smallest-lightning
-      voice_id: emily
+      voice_id: vanessa
+
+  # ── Hume (premium, word-level timestamps) ─────────────────────────────────
+  # Uncomment and comment out Smallest.ai above to switch back to Hume.
+  # speaker:
+  #   kenji:
+  #     model: hume-octave
+  #     voice_id: Ito
+  #   arjun:
+  #     model: hume-octave
+  #     voice_id: Arjun
+  #   emeka:
+  #     model: hume-octave
+  #     voice_id: Vince Douglas
 
   # ── Example: switching providers ──────────────────────────────────────────
-  # Uncomment provider + model alias above, then override bindings here.
-  #
   # task:
   #   transcript: grok-3                  # xAI Grok for transcripts
   #   outline: gemini-2.5-flash           # Gemini Flash for outlines

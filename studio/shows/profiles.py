@@ -145,9 +145,7 @@ CLARITY_ENGINE_SPEAKERS = SpeakerProfile(
             name="kenji",
             backstory=(
                 "Former wire journalist who reported from three continents. "
-                "In this show, he's the teacher — he's done the reading, understands the mechanism, "
-                "and wants to make it land clearly. He explains step by step, uses concrete examples, "
-                "and doesn't move on until the point is made."
+                "Stepped back to think more carefully about what he was actually witnessing."
             ),
             speech_patterns=(
                 "Keeps sentences tight. "
@@ -158,20 +156,17 @@ CLARITY_ENGINE_SPEAKERS = SpeakerProfile(
             ),
         ),
         Speaker(
-            name="arjun",
+            name="emeka",
             backstory=(
-                "Economist turned essayist. Spent a decade in policy before deciding "
-                "the interesting questions were upstream of any policy solution. "
-                "In this show, he's the student — not unintelligent, but encountering this "
-                "material for the first time. He asks the questions the listener would ask. "
-                "Forces clarity by refusing to let vague explanations pass."
+                "Systems thinker with a background in infrastructure and urban planning. "
+                "Believes most interesting problems are coordination problems in disguise."
             ),
             speech_patterns=(
-                "Asks short, pointed questions. "
-                "Says 'wait' or 'hold on' when something doesn't click. "
-                "Paraphrases back what he heard to check understanding. "
-                "When satisfied, says so plainly: 'okay, that makes sense.' "
-                "Pushes for examples when the explanation stays abstract."
+                "Asks short, direct questions. "
+                "Says 'wait' or 'hold on' when the logic doesn't land. "
+                "Connects the explanation to a real-world system or mechanism. "
+                "When satisfied, moves on quickly without over-affirming. "
+                "Pushes for specifics when the answer stays abstract."
             ),
         ),
     ],
@@ -202,9 +197,7 @@ EXPLORATION_ENGINE_SPEAKERS = SpeakerProfile(
             name="kenji",
             backstory=(
                 "Former wire journalist who reported from three continents. "
-                "In this show, he holds the thesis — he read the material and formed a strong "
-                "interpretation. He states it early and builds evidence for it. He's not defensive "
-                "but he's committed to his reading."
+                "Stepped back to think more carefully about what he was actually witnessing."
             ),
             speech_patterns=(
                 "Keeps sentences tight. "
@@ -215,19 +208,16 @@ EXPLORATION_ENGINE_SPEAKERS = SpeakerProfile(
             ),
         ),
         Speaker(
-            name="arjun",
+            name="emeka",
             backstory=(
-                "Economist turned essayist. Spent a decade in policy before deciding "
-                "the interesting questions were upstream of any policy solution. "
-                "In this show, he holds the antithesis — he read the same material and genuinely "
-                "sees it differently. He's not playing devil's advocate; he has his own interpretation. "
-                "He steelmans his position and waits for the strongest moment to land it."
+                "Systems thinker with a background in infrastructure and urban planning. "
+                "Believes most interesting problems are coordination problems in disguise."
             ),
             speech_patterns=(
-                "Builds arguments step by step. "
-                "Sits with tension before resolving it. "
+                "Moves fast between ideas. "
                 "Uses 'but what if' and 'there's another way to read this' to pivot. "
-                "Concedes partial points clearly before pressing his own. "
+                "Connects counter-arguments to structural or systemic patterns. "
+                "Concedes partial points clearly before pressing her own. "
                 "Ends exchanges with a reframe that shifts the lens."
             ),
         ),

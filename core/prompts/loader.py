@@ -40,12 +40,13 @@ def save_prompt(task: str, instructions: str) -> Path:
     return path
 
 
-def with_prompt(sig_cls: type, task: str) -> type:
+def with_prompt(sig_cls: type, task: str, show: str | None = None) -> type:
     """
     Return sig_cls with instructions overridden from prompts/{task}.txt.
-    If no file exists, returns the original class unchanged.
+    If show is provided, checks prompts/{task}_{show}.txt first (show-specific override).
+    Falls back to prompts/{task}.txt, then to the original class unchanged.
     """
-    custom = load_prompt(task)
+    custom = (load_prompt(f"{task}_{show}") if show else None) or load_prompt(task)
     if not custom:
         return sig_cls
     # Don't re-subclass if the text hasn't changed

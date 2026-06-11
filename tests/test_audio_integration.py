@@ -36,16 +36,20 @@ class TestGeneratorIntegration:
         transcript = self._make_transcript(40)
         call_count = 0
 
-        def mock_tts(text, speaker, output_path):
+        def mock_synthesize_with_timings(text, output_path):
             nonlocal call_count
             call_count += 1
             _write_test_wav(output_path)
-            return "wav"
+            return []
+
+        mock_adapter = MagicMock()
+        mock_adapter.synthesize_with_timings.side_effect = mock_synthesize_with_timings
+        mock_adapter.output_format = "wav"
 
         output = str(tmp_path / "episode.mp3")
-        with patch("studio.generator.synthesize_line_by_speaker", side_effect=mock_tts):
+        with patch("studio.generator._resolve_config") as mock_resolve:
+            mock_resolve.tts.return_value = mock_adapter
             with patch("studio.generator.AudioSegment") as mock_audio:
-                # Mock pydub so we don't need ffmpeg
                 mock_seg = MagicMock()
                 mock_seg.__len__ = lambda self: 10000
                 mock_seg.__add__ = lambda self, other: self
@@ -62,11 +66,9 @@ class TestGeneratorIntegration:
         assert call_count < 10, f"Expected fewer TTS calls, got {call_count}"
 
     def test_v2_multi_speaker(self, tmp_path):
-        """Multi-speaker transcript should merge into fewer segments."""
+        """4 same-speaker lines should merge into 1 segment = 1 TTS call."""
         from studio.generator import synthesize_and_stitch_v2
 
-        # Use "kenji" throughout since clarity_engine profile only has kenji
-        # The merger still creates segments based on speaker runs in the transcript
         transcript = [
             {"speaker": "kenji", "text": "Hello."},
             {"speaker": "kenji", "text": "More from kenji."},
@@ -75,14 +77,19 @@ class TestGeneratorIntegration:
         ]
         call_count = 0
 
-        def mock_tts(text, speaker, output_path):
+        def mock_synthesize_with_timings(text, output_path):
             nonlocal call_count
             call_count += 1
             _write_test_wav(output_path)
-            return "wav"
+            return []
+
+        mock_adapter = MagicMock()
+        mock_adapter.synthesize_with_timings.side_effect = mock_synthesize_with_timings
+        mock_adapter.output_format = "wav"
 
         output = str(tmp_path / "episode.mp3")
-        with patch("studio.generator.synthesize_line_by_speaker", side_effect=mock_tts):
+        with patch("studio.generator._resolve_config") as mock_resolve:
+            mock_resolve.tts.return_value = mock_adapter
             with patch("studio.generator.AudioSegment") as mock_audio:
                 mock_seg = MagicMock()
                 mock_seg.__len__ = lambda self: 10000

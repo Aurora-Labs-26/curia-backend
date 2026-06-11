@@ -115,4 +115,4 @@ def test_worker_imports():
     from worker.main import main, _process_one  # noqa: F401
     from worker.handlers import HANDLERS  # noqa: F401
 
-    assert set(HANDLERS) == {"ingest", "generate_ideas", "generate_episode", "generate_from_source", "optimize"}
+    assert set(HANDLERS) == {"ingest", "generate_ideas", "generate_episode", "optimize"}

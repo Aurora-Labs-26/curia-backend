@@ -44,6 +44,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      HUME_API_KEY: ${HUME_API_KEY:-}
+      HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -70,6 +72,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      HUME_API_KEY: ${HUME_API_KEY:-}
+      HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
     volumes:
       - ./data:/app/data
       - ./config:/app/config
