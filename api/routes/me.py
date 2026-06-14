@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from api.auth import CurrentUser, current_user
 from api.schemas import MeResponse, RubricResponse
 from core.db.connection import db_execute, db_fetchrow
+from core.firebase import is_initialized
 from core.kb import UserKB, load_kb, save_kb
 from optimization.guidelines import get_guidelines_async
 from optimization.rubrics.generator import generate_judge_prompt_async
@@ -38,6 +39,28 @@ async def me(user: CurrentUser = Depends(current_user)) -> MeResponse:
         email=row.get("email"),
         name=row.get("name"),
         role=row.get("role") or "user",
+    )
+
+
+@router.delete("/me", status_code=204)
+async def delete_me(user: CurrentUser = Depends(current_user)) -> None:
+    """Permanently delete the authenticated user's account and all associated data."""
+    # Revoke Firebase refresh tokens so existing sessions are invalidated immediately
+    if is_initialized():
+        try:
+            from firebase_admin import auth as firebase_auth
+            row = await db_fetchrow(
+                "SELECT firebase_uid FROM users WHERE id = $id",
+                {"id": user.id},
+            )
+            if row and row.get("firebase_uid"):
+                firebase_auth.revoke_refresh_tokens(row["firebase_uid"])
+        except Exception:
+            pass  # best-effort — still proceed with deletion
+
+    await db_execute(
+        "DELETE FROM users WHERE id = $id",
+        {"id": user.id},
     )
 
 
