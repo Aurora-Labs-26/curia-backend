@@ -350,6 +350,14 @@ OUTRO_FULL_MS     = 3000   # outro plays at full volume after TTS ends
 OUTRO_FADE_OUT_MS = 2000   # outro fades to silence
 OUTRO_GAIN_DB     = 0.0    # dB relative to episode level (matched, sits underneath)
 
+# TTS per-segment retry count (transient provider failures shouldn't kill an episode)
+TTS_SEGMENT_RETRIES = int(os.getenv("CURIA_TTS_SEGMENT_RETRIES", "2"))
+
+# Spoken-audio estimate: characters per second of synthesized speech. Used to
+# set duration_estimate_seconds at script_ready, before any audio exists.
+# Calibrate against ready episodes: avg(len(transcript chars) / duration_seconds).
+TTS_CHARS_PER_SECOND = float(os.getenv("CURIA_TTS_CHARS_PER_SECOND", "15.5"))
+
 
 def _load_optional_segment(path: str | None, label: str) -> "AudioSegment | None":
     """Load a sound file from disk if the path is set + the file exists. Logs and skips otherwise."""
@@ -522,6 +530,7 @@ def synthesize_and_stitch_v2(
     output_path: str,
     speaker_override: str | None = None,
     speaker_pair: list[str] | None = None,
+    publisher=None,
 ) -> tuple[str, list[dict]]:
     """
     Segment-based synthesis — merges same-speaker lines into paragraphs,
@@ -529,6 +538,11 @@ def synthesize_and_stitch_v2(
 
     Returns (output_path, tts_timings) matching synthesize_and_stitch's signature.
     tts_timings: [{line_index, start_ms, end_ms, speaker, text}]
+
+    publisher: optional core.audio.hls.HlsPublisher — when set, each synthesized
+    segment (and the intro, if any) is published as a live HLS chunk so the
+    episode is streamable while synthesis is still running. Publishing is
+    best-effort and never fails the stitch.
 
     Key improvements over v1:
     - Reuses TTS adapter per speaker → generation_id chaining (voice consistency)
@@ -560,6 +574,20 @@ def synthesize_and_stitch_v2(
     # Reuse one adapter per speaker — preserves generation_id state for voice consistency
     adapters: dict[str, object] = {}
 
+    intro = _load_optional_segment(profile.intro_audio_path, "intro")
+    outro = _load_optional_segment(profile.outro_audio_path, "outro")
+    music = _load_optional_segment(profile.music_audio_path, "music")
+
+    # Live stream chunk 0 = the intro's full (pre-fade) portion, so the stream
+    # timeline matches the final stitched MP3 (chapters are intro-offset).
+    # Gain is approximated against typical speech loudness; the final mix still
+    # does exact dBFS matching.
+    if publisher is not None and intro is not None:
+        stream_intro = intro[:INTRO_FULL_MS]
+        if stream_intro.dBFS != float("-inf"):
+            stream_intro = stream_intro.apply_gain(-16.0 - stream_intro.dBFS + INTRO_GAIN_DB)
+        publisher.publish_intro(stream_intro)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         for i, seg in enumerate(segments):
             raw_speaker = seg["speaker"]
@@ -574,24 +602,38 @@ def synthesize_and_stitch_v2(
             clip_path = os.path.join(tmpdir, f"segment_{i:04d}.wav")
             logger.info(f"  [{i+1}/{len(segments)}] {raw_speaker}: {seg['text'][:60]}...")
 
-            word_timings = adapter.synthesize_with_timings(seg["text"], clip_path)
+            word_timings = None
+            synthesized = False
+            for attempt in range(TTS_SEGMENT_RETRIES + 1):
+                try:
+                    word_timings = adapter.synthesize_with_timings(seg["text"], clip_path)
+                    synthesized = True
+                    break
+                except Exception as tts_err:
+                    if attempt < TTS_SEGMENT_RETRIES:
+                        logger.warning(
+                            f"  TTS attempt {attempt + 1} failed for segment {i}: {tts_err} — retrying"
+                        )
+                    else:
+                        raise
+            assert synthesized
             segment_word_timings.append(word_timings)
 
             fmt = adapter.output_format
             if fmt == "mp3":
-                clips.append(AudioSegment.from_mp3(clip_path))
+                clip = AudioSegment.from_mp3(clip_path)
             else:
-                clips.append(AudioSegment.from_wav(clip_path))
+                clip = AudioSegment.from_wav(clip_path)
+            clips.append(clip)
+
+            if publisher is not None:
+                publisher.publish_segment(i, clip)
 
         logger.info("Stitching segments...")
         gap = AudioSegment.silent(duration=gap_ms)
         body = AudioSegment.empty()
         for clip in clips:
             body += clip + gap
-
-        intro = _load_optional_segment(profile.intro_audio_path, "intro")
-        outro = _load_optional_segment(profile.outro_audio_path, "outro")
-        music = _load_optional_segment(profile.music_audio_path, "music")
 
         intro_offset_ms = 0
 
@@ -814,59 +856,22 @@ async def _resolve_sources_for_episode(
     )
 
 
-async def process_episode(episode_id: str) -> None:
+def _resolve_profile_and_speakers(
+    show_name: str,
+    speaker_override: str | None,
+    speaker_pair: list[str] | None,
+    user_kb: "UserKB | None",
+) -> "tuple[EpisodeProfile, str | None, list[str] | None]":
     """
-    Process an episode row that already exists in the DB (status='queued').
-    Reads show_name + show_idea_id + editorial_direction from the row, runs the full
-    pipeline, updates the row with title/transcript/outline/audio_path/status='ready'.
+    Resolve the episode profile plus effective speaker selection.
 
-    On any exception: status='failed' + error column set, then re-raises.
-
-    Used by the worker handler. Idempotent for re-runs that fall through to ready
-    (audio gets re-rendered; previous file is overwritten).
+    KB fallback for speaker selection fires only when the episode row has no
+    explicit override (ingest-triggered episodes). When a speaker_pair is in
+    play, a dynamic two-host profile is built. Returns the resolved
+    (profile, speaker_override, speaker_pair) so callers can persist them.
     """
-    row = await db_fetchrow(
-        """
-        SELECT user_id, show_name, show_idea_id, editorial_direction,
-               length_minutes, speaker_override, speaker_pair
-        FROM episode WHERE id = $id::uuid
-        """,
-        {"id": episode_id},
-    )
-    if not row:
-        raise ValueError(f"episode {episode_id} not found")
-
-    user_id = row["user_id"]
-    show_name = row["show_name"]
-    show_idea_id = row.get("show_idea_id")
-    editorial_direction = row.get("editorial_direction") or ""
-    length_override: int | None = row.get("length_minutes")
-    speaker_override: str | None = row.get("speaker_override")
-    speaker_pair: list[str] | None = row.get("speaker_pair")
-
-    if show_name not in SHOW_PROFILES:
-        raise ValueError(
-            f"Unknown show_name '{show_name}'. Known: {list(SHOW_PROFILES)}"
-        )
-
-    import time as _ep_time
-    _ep_start = _ep_time.time()
-    worker_log = logger.bind(log_type="worker")
-
     profile = SHOW_PROFILES[show_name]
 
-    # Load the user's KB first — needed for speaker fallback + editorial hints.
-    try:
-        user_kb = await load_kb(user_id)
-    except Exception as e:
-        logger.warning(f"  could not load KB for {user_id}: {e}; proceeding without")
-        user_kb = None
-
-    # KB fallback for speaker selection — only when episode row has no explicit override.
-    # Remix and createEpisode always set speaker_pair/speaker_override on the row,
-    # so they are never affected. This path fires for ingest-triggered episodes.
-    # We check the format's default speaker count to decide which KB field applies:
-    # two-host formats → preferred_pair; single-host formats → preferred_speaker.
     if not speaker_pair and not speaker_override and user_kb is not None:
         kb_pair = user_kb.preferences.preferred_pair
         kb_speaker = user_kb.preferences.preferred_speaker
@@ -878,8 +883,6 @@ async def process_episode(episode_id: str) -> None:
             speaker_override = kb_speaker
             logger.info(f"  speaker_override from KB preference → {speaker_override}")
 
-    # If a speaker_pair is set (from episode row or KB fallback), build a dynamic
-    # two-host profile. Priority sort already applied at API layer or KB save time.
     if speaker_pair and len(speaker_pair) == 2 and not speaker_override:
         a, b = speaker_pair
         if a not in SPEAKER_PROFILES or b not in SPEAKER_PROFILES:
@@ -902,216 +905,408 @@ async def process_episode(episode_id: str) -> None:
                 music_gain_db=profile.music_gain_db,
             )
             logger.info(f"  speaker_pair override → {a} (role A) + {b} (role B)")
-    logger.info(f"--- Processing episode {episode_id} (show={show_name}, user={user_id}) ---")
-    worker_log.info(
-        f"EPISODE_START | id={episode_id} show={show_name} user={user_id}"
+
+    return profile, speaker_override, speaker_pair
+
+
+def _estimate_duration_seconds(transcript: list[dict], profile: "EpisodeProfile") -> int:
+    """Script-derived duration estimate, available the moment the script lands
+    (STREAMING_PLAN.md). Calibrate TTS_CHARS_PER_SECOND from ready episodes."""
+    total_chars = sum(len(line.get("text") or "") for line in transcript)
+    try:
+        from core.audio.stitcher import prepare_segments
+        n_segments = max(1, len(prepare_segments(transcript)))
+    except Exception:
+        n_segments = max(1, len(transcript))
+    gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
+    seconds = total_chars / TTS_CHARS_PER_SECOND + n_segments * gap_ms / 1000
+    if profile.intro_audio_path:
+        seconds += INTRO_FULL_MS / 1000
+    return max(1, int(round(seconds)))
+
+
+async def generate_episode_script(episode_id: str) -> None:
+    """
+    Stage 1 of episode generation: sources → outline → transcript → quality judge.
+
+    Commits the row at status='script_ready' with title, transcript, outline,
+    description and duration_estimate_seconds — the point where the episode
+    becomes visible and playable in the app (audio streams in stage 2).
+    Resolved speaker_override/speaker_pair are persisted so stage 2 is fully
+    row-driven and independently retryable.
+    """
+    row = await db_fetchrow(
+        """
+        SELECT user_id, show_name, show_idea_id, editorial_direction,
+               length_minutes, speaker_override, speaker_pair
+        FROM episode WHERE id = $id::uuid
+        """,
+        {"id": episode_id},
+    )
+    if not row:
+        raise ValueError(f"episode {episode_id} not found")
+
+    user_id = row["user_id"]
+    show_name = row["show_name"]
+    show_idea_id = row.get("show_idea_id")
+    editorial_direction = row.get("editorial_direction") or ""
+    length_override: int | None = row.get("length_minutes")
+
+    if show_name not in SHOW_PROFILES:
+        raise ValueError(
+            f"Unknown show_name '{show_name}'. Known: {list(SHOW_PROFILES)}"
+        )
+
+    # Load the user's KB first — needed for speaker fallback + editorial hints.
+    try:
+        user_kb = await load_kb(user_id)
+    except Exception as e:
+        logger.warning(f"  could not load KB for {user_id}: {e}; proceeding without")
+        user_kb = None
+
+    profile, speaker_override, speaker_pair = _resolve_profile_and_speakers(
+        show_name, row.get("speaker_override"), row.get("speaker_pair"), user_kb
     )
 
-    try:
-        # 1. Select sources (KB seeds editorial direction when none was provided)
-        await _set_episode_status(episode_id, "selecting")
-        sources, insights = await _resolve_sources_for_episode(
-            user_id=user_id,
-            editorial_direction=editorial_direction,
-            show_idea_id=str(show_idea_id) if show_idea_id else None,
-            user_kb=user_kb,
-        )
-        source_ids = [str(s.get("id", "")) for s in sources]
+    # 1. Select sources (KB seeds editorial direction when none was provided)
+    await _set_episode_status(episode_id, "selecting")
+    sources, insights = await _resolve_sources_for_episode(
+        user_id=user_id,
+        editorial_direction=editorial_direction,
+        show_idea_id=str(show_idea_id) if show_idea_id else None,
+        user_kb=user_kb,
+    )
+    source_ids = [str(s.get("id", "")) for s in sources]
 
-        # 2. Build briefing packet (KB injects listener_context + length override)
-        packet = build_briefing_packet(
-            format_name=profile.format_name,
-            sources=sources,
-            insights=insights,
-            editorial_direction=editorial_direction,
-            user_kb=user_kb,
-            length_override=length_override,
-        )
-        briefing = briefing_packet_to_str(packet)
+    # 2. Build briefing packet (KB injects listener_context + length override)
+    packet = build_briefing_packet(
+        format_name=profile.format_name,
+        sources=sources,
+        insights=insights,
+        editorial_direction=editorial_direction,
+        user_kb=user_kb,
+        length_override=length_override,
+    )
+    briefing = briefing_packet_to_str(packet)
 
-        # 3. Generate outline (sync DSPy call — offload to thread pool)
-        await _set_episode_status(episode_id, "outlining")
-        loop = asyncio.get_running_loop()
-        outline = await loop.run_in_executor(
-            None, generate_outline, briefing, show_name
-        )
-        title = outline.get("title", show_name)
+    # 3. Generate outline (sync DSPy call — offload to thread pool)
+    await _set_episode_status(episode_id, "outlining")
+    loop = asyncio.get_running_loop()
+    outline = await loop.run_in_executor(
+        None, generate_outline, briefing, show_name
+    )
+    title = outline.get("title", show_name)
 
-        # 4. Generate transcript — pick single-host or two-host based on speaker count
-        await _set_episode_status(episode_id, "transcribing")
-        is_two_host = len(profile.speaker_config.speakers) >= 2 and speaker_override is None
+    # 4. Generate transcript — pick single-host or two-host based on speaker count
+    await _set_episode_status(episode_id, "transcribing")
+    is_two_host = len(profile.speaker_config.speakers) >= 2 and speaker_override is None
+    if is_two_host:
+        logger.info(f"  two-host pipeline (speakers: {[s.name for s in profile.speaker_config.speakers]})")
+        transcript = await loop.run_in_executor(
+            None, generate_transcript_two_host,
+            briefing, outline, show_name, user_kb, profile,
+        )
+    else:
+        transcript = await loop.run_in_executor(
+            None, generate_transcript,
+            briefing, outline, show_name, user_kb, speaker_override,
+        )
+
+    judgment = await _rubric_judge(
+        task="transcript",
+        output=json.dumps(transcript, ensure_ascii=False),
+        user_id=user_id,
+    )
+    regenerated = False
+    if (
+        QUALITY_REROLL_ENABLED
+        and judgment.overall_score < QUALITY_THRESHOLD
+    ):
+        logger.info(
+            f"  judge score {judgment.overall_score:.2f} < threshold "
+            f"{QUALITY_THRESHOLD} — re-rolling transcript once "
+            f"(violations: {judgment.floor_violations})"
+        )
+
+        # Save v1
+        transcript_v1 = transcript
+        judgment_v1 = judgment
+
+        # Generate v2
         if is_two_host:
-            logger.info(f"  two-host pipeline (speakers: {[s.name for s in profile.speaker_config.speakers]})")
-            transcript = await loop.run_in_executor(
+            transcript_v2 = await loop.run_in_executor(
                 None, generate_transcript_two_host,
                 briefing, outline, show_name, user_kb, profile,
             )
         else:
-            transcript = await loop.run_in_executor(
+            transcript_v2 = await loop.run_in_executor(
                 None, generate_transcript,
                 briefing, outline, show_name, user_kb, speaker_override,
             )
-
-        judgment = await _rubric_judge(
+        judgment_v2 = await _rubric_judge(
             task="transcript",
-            output=json.dumps(transcript, ensure_ascii=False),
+            output=json.dumps(transcript_v2, ensure_ascii=False),
             user_id=user_id,
         )
-        regenerated = False
-        if (
-            QUALITY_REROLL_ENABLED
-            and judgment.overall_score < QUALITY_THRESHOLD
-        ):
-            logger.info(
-                f"  judge score {judgment.overall_score:.2f} < threshold "
-                f"{QUALITY_THRESHOLD} — re-rolling transcript once "
-                f"(violations: {judgment.floor_violations})"
-            )
 
-            # Save v1
-            transcript_v1 = transcript
-            judgment_v1 = judgment
+        # Keep whichever scores better
+        if judgment_v2.overall_score >= judgment_v1.overall_score:
+            transcript = transcript_v2
+            judgment = judgment_v2
+            logger.info(f"  re-roll improved: {judgment_v1.overall_score:.2f} → {judgment_v2.overall_score:.2f}")
+        else:
+            transcript = transcript_v1
+            judgment = judgment_v1
+            logger.info(f"  re-roll was worse: {judgment_v1.overall_score:.2f} → {judgment_v2.overall_score:.2f}, keeping original")
 
-            # Generate v2
-            if is_two_host:
-                transcript_v2 = await loop.run_in_executor(
-                    None, generate_transcript_two_host,
-                    briefing, outline, show_name, user_kb, profile,
-                )
-            else:
-                transcript_v2 = await loop.run_in_executor(
-                    None, generate_transcript,
-                    briefing, outline, show_name, user_kb, speaker_override,
-                )
-            judgment_v2 = await _rubric_judge(
-                task="transcript",
-                output=json.dumps(transcript_v2, ensure_ascii=False),
-                user_id=user_id,
-            )
+        regenerated = True
+    logger.info(
+        f"  final judge score: {judgment.overall_score:.2f} "
+        f"(pref={judgment.preference_score:.2f}, "
+        f"floor_violations={len(judgment.floor_violations)})"
+    )
 
-            # Keep whichever scores better
-            if judgment_v2.overall_score >= judgment_v1.overall_score:
-                transcript = transcript_v2
-                judgment = judgment_v2
-                logger.info(f"  re-roll improved: {judgment_v1.overall_score:.2f} → {judgment_v2.overall_score:.2f}")
-            else:
-                transcript = transcript_v1
-                judgment = judgment_v1
-                logger.info(f"  re-roll was worse: {judgment_v1.overall_score:.2f} → {judgment_v2.overall_score:.2f}, keeping original")
+    # 5. Commit the script — the episode becomes visible & playable from here.
+    duration_estimate = _estimate_duration_seconds(transcript, profile)
+    description, _provisional_chapters = _derive_display_fields(outline, 0)
 
-            regenerated = True
-        logger.info(
-            f"  final judge score: {judgment.overall_score:.2f} "
-            f"(pref={judgment.preference_score:.2f}, "
-            f"floor_violations={len(judgment.floor_violations)})"
+    source_uuids = _coerce_source_uuids(source_ids)
+    await db_execute(
+        """
+        UPDATE episode
+        SET title = $title,
+            transcript = $transcript::jsonb,
+            outline = $outline::jsonb,
+            source_ids = $source_ids,
+            quality_score = $score,
+            quality_feedback = $feedback,
+            quality_violations = $violations,
+            regenerated = $regenerated,
+            duration_estimate_seconds = $duration_estimate,
+            description = $description,
+            speaker_override = $speaker_override,
+            speaker_pair = $speaker_pair,
+            status = 'script_ready',
+            failed_stage = NULL,
+            error = NULL
+        WHERE id = $id::uuid
+        """,
+        {
+            "id": episode_id,
+            "title": title,
+            "transcript": json.dumps(transcript),
+            "outline": json.dumps(outline),
+            "source_ids": source_uuids,
+            "score": judgment.overall_score,
+            "feedback": judgment.feedback,
+            "violations": judgment.floor_violations,
+            "regenerated": regenerated,
+            "duration_estimate": duration_estimate,
+            "description": description,
+            "speaker_override": speaker_override,
+            "speaker_pair": speaker_pair,
+        },
+    )
+
+    # Mark idea as generated (if applicable) + log covered topic — content-level
+    # bookkeeping that belongs to the script stage.
+    if show_idea_id:
+        await db_execute(
+            "UPDATE show_idea SET generated = true WHERE id = $id::uuid",
+            {"id": str(show_idea_id)},
         )
+    try:
+        await log_covered_topics(user_id, show_name, episode_id, outline, source_ids)
+    except Exception as _ct_err:
+        logger.warning(f"covered_topic log skipped for {episode_id}: {_ct_err}")
 
-        # 5. Synthesize + stitch (sync TTS + pydub — offload to thread pool)
-        await _set_episode_status(episode_id, "synthesizing")
-        audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
+    logger.info(f"--- Script ready: episode {episode_id} title='{title}' (est {duration_estimate}s) ---")
+
+
+async def produce_episode_audio(episode_id: str) -> None:
+    """
+    Stage 2 of episode generation: TTS synthesis with live HLS publishing,
+    final stitch, R2 upload, exact duration + chapters, status='ready'.
+
+    Fully row-driven (reads transcript/outline/speakers from the DB) so it can
+    be retried without re-running the script stage.
+    """
+    row = await db_fetchrow(
+        """
+        SELECT user_id, show_name, speaker_override, speaker_pair,
+               transcript, outline
+        FROM episode WHERE id = $id::uuid
+        """,
+        {"id": episode_id},
+    )
+    if not row:
+        raise ValueError(f"episode {episode_id} not found")
+    if not row.get("transcript"):
+        raise ValueError(f"episode {episode_id} has no transcript — script stage incomplete")
+
+    show_name = row["show_name"]
+    if show_name not in SHOW_PROFILES:
+        raise ValueError(f"Unknown show_name '{show_name}'")
+
+    transcript = row["transcript"]
+    if isinstance(transcript, str):
+        transcript = json.loads(transcript)
+    outline = row.get("outline") or {}
+    if isinstance(outline, str):
+        outline = json.loads(outline)
+
+    speaker_override: str | None = row.get("speaker_override")
+    speaker_pair: list[str] | None = row.get("speaker_pair")
+    # Speakers were resolved and persisted by the script stage — no KB fallback here.
+    _, speaker_override, speaker_pair = _resolve_profile_and_speakers(
+        show_name, speaker_override, speaker_pair, user_kb=None
+    )
+
+    await _set_episode_status(episode_id, "synthesizing")
+    loop = asyncio.get_running_loop()
+
+    # Live HLS publishing (best-effort): each synthesized segment is uploaded as
+    # a chunk so listeners can start playback while synthesis runs.
+    from core.audio.hls import HlsPublisher
+    gap_ms = int(os.getenv("CURIA_STITCH_GAP_MS", "400"))
+    publisher = HlsPublisher(episode_id, loop, gap_ms=gap_ms)
+
+    audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
+    try:
         _, tts_timings = await loop.run_in_executor(
             None, synthesize_and_stitch_v2,
             transcript, show_name, audio_path, speaker_override, speaker_pair,
+            publisher,
         )
-
-        # 6. Persist results onto the existing row
-        # Derive actual duration from the stitched MP3
-        actual_duration_seconds: int | None = None
-        actual_length_minutes: int | None = None
+    finally:
+        # Always close the playlist — on success it becomes a VOD; on failure it
+        # ends early instead of leaving clients polling a stalled stream.
         try:
-            from pydub import AudioSegment as _AS
-            _audio = await asyncio.to_thread(_AS.from_mp3, audio_path)
-            actual_duration_seconds = int(_audio.duration_seconds)
-            actual_length_minutes = max(1, round(_audio.duration_seconds / 60))
-        except Exception:
-            pass
+            await asyncio.to_thread(publisher.finalize)
+        except Exception as _fin_err:
+            logger.warning(f"[hls] finalize failed for {episode_id}: {_fin_err}")
 
-        # Upload to R2/S3 if configured; fall back to local disk path
-        audio_url: str | None = None
-        from core.storage.blob import get_storage_backend, upload_file
-        if get_storage_backend() == "s3":
-            try:
-                r2_key = f"audio/{episode_id}.mp3"
-                await upload_file(audio_path, r2_key, content_type="audio/mpeg")
-                audio_url = r2_key
-                logger.info(f"[process_episode] audio uploaded to R2: {r2_key}")
-            except Exception as upload_err:
-                logger.error(f"[process_episode] R2 upload failed, keeping local path: {upload_err}")
+    # Derive actual duration from the stitched MP3
+    actual_duration_seconds: int | None = None
+    actual_length_minutes: int | None = None
+    try:
+        from pydub import AudioSegment as _AS
+        _audio = await asyncio.to_thread(_AS.from_mp3, audio_path)
+        actual_duration_seconds = int(_audio.duration_seconds)
+        actual_length_minutes = max(1, round(_audio.duration_seconds / 60))
+    except Exception:
+        pass
 
-        # Pass intro_ms so chapter startMinutes are offset correctly in the stitched file
-        intro_ms = tts_timings[0]["start_ms"] if tts_timings else 0
-        description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0, intro_ms=intro_ms)
+    # Upload to R2/S3 if configured; fall back to local disk path
+    audio_url: str | None = None
+    from core.storage.blob import get_storage_backend, upload_file
+    if get_storage_backend() == "s3":
+        try:
+            r2_key = f"audio/{episode_id}.mp3"
+            await upload_file(audio_path, r2_key, content_type="audio/mpeg")
+            audio_url = r2_key
+            logger.info(f"[produce_episode_audio] audio uploaded to R2: {r2_key}")
+        except Exception as upload_err:
+            logger.error(f"[produce_episode_audio] R2 upload failed, keeping local path: {upload_err}")
 
-        source_uuids = _coerce_source_uuids(source_ids)
-        await db_execute(
-            """
-            UPDATE episode
-            SET title = $title,
-                transcript = $transcript::jsonb,
-                outline = $outline::jsonb,
-                audio_path = $audio_path,
-                audio_url = $audio_url,
-                source_ids = $source_ids,
-                quality_score = $score,
-                quality_feedback = $feedback,
-                quality_violations = $violations,
-                regenerated = $regenerated,
-                tts_timings = $tts_timings::jsonb,
-                length_minutes = $length_minutes,
-                duration_seconds = $duration_seconds,
-                description = $description,
-                chapters = $chapters::jsonb,
-                status = 'ready',
-                error = NULL
-            WHERE id = $id::uuid
-            """,
-            {
-                "id": episode_id,
-                "title": title,
-                "transcript": json.dumps(transcript),
-                "outline": json.dumps(outline),
-                "audio_path": audio_path,
-                "audio_url": audio_url,
-                "source_ids": source_uuids,
-                "score": judgment.overall_score,
-                "feedback": judgment.feedback,
-                "violations": judgment.floor_violations,
-                "regenerated": regenerated,
-                "tts_timings": json.dumps(tts_timings),
-                "length_minutes": actual_length_minutes,
-                "duration_seconds": actual_duration_seconds,
-                "description": description,
-                "chapters": json.dumps(chapters),
-            },
-        )
+    # Pass intro_ms so chapter startMinutes are offset correctly in the stitched file
+    intro_ms = tts_timings[0]["start_ms"] if tts_timings else 0
+    description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0, intro_ms=intro_ms)
 
-        # 7. Mark idea as generated (if applicable) + log covered topic
-        if show_idea_id:
-            await db_execute(
-                "UPDATE show_idea SET generated = true WHERE id = $id::uuid",
-                {"id": str(show_idea_id)},
+    await db_execute(
+        """
+        UPDATE episode
+        SET audio_path = $audio_path,
+            audio_url = $audio_url,
+            tts_timings = $tts_timings::jsonb,
+            length_minutes = $length_minutes,
+            duration_seconds = $duration_seconds,
+            description = $description,
+            chapters = $chapters::jsonb,
+            status = 'ready',
+            failed_stage = NULL,
+            error = NULL
+        WHERE id = $id::uuid
+        """,
+        {
+            "id": episode_id,
+            "audio_path": audio_path,
+            "audio_url": audio_url,
+            "tts_timings": json.dumps(tts_timings),
+            "length_minutes": actual_length_minutes,
+            "duration_seconds": actual_duration_seconds,
+            "description": description,
+            "chapters": json.dumps(chapters),
+        },
+    )
+
+
+async def _mark_failed(episode_id: str, stage: str, error: str) -> None:
+    await db_execute(
+        """
+        UPDATE episode
+        SET status = 'failed', failed_stage = $stage, error = $error
+        WHERE id = $id::uuid
+        """,
+        {"id": episode_id, "stage": stage, "error": error[:1000]},
+    )
+
+
+async def process_episode(episode_id: str) -> None:
+    """
+    Orchestrate both stages of episode generation (STREAMING_PLAN.md):
+      script stage → status='script_ready' (episode playable, audio pending)
+      audio stage  → live HLS chunks while synthesizing → status='ready'
+
+    On failure: status='failed' + failed_stage ('script' | 'audio') + error.
+    Re-runs skip the script stage when a transcript already exists and the
+    previous failure wasn't in the script stage.
+
+    Used by the worker handler.
+    """
+    row = await db_fetchrow(
+        "SELECT show_name, transcript, failed_stage FROM episode WHERE id = $id::uuid",
+        {"id": episode_id},
+    )
+    if not row:
+        raise ValueError(f"episode {episode_id} not found")
+    show_name = row["show_name"]
+
+    import time as _ep_time
+    _ep_start = _ep_time.time()
+    worker_log = logger.bind(log_type="worker")
+    worker_log.info(f"EPISODE_START | id={episode_id} show={show_name}")
+
+    script_done = bool(row.get("transcript")) and row.get("failed_stage") != "script"
+
+    if not script_done:
+        try:
+            await generate_episode_script(episode_id)
+        except Exception as e:
+            worker_log.error(
+                f"EPISODE_FAIL | id={episode_id} show={show_name} stage=script "
+                f"duration={_ep_time.time() - _ep_start:.2f}s error={e}"
             )
-        try:
-            await log_covered_topics(user_id, show_name, episode_id, outline, source_ids)
-        except Exception as _ct_err:
-            logger.warning(f"covered_topic log skipped for {episode_id}: {_ct_err}")
+            await _mark_failed(episode_id, "script", str(e))
+            raise
+    else:
+        logger.info(f"--- Skipping script stage for {episode_id} (transcript exists) ---")
 
-        _ep_elapsed = _ep_time.time() - _ep_start
-        logger.info(f"--- Done: episode {episode_id} title='{title}' ---")
-        worker_log.info(
-            f"EPISODE_SUCCESS | id={episode_id} show={show_name} "
-            f"title={title} duration={_ep_elapsed:.2f}s "
-            f"quality_score={judgment.overall_score:.2f}"
-        )
-
+    try:
+        await produce_episode_audio(episode_id)
     except Exception as e:
-        _ep_elapsed = _ep_time.time() - _ep_start
         worker_log.error(
-            f"EPISODE_FAIL | id={episode_id} show={show_name} "
-            f"duration={_ep_elapsed:.2f}s error={e}"
+            f"EPISODE_FAIL | id={episode_id} show={show_name} stage=audio "
+            f"duration={_ep_time.time() - _ep_start:.2f}s error={e}"
         )
-        await _set_episode_status(episode_id, "failed", error=str(e)[:1000])
+        await _mark_failed(episode_id, "audio", str(e))
         raise
+
+    _ep_elapsed = _ep_time.time() - _ep_start
+    logger.info(f"--- Done: episode {episode_id} ---")
+    worker_log.info(
+        f"EPISODE_SUCCESS | id={episode_id} show={show_name} duration={_ep_elapsed:.2f}s"
+    )
 
 
 async def generate_standing_show(

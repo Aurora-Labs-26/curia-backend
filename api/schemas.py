@@ -121,6 +121,14 @@ class EpisodeSummary(BaseModel):
     listened: bool = False
     last_played_at: Optional[datetime] = None
     show_idea_id: Optional[UUID] = None
+    # Streaming playback (STREAMING_PLAN.md). Exact fields are null until
+    # status='ready'; the estimate is available from script_ready onward.
+    duration_seconds: Optional[int] = None
+    duration_estimate_seconds: Optional[int] = None
+    description: Optional[str] = None
+    chapters: Optional[Any] = None
+    play_position_seconds: Optional[float] = None
+    failed_stage: Optional[str] = None       # 'script' | 'audio' when status='failed'
 
 
 class EpisodeSourceObject(BaseModel):
