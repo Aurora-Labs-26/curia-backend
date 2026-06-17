@@ -10,6 +10,14 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-06-11 · Arihant + Claude (claude-fable-5)
 
 ### Feature
+Account deletion — App Store Guideline 5.1.1(v): in-app account delete that wipes ALL associated data (not deactivation). Drift-proof: discovers every `user_id` table (and source children by `source_id`, plus the `source_similarity` source_a/source_b oddball) from information_schema at runtime and wipes them in FK-safe order in one transaction (source-children → user_id tables → source → users last), then best-effort cleans S3 audio + the Firebase auth user outside the txn so their failure can't roll back the DB delete. Needed because most user tables key on `user_id` as plain TEXT (no FK/cascade, per 0002).
+- **`core/account.py`** — new; `delete_account(user_id)` returns a per-table delete summary
+- **`api/routes/me.py`** — `DELETE /me` (204, idempotent) gated by `current_user`
+- **`core/storage/blob.py`** — `delete_blobs(keys)` (s3 batched + local), best-effort/idempotent
+- **`core/firebase.py`** — `delete_user(uid)` best-effort (UserNotFound = success; never raises)
+- **`tests/test_account_delete.py`** — 7 tests: full table coverage, users-deleted-last, source-child + similarity sweep, no-sources skip, protected tables, external cleanup called + failure-isolated + skipped when no uid
+
+### Feature
 SQS queue backend (Phase 4) — switchable transport behind the existing queue interface. `CURIA_QUEUE_BACKEND=postgres` (default, unchanged) or `sqs` (two lane queues: `curia-interactive` for user-watched jobs, `curia-background` for pipeline-chained work). Jobs table becomes a write-only audit record under sqs (powers /jobs polling + dedup). Retries via visibility expiry (900s > 600s handler cap, no heartbeat); 3 receives → DLQ; PermanentError deletes immediately.
 - **`core/queue.py`** — `lane` param + `_DEFAULT_LANE`; backend toggle; SQS send on enqueue (audit row first, `fail_permanently` if publish fails); new `sqs_receive/sqs_ack/sqs_fail/sqs_fail_permanently`; `reap_stale` documented postgres-only
 - **`worker/main.py`** — handler execution extracted to transport-agnostic `_execute()`; new `_process_one_sqs()` (lane-pinned via `CURIA_WORKER_LANE`, long-poll, delete-on-ack, leave-on-fail); main loop branches on backend; reap + empty-sleep gated to postgres

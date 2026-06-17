@@ -67,6 +67,57 @@ def get_blob_url(key: str) -> str:
     return f"file://{Path(base).resolve()}/{key}"
 
 
+async def delete_blobs(keys: list[str]) -> int:
+    """
+    Delete objects by key (used by account deletion). Best-effort, idempotent —
+    missing keys are not errors. Returns the number of keys submitted for delete.
+    Handles both s3 and local backends; ignores empty/None keys.
+    """
+    keys = [k for k in keys if k]
+    if not keys:
+        return 0
+    backend = get_storage_backend()
+
+    if backend == "s3":
+        import boto3
+        from botocore.config import Config
+
+        bucket = os.getenv("CURIA_S3_BUCKET", "curia-assets")
+        region = os.getenv("CURIA_S3_REGION", "us-east-1")
+        endpoint = os.getenv("CURIA_S3_ENDPOINT")
+        kwargs: dict = {"region_name": region, "config": Config(signature_version="s3v4")}
+        if endpoint:
+            kwargs["endpoint_url"] = endpoint
+        access_key = os.getenv("CURIA_S3_ACCESS_KEY") or os.getenv("AWS_ACCESS_KEY_ID")
+        secret_key = os.getenv("CURIA_S3_SECRET_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY")
+        if access_key and secret_key:
+            kwargs["aws_access_key_id"] = access_key
+            kwargs["aws_secret_access_key"] = secret_key
+
+        def _delete():
+            client = boto3.client("s3", **kwargs)
+            # delete_objects caps at 1000 keys per call
+            for i in range(0, len(keys), 1000):
+                batch = [{"Key": k} for k in keys[i : i + 1000]]
+                client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
+
+        await asyncio.to_thread(_delete)
+        logger.info(f"[storage] deleted {len(keys)} objects from s3://{bucket}")
+        return len(keys)
+
+    base = Path(os.getenv("CURIA_STORAGE_LOCAL_DIR", "data/blobs"))
+
+    def _unlink():
+        for k in keys:
+            try:
+                (base / k).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    await asyncio.to_thread(_unlink)
+    return len(keys)
+
+
 def generate_presigned_url(key: str, expires_in: int = 3600) -> str | None:
     """Generate a presigned download URL for a private S3/R2 object. Returns None if not using S3."""
     if get_storage_backend() != "s3":

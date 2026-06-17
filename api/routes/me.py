@@ -3,7 +3,8 @@
 import json
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Response
+from loguru import logger
 from pydantic import BaseModel
 
 from api.auth import CurrentUser, current_user
@@ -39,6 +40,21 @@ async def me(user: CurrentUser = Depends(current_user)) -> MeResponse:
         name=row.get("name"),
         role=row.get("role") or "user",
     )
+
+
+@router.delete("/me", status_code=204, response_class=Response)
+async def delete_me(user: CurrentUser = Depends(current_user)) -> Response:
+    """
+    Permanently delete the authenticated user's account and ALL associated data
+    (sources, episodes, jobs, ideas, KB, audio, Firebase auth user). Required by
+    App Store Guideline 5.1.1(v). Irreversible. Idempotent: deleting an
+    already-gone account still returns 204.
+    """
+    from core.account import delete_account
+
+    summary = await delete_account(user.id)
+    logger.info(f"[me] account deleted user_id={user.id} summary={summary}")
+    return Response(status_code=204)
 
 
 @router.get("/me/kb", response_model=UserKB)

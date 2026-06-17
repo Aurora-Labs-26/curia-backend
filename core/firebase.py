@@ -66,3 +66,22 @@ def verify_id_token(id_token: str) -> dict:
 
 def is_initialized() -> bool:
     return _app is not None
+
+
+def delete_user(firebase_uid: str) -> bool:
+    """
+    Delete a Firebase Auth user (account deletion). Best-effort and idempotent:
+    returns True on success, False if Firebase is uninitialized, the uid is empty,
+    or the user is already gone. Never raises — DB deletion must proceed regardless.
+    """
+    if _app is None or not firebase_uid:
+        return False
+    try:
+        firebase_auth.delete_user(firebase_uid)
+        logger.info(f"[firebase] deleted auth user {firebase_uid}")
+        return True
+    except firebase_auth.UserNotFoundError:
+        return True  # already deleted — treat as success
+    except Exception as exc:
+        logger.warning(f"[firebase] delete_user({firebase_uid}) failed: {exc}")
+        return False
