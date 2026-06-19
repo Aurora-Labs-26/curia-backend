@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
+from loguru import logger
 
 from core.db.connection import db_execute, db_fetchrow
 
@@ -35,6 +36,7 @@ class CurrentUser:
 
 async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
     if not authorization or not authorization.lower().startswith("bearer "):
+        logger.warning(f"[authdbg] missing/malformed auth header: present={authorization is not None}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or malformed Authorization header (expected 'Bearer <token>')",
@@ -46,6 +48,7 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Empty bearer token",
         )
+    logger.info(f"[authdbg] token received len={len(token)} prefix={token[:8]}")
 
     # Try Firebase first if initialized
     from core.firebase import is_initialized, verify_id_token
@@ -79,8 +82,11 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
                 {"id": user_id, "email": email, "name": name, "uid": firebase_uid},
             )
             return CurrentUser(id=user_id, role="user")
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"[authdbg] firebase verify_id_token FAILED: {type(exc).__name__}: {exc}")
             pass  # fall through to api_token lookup
+    else:
+        logger.warning("[authdbg] firebase NOT initialized at request time")
 
     # Legacy fallback: lookup by api_token
     row = await db_fetchrow(
