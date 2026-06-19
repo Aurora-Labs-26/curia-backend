@@ -9,6 +9,19 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-06-19 · Arihant + Claude (claude-opus-4-8)
 
+### Test
+Coverage expansion — 24 new unit-test files (~412 tests) on top of the merged `v2.8`. All mock-only
+(no DB / network / API keys); full suite now 747 passing, 6 known-baseline fails unchanged.
+- **`tests/`** — `test_account_external`, `test_apple`, `test_blob_storage`, `test_briefing`,
+  `test_cascade_scraper`, `test_embedder`, `test_embeddings_facade`, `test_firebase_unit`,
+  `test_formats`, `test_ingest_normalise`, `test_ingest_pipeline`, `test_kb_extended`,
+  `test_llm_builder`, `test_llm_logger`, `test_logging_setup`, `test_merger`, `test_prompts_loader`,
+  `test_resolver`, `test_schema_config`, `test_schemas_api`, `test_scraper_internals`,
+  `test_splitter`, `test_tts_facade`, `test_validator`
+- **`.coveragerc`** — coverage config; **`.gitignore`** — ignore `.coverage` artifact
+
+## 2026-06-19 · Arihant + Claude (claude-opus-4-8)
+
 ### Refactor
 Merged `v2.7-sqs` into `v2.8` — reconciled the two diverged backend lines. `v2.8` had branched
 from the account-deletion commit and added the format/angle override + author-extraction feature,

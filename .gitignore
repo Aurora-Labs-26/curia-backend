@@ -16,6 +16,7 @@ xtts_env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
 
 # Local agent / session state
 .claude/

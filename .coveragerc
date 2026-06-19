@@ -1,0 +1,5 @@
+[run]
+omit =
+    studio/test_*.py
+    studio/compare_server.py
+    studio/run_episode_gen.py
