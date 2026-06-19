@@ -33,7 +33,8 @@
         { "name": "FIRECRAWL_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firecrawl-api-key" },
         { "name": "SMALLEST_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/smallest-api-key" },
         { "name": "FIREBASE_SERVICE_ACCOUNT_JSON", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firebase-service-account" },
-        { "name": "APPLE_PRIVATE_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/apple-private-key" }
+        { "name": "APPLE_PRIVATE_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/apple-private-key" },
+        { "name": "DEEPGRAM_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/deepgram-api-key" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",

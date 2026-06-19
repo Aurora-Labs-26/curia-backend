@@ -85,6 +85,10 @@
         {
           "name": "FIREBASE_SERVICE_ACCOUNT_JSON",
           "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firebase-service-account"
+        },
+        {
+          "name": "DEEPGRAM_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/deepgram-api-key"
         }
       ],
       "logConfiguration": {
