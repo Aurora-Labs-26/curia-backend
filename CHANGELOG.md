@@ -10,6 +10,14 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-06-17 · Arihant + Claude (claude-fable-5)
 
 ### Feature
+Deepgram Aura TTS provider — available like every other TTS provider (config-selectable per speaker). Plain REST (`POST /v1/speak?model=<voice>&encoding=mp3`, `Authorization: Token`), returns MP3; the Deepgram "voice" is the model query param, so a speaker's `voice_id` (e.g. `aura-2-thalia-en`) overrides the alias `model_id`. Native sync + async paths, stub fallback when `DEEPGRAM_API_KEY` unset — same contract as the others.
+- **`core/llm_config/schema.py`** — `deepgram` added to `ProviderType`
+- **`core/llm_config/adapters/tts.py`** — `_synthesize_deepgram` + `_async_deepgram`; dispatch + `output_format` (mp3) wired
+- **`config/models.yaml`** — `deepgram` provider + `deepgram-aura` model alias (model_id `aura-2-thalia-en`, bit_rate 48000)
+- **`.env.example`** — `DEEPGRAM_API_KEY`
+- **`tests/test_tts_deepgram.py`** — 6 tests: config wiring, mp3 output, sync/async request shape, voice_id→model override, error handling (httpx mocked)
+
+### Feature
 Sign in with Apple — token revocation on account deletion (App Store 5.1.1(v)). Required because Apple only returns name/email on first authorization and won't resend until the app is de-authorized; deleting without revoking left a nameless "ghost" account on re-signin. Revoke also satisfies Apple's review requirement.
 - **`core/apple.py`** — new; ES256 client-secret JWT (PyJWT + .p8), `exchange_code` (auth code → refresh token, tries dev+prod client_ids), `revoke`. Best-effort, never raises.
 - **`api/routes/auth.py`** — `POST /auth/apple` stores the refresh token + client_id per user at sign-in

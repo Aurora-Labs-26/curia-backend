@@ -31,6 +31,7 @@ ProviderType = Literal[
     "openai_tts",     # TTS (OpenAI TTS)
     "cartesia",       # TTS (Cartesia)
     "hume",           # TTS (Hume AI Octave)
+    "deepgram",       # TTS (Deepgram Aura)
     "jina",           # embedding (Jina)
     "mistral",        # embedding (Mistral)
 ]

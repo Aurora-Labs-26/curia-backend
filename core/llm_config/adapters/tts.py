@@ -94,7 +94,7 @@ class TTSAdapter:
     @property
     def output_format(self) -> str:
         """Returns 'mp3' for providers that write MP3, 'wav' for everything else."""
-        if self.provider.type in ("edge_tts", "hume"):
+        if self.provider.type in ("edge_tts", "hume", "deepgram"):
             return "mp3"
         if self.provider.type == "openai_tts":
             fmt = self.settings.get("response_format", "wav")
@@ -165,6 +165,8 @@ class TTSAdapter:
                 self._synthesize_cartesia(text, output_path, api_key)
             elif self.provider.type == "hume":
                 self._synthesize_hume(text, output_path, api_key)
+            elif self.provider.type == "deepgram":
+                self._synthesize_deepgram(text, output_path, api_key)
             elif self.provider.type == "edge_tts":
                 self._synthesize_edge_tts(text, output_path)
             else:
@@ -233,6 +235,8 @@ class TTSAdapter:
                 await self._async_cartesia(text, output_path, api_key)
             elif self.provider.type == "hume":
                 await self._async_hume(text, output_path, api_key)
+            elif self.provider.type == "deepgram":
+                await self._async_deepgram(text, output_path, api_key)
             elif self.provider.type == "xai":
                 await self._async_xai(text, output_path, api_key)
             else:
@@ -886,6 +890,54 @@ class TTSAdapter:
             return word_timings
         except Exception as e:
             raise RuntimeError(f"Hume TTS SDK request failed: {e}") from e
+
+    # ── Deepgram Aura TTS (REST) ───────────────────────────────────────────
+    # https://developers.deepgram.com/docs/tts-rest
+    # POST {base_url}/v1/speak?model=<voice>&encoding=mp3  · Authorization: Token <key>
+    # The Deepgram "voice" IS the model query param (e.g. aura-2-thalia-en), so we
+    # send the speaker's voice_id there, falling back to the model alias's model_id.
+
+    def _deepgram_request(self, text: str, api_key: str) -> bytes:
+        base_url = (self.provider.base_url or "https://api.deepgram.com").rstrip("/")
+        url = f"{base_url}/v1/speak"
+        params: dict = {"model": self.voice_id or self.model.model_id, "encoding": "mp3"}
+        if self.settings.get("bit_rate"):
+            params["bit_rate"] = int(self.settings["bit_rate"])
+        with httpx.Client(timeout=120) as client:
+            resp = client.post(
+                url,
+                params=params,
+                headers={"Authorization": f"Token {api_key}", "Content-Type": "application/json"},
+                json={"text": text},
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Deepgram error {resp.status_code}: {resp.text[:300]}")
+        return resp.content
+
+    def _synthesize_deepgram(self, text: str, output_path: str, api_key: str) -> None:
+        """Deepgram Aura TTS via REST — returns MP3."""
+        try:
+            _write_bytes(output_path, self._deepgram_request(text, api_key))
+        except Exception as e:
+            raise RuntimeError(f"Deepgram TTS request failed: {e}") from e
+
+    async def _async_deepgram(self, text: str, output_path: str, api_key: str) -> None:
+        """Deepgram Aura TTS via REST (native async httpx) — returns MP3."""
+        base_url = (self.provider.base_url or "https://api.deepgram.com").rstrip("/")
+        url = f"{base_url}/v1/speak"
+        params: dict = {"model": self.voice_id or self.model.model_id, "encoding": "mp3"}
+        if self.settings.get("bit_rate"):
+            params["bit_rate"] = int(self.settings["bit_rate"])
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                url,
+                params=params,
+                headers={"Authorization": f"Token {api_key}", "Content-Type": "application/json"},
+                json={"text": text},
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Deepgram error {resp.status_code}: {resp.text[:300]}")
+        await asyncio.to_thread(_write_bytes, output_path, resp.content)
 
     async def _async_hume(self, text: str, output_path: str, api_key: str) -> None:
         """Hume AI Octave TTS via SDK (async via thread pool) — chains generation_id."""

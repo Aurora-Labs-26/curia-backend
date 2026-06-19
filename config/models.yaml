@@ -49,6 +49,11 @@ providers:
     api_key_env: HUME_API_KEY
     base_url: https://api.hume.ai
 
+  deepgram:
+    type: deepgram
+    api_key_env: DEEPGRAM_API_KEY
+    base_url: https://api.deepgram.com
+
   # ── LLM providers ───────────────────────────────────────────────────────────
   #
   # vllm:
@@ -203,6 +208,15 @@ models:
     kind: tts
     defaults:
       output_format: mp3
+
+  # Deepgram Aura — the Deepgram "voice" is the model query param (aura-2-*-en).
+  # Per-speaker voice_id overrides model_id below; set bit_rate to tune MP3 quality.
+  deepgram-aura:
+    provider: deepgram
+    model_id: aura-2-thalia-en
+    kind: tts
+    defaults:
+      bit_rate: 48000
 
   # ── Additional LLM model aliases ───────────────────────────────────────────
   #
