@@ -325,6 +325,8 @@ async def handle_ingest(payload: dict) -> None:
     standalone = payload.get("standalone", True)
     url = payload.get("url", "")
     user_id_from_payload = payload.get("user_id", "")
+    format_override = payload.get("format")
+    angle_override = payload.get("angle")
 
     logger.info(f"[handle_ingest] source_id={source_id} attempt={attempt}/{max_attempts} standalone={standalone}")
 
@@ -392,10 +394,10 @@ async def handle_ingest(payload: dict) -> None:
         await _run_standalone(
             user_id=user_id,
             source_id=source_id,
-            show_name=None,
+            show_name=format_override,
             speaker=None,
             length_minutes=None,
-            angle_override=None,
+            angle_override=angle_override,
         )
     else:
         existing_job = await db_fetchrow(

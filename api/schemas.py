@@ -20,6 +20,27 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 class CreateSourceRequest(BaseModel):
     url: HttpUrl
     standalone: bool = True  # True = evaluate this source alone; False = run full cluster pipeline
+    format: Optional[str] = Field(
+        default=None,
+        description="Show format override for standalone sources. Frontend slug "
+        "(slow-burn, sharp-take, live-wire, open-verdict) or backend name "
+        "(narrative_drift, clarity_engine, momentum_loop, exploration_engine). "
+        "When omitted, the LLM picks the format. Ignored for cluster sources.",
+    )
+    angle: Optional[str] = Field(
+        default=None,
+        description="Editorial angle/direction for standalone sources, appended to "
+        "the generated angle. Ignored for cluster sources.",
+    )
+
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        from studio.formats import resolve_format_name
+
+        return resolve_format_name(v)  # raises ValueError for unknown values → 422
 
 
 class SourceSummary(BaseModel):
@@ -30,6 +51,7 @@ class SourceSummary(BaseModel):
     created_at: datetime
     error: Optional[str] = None
     covered_in: int = 0
+    author: Optional[str] = None
 
 
 class SourceDetail(SourceSummary):

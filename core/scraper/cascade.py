@@ -98,10 +98,10 @@ async def scrape(url: str) -> tuple[str, str]:
         raise PermanentError(head.reason)
 
     try:
-        content, title = await _scrape_trafilatura(url)
+        content, title, author = await _scrape_trafilatura(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] trafilatura success: {len(content)} chars")
-            return content.strip(), title or url
+            return content.strip(), title or url, author
         logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
     except Exception as e:
         logger.info(f"[scraper] trafilatura failed ({e}), trying firecrawl...")
@@ -109,12 +109,12 @@ async def scrape(url: str) -> tuple[str, str]:
     return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
 
-async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str]:
+async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str, str]:
     try:
-        content, title = await _scrape_firecrawl(url)
+        content, title, author = await _scrape_firecrawl(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] firecrawl success: {len(content)} chars")
-            return content.strip(), title or url
+            return content.strip(), title or url, author
         logger.info(f"[scraper] firecrawl returned too little ({len(content.strip()) if content else 0} chars)")
     except Exception as e:
         logger.warning(f"[scraper] firecrawl failed: {e}")
@@ -153,14 +153,20 @@ async def _scrape_trafilatura(url: str) -> tuple[str, str]:
     def _extract(html: str):
         content = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
         title = ""
+        author = ""
         try:
             from trafilatura.metadata import extract_metadata
             meta = extract_metadata(html)
-            if meta and meta.title:
-                title = meta.title
+            if meta:
+                if meta.title:
+                    title = meta.title
+                if meta.author:
+                    author = meta.author
+                elif meta.sitename:
+                    author = meta.sitename
         except Exception:
             pass
-        return content, title
+        return content, title, author
 
     return await asyncio.to_thread(_extract, html)
 
@@ -191,6 +197,8 @@ async def _scrape_firecrawl(url: str) -> tuple[str, str]:
     data = resp.json()
     result = data.get("data", {})
     content = result.get("markdown", "") or ""
-    title = result.get("metadata", {}).get("title", "") or ""
+    metadata = result.get("metadata", {})
+    title = metadata.get("title", "") or ""
+    author = metadata.get("author", "") or metadata.get("ogSiteName", "") or ""
 
-    return content, title
+    return content, title, author

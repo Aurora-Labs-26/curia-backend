@@ -40,8 +40,8 @@ ARTICLE_CHAR_CAP = 50_000
 # ---------------------------------------------------------------------------
 
 
-async def scrape_url(url: str) -> tuple[str, str]:
-    """Validate URL then scrape via cascade (trafilatura → firecrawl → fail)."""
+async def scrape_url(url: str) -> tuple[str, str, str]:
+    """Validate URL then scrape via cascade (trafilatura → firecrawl → fail). Returns (content, title, author)."""
     from core.scraper.cascade import scrape
     return await scrape(url)
 
@@ -177,13 +177,13 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
         # 1. Scrape (skip if full_text already populated — supports resumed runs)
         if not row.get("full_text"):
             await _set_status(source_id, "scraping")
-            full_text, title = await scrape_url(url)
+            full_text, title, author = await scrape_url(url)
             await db_execute(
                 """
-                UPDATE source SET title = $title, full_text = $full_text, updated_at = now()
+                UPDATE source SET title = $title, full_text = $full_text, author = $author, updated_at = now()
                 WHERE id = $id::uuid
                 """,
-                {"id": source_id, "title": title, "full_text": full_text},
+                {"id": source_id, "title": title, "full_text": full_text, "author": author or None},
             )
         else:
             full_text = row["full_text"]

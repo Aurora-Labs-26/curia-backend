@@ -7,6 +7,35 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-18 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Author/publication extraction during source scrape.
+- **`core/scraper/cascade.py`** — `_scrape_trafilatura` now reads `meta.author` (falls back to `meta.sitename`); `_scrape_firecrawl` reads `metadata.author` (falls back to `ogSiteName`). Both return a 3-tuple `(content, title, author)`.
+- **`core/ingest.py`** — `scrape_url` signature updated to 3-tuple; `author` saved to DB alongside `title`.
+- **`api/schemas.py`** — `author: Optional[str]` added to `SourceSummary`.
+- **`api/routes/sources.py`** — `s.author` included in both list queries.
+- **`alembic/versions/0028_source_author.py`** — migration adding `author TEXT` column to `source`.
+
+### Test
+- **`tests/test_schemas.py`** — all 19 existing tests pass; `author` field defaults to `None` on `SourceSummary`.
+
+## 2026-06-18 · Aditya + Claude (claude-opus-4-8)
+
+### Feature
+Per-source `format` + `angle` overrides on `POST /sources` (standalone path). The override
+plumbing already existed end-to-end in `_run_standalone`/`_create_episode_and_enqueue` but was
+hardcoded to `None` at the call site — this wires the API request through the ingest job payload
+so the share/add "customize" sheet can pick a show format and supply an editorial angle. Format
+accepts frontend slugs (slow-burn/sharp-take/live-wire/open-verdict) or backend names; resolved
+via `resolve_format_name` so unknown values 422 at the API edge. Both fields ignored for cluster
+sources (standalone=False).
+- **`api/schemas.py`** — `CreateSourceRequest` gains `format` (validated/normalised) + `angle`
+- **`api/routes/sources.py`** — `create_source` threads `format`/`angle` into the ingest enqueue payload + log line
+- **`worker/handlers/ingest.py`** — `handle_ingest` reads `format`/`angle` from payload, passes as `show_name`/`angle_override` to `_run_standalone` (was `None`)
+
+---
+
 ## 2026-06-11 · Arihant + Claude (claude-fable-5)
 
 ### Feature

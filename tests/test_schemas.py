@@ -24,6 +24,37 @@ def test_create_source_rejects_invalid_url():
         CreateSourceRequest(url="not-a-url")
 
 
+def test_create_source_defaults_format_angle_none():
+    req = CreateSourceRequest(url="https://example.com/a")
+    assert req.format is None
+    assert req.angle is None
+
+
+def test_create_source_format_accepts_slug():
+    req = CreateSourceRequest(url="https://example.com/a", format="sharp-take")
+    assert req.format == "clarity_engine"
+
+
+def test_create_source_format_accepts_backend_name():
+    req = CreateSourceRequest(url="https://example.com/a", format="narrative_drift")
+    assert req.format == "narrative_drift"
+
+
+def test_create_source_format_empty_string_to_none():
+    req = CreateSourceRequest(url="https://example.com/a", format="")
+    assert req.format is None
+
+
+def test_create_source_rejects_unknown_format():
+    with pytest.raises(ValidationError):
+        CreateSourceRequest(url="https://example.com/a", format="bogus")
+
+
+def test_create_source_angle_passthrough():
+    req = CreateSourceRequest(url="https://example.com/a", angle="focus on the risks")
+    assert req.angle == "focus on the risks"
+
+
 def test_create_episode_valid():
     req = CreateEpisodeRequest(show_name="clarity_engine")
     assert req.show_name == "clarity_engine"

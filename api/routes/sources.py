@@ -38,7 +38,10 @@ async def create_source(
     Worker scrapes + transforms + embeds; status moves queued → scraping → ... → ready.
     """
     url_str = str(req.url)
-    logger.info(f"[create_source] url={url_str[-40:]} standalone={req.standalone}")
+    logger.info(
+        f"[create_source] url={url_str[-40:]} standalone={req.standalone} "
+        f"format={req.format} angle={'yes' if req.angle else 'no'}"
+    )
     source_id = await get_or_create_source(url=url_str, user_id=user_id)
 
     # Fetch the row's status to decide whether to enqueue a fresh job.
@@ -75,6 +78,8 @@ async def create_source(
                     "user_id": user_id,
                     "url": url_str,
                     "standalone": req.standalone,
+                    "format": req.format,
+                    "angle": req.angle,
                 },
                 user_id=user_id,
                 lane="interactive",  # user just saved a URL and is watching the pile
@@ -95,7 +100,7 @@ async def list_sources(
     if status:
         rows = await db_query(
             """
-            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error,
+            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id AND s.status = $status AND s.hidden = false
@@ -106,7 +111,7 @@ async def list_sources(
     else:
         rows = await db_query(
             """
-            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error,
+            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id AND s.hidden = false
