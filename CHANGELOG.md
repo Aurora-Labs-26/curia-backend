@@ -7,6 +7,12 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-19 · Arihant + Claude (claude-fable-5)
+
+### Bug Fix
+- **`core/llm_config/adapters/tts.py`** — Deepgram `/v1/speak` caps input at 2000 chars/request; the generator's ~4500-char segments hit `413 Payload Too Large`. Added sentence-boundary chunking (≤1800 chars) that concatenates the MP3 segments, in both sync + async paths. Found by generating a real Deepgram show end-to-end (9.3-min episode produced + uploaded to S3 + served via presigned playback).
+- **`tests/test_tts_deepgram.py`** — chunking test (long text → multiple ≤1800-char calls, segments concatenated)
+
 ## 2026-06-17 · Arihant + Claude (claude-fable-5)
 
 ### Feature

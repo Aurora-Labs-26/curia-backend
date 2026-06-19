@@ -84,6 +84,34 @@ def test_voice_id_overrides_model(adapter):
     assert captured["params"]["model"] == "aura-2-orion-en"
 
 
+def test_long_text_is_chunked_under_2000(adapter):
+    """Deepgram caps input at 2000 chars/request — long text must split into multiple calls."""
+    from core.llm_config.adapters.tts import TTSAdapter
+
+    long_text = ("This is a sentence about testing. " * 200).strip()  # ~6600 chars
+    chunks = TTSAdapter._chunk_for_deepgram(long_text)
+    assert len(chunks) > 1
+    assert all(len(c) <= 1800 for c in chunks)
+    assert sum(len(c) for c in chunks) >= len(long_text) - len(chunks) * 2  # ~no text dropped
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, params=None, headers=None, json=None):
+            calls.append(json["text"])
+            return _Resp(content=b"\xff\xf3SEG")
+
+    with patch("core.llm_config.adapters.tts.httpx.Client", FakeClient):
+        out = tempfile.mktemp(suffix=".mp3")
+        adapter._synthesize_deepgram(long_text, out, "k")
+        # one call per chunk, segments concatenated
+        assert len(calls) == len(chunks)
+        assert os.path.getsize(out) == len(b"\xff\xf3SEG") * len(chunks)
+
+
 def test_error_status_raises(adapter):
     class FakeClient:
         def __init__(self, *a, **k): pass
