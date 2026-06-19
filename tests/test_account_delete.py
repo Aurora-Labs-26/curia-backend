@@ -46,6 +46,10 @@ class FakeConn:
             return self._firebase_uid
         return None
 
+    async def fetchrow(self, sql, *args):
+        # apple token lookup during delete — no Apple link in these fixtures
+        return {"apple_refresh_token": None, "apple_client_id": None}
+
     async def execute(self, sql, *args):
         self.executed.append(" ".join(sql.split()))
         return "DELETE 1"

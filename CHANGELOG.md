@@ -7,6 +7,17 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-17 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Sign in with Apple — token revocation on account deletion (App Store 5.1.1(v)). Required because Apple only returns name/email on first authorization and won't resend until the app is de-authorized; deleting without revoking left a nameless "ghost" account on re-signin. Revoke also satisfies Apple's review requirement.
+- **`core/apple.py`** — new; ES256 client-secret JWT (PyJWT + .p8), `exchange_code` (auth code → refresh token, tries dev+prod client_ids), `revoke`. Best-effort, never raises.
+- **`api/routes/auth.py`** — `POST /auth/apple` stores the refresh token + client_id per user at sign-in
+- **`core/account.py`** — `delete_account` revokes the Apple grant (outside the txn, best-effort) before wiping the user
+- **`pyproject.toml`** — `pyjwt[crypto]>=2.8`
+- **`tests/test_account_delete.py`** — mock updated for the new apple-token lookup
+- Requires: `users.apple_refresh_token` + `users.apple_client_id` columns (idempotent ALTER on RDS) and APPLE_* secrets (Team ID, Key ID, .p8, client_ids)
+
 ## 2026-06-11 · Arihant + Claude (claude-fable-5)
 
 ### Feature
