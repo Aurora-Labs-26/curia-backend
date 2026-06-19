@@ -94,7 +94,7 @@ class TTSAdapter:
     @property
     def output_format(self) -> str:
         """Returns 'mp3' for providers that write MP3, 'wav' for everything else."""
-        if self.provider.type in ("edge_tts", "hume"):
+        if self.provider.type in ("edge_tts", "hume", "deepgram"):
             return "mp3"
         if self.provider.type == "openai_tts":
             fmt = self.settings.get("response_format", "wav")
@@ -165,6 +165,8 @@ class TTSAdapter:
                 self._synthesize_cartesia(text, output_path, api_key)
             elif self.provider.type == "hume":
                 self._synthesize_hume(text, output_path, api_key)
+            elif self.provider.type == "deepgram":
+                self._synthesize_deepgram(text, output_path, api_key)
             elif self.provider.type == "edge_tts":
                 self._synthesize_edge_tts(text, output_path)
             else:
@@ -233,6 +235,8 @@ class TTSAdapter:
                 await self._async_cartesia(text, output_path, api_key)
             elif self.provider.type == "hume":
                 await self._async_hume(text, output_path, api_key)
+            elif self.provider.type == "deepgram":
+                await self._async_deepgram(text, output_path, api_key)
             elif self.provider.type == "xai":
                 await self._async_xai(text, output_path, api_key)
             else:
@@ -886,6 +890,88 @@ class TTSAdapter:
             return word_timings
         except Exception as e:
             raise RuntimeError(f"Hume TTS SDK request failed: {e}") from e
+
+    # ── Deepgram Aura TTS (REST) ───────────────────────────────────────────
+    # https://developers.deepgram.com/docs/tts-rest
+    # POST {base_url}/v1/speak?model=<voice>&encoding=mp3  · Authorization: Token <key>
+    # The Deepgram "voice" IS the model query param (e.g. aura-2-thalia-en), so we
+    # send the speaker's voice_id there, falling back to the model alias's model_id.
+
+    # Deepgram's REST /v1/speak caps input at 2000 chars/request, so we chunk
+    # at sentence boundaries (≤1800 for safety) and concatenate the MP3 segments.
+    _DEEPGRAM_MAX_CHARS = 1800
+
+    @staticmethod
+    def _chunk_for_deepgram(text: str, max_chars: int = _DEEPGRAM_MAX_CHARS) -> list[str]:
+        import re
+
+        text = (text or "").strip()
+        if len(text) <= max_chars:
+            return [text] if text else []
+        chunks: list[str] = []
+        cur = ""
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            # a single sentence longer than the limit → hard-split on words
+            if len(sentence) > max_chars:
+                if cur:
+                    chunks.append(cur.strip()); cur = ""
+                word = ""
+                for w in sentence.split(" "):
+                    if len(word) + len(w) + 1 > max_chars:
+                        chunks.append(word.strip()); word = ""
+                    word += w + " "
+                if word.strip():
+                    cur = word
+                continue
+            if len(cur) + len(sentence) + 1 > max_chars:
+                chunks.append(cur.strip()); cur = sentence + " "
+            else:
+                cur += sentence + " "
+        if cur.strip():
+            chunks.append(cur.strip())
+        return [c for c in chunks if c]
+
+    def _deepgram_params(self) -> dict:
+        params: dict = {"model": self.voice_id or self.model.model_id, "encoding": "mp3"}
+        if self.settings.get("bit_rate"):
+            params["bit_rate"] = int(self.settings["bit_rate"])
+        return params
+
+    def _deepgram_request(self, text: str, api_key: str) -> bytes:
+        """One Deepgram /v1/speak call for a single ≤2000-char chunk."""
+        base_url = (self.provider.base_url or "https://api.deepgram.com").rstrip("/")
+        with httpx.Client(timeout=120) as client:
+            resp = client.post(
+                f"{base_url}/v1/speak",
+                params=self._deepgram_params(),
+                headers={"Authorization": f"Token {api_key}", "Content-Type": "application/json"},
+                json={"text": text},
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Deepgram error {resp.status_code}: {resp.text[:300]}")
+        return resp.content
+
+    def _synthesize_deepgram(self, text: str, output_path: str, api_key: str) -> None:
+        """Deepgram Aura TTS via REST — chunks ≤2000 chars, concatenates MP3."""
+        try:
+            audio = b"".join(self._deepgram_request(c, api_key) for c in self._chunk_for_deepgram(text))
+            _write_bytes(output_path, audio)
+        except Exception as e:
+            raise RuntimeError(f"Deepgram TTS request failed: {e}") from e
+
+    async def _async_deepgram(self, text: str, output_path: str, api_key: str) -> None:
+        """Deepgram Aura TTS via REST (native async httpx) — chunked, MP3 concat."""
+        base_url = (self.provider.base_url or "https://api.deepgram.com").rstrip("/")
+        url = f"{base_url}/v1/speak"
+        headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
+        out = bytearray()
+        async with httpx.AsyncClient(timeout=120) as client:
+            for chunk in self._chunk_for_deepgram(text):
+                resp = await client.post(url, params=self._deepgram_params(), headers=headers, json={"text": chunk})
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Deepgram error {resp.status_code}: {resp.text[:300]}")
+                out += resp.content
+        await asyncio.to_thread(_write_bytes, output_path, bytes(out))
 
     async def _async_hume(self, text: str, output_path: str, api_key: str) -> None:
         """Hume AI Octave TTS via SDK (async via thread pool) — chains generation_id."""

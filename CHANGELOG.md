@@ -7,6 +7,31 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-19 · Arihant + Claude (claude-opus-4-8)
+
+### Refactor
+Merged `v2.7-sqs` into `v2.8` — reconciled the two diverged backend lines. `v2.8` had branched
+from the account-deletion commit and added the format/angle override + author-extraction feature,
+but was missing all of `v2.7-sqs`'s later fixes (auth re-link, Apple revoke, Deepgram). After the
+merge `v2.8` carries both. Only `CHANGELOG.md` conflicted (content union, date-ordered); the code
+files (`api/routes/sources.py`, `worker/handlers/ingest.py`) auto-merged cleanly with both sides'
+logic intact (enqueue keeps `format`/`angle` **and** `lane="interactive"`; ingest keeps the
+`already_ingested` idempotency guard **and** the `format`/`angle` → `_run_standalone` wiring).
+- **`tests/test_url_validator.py`** — fixed the two `TestCascadingScraper` cases that broke when
+  `cascade.scrape()` started returning a 3-tuple `(content, title, author)`: mocks now return
+  3-tuples and the call sites unpack three values. (Pre-existing breakage on `v2.8`, not the merge.)
+- Note: `0028_source_author` is correctly numbered for this branch (single alembic head); RDS still
+  needs an idempotent `ALTER TABLE source ADD COLUMN IF NOT EXISTS author TEXT` at deploy time.
+
+## 2026-06-19 · Arihant + Claude (claude-fable-5)
+
+### Bug Fix
+- **`api/auth.py`** — Firebase user auto-provisioning crashed with `UniqueViolationError: users_email_key` when a returning person signed in with a NEW `firebase_uid` but an existing email (happens after account deletion or Apple/Google de-authorization — Firebase mints a fresh uid). The `INSERT … ON CONFLICT (firebase_uid)` ignored the separate UNIQUE(email) constraint; the error was swallowed → 401 → "ghost user" on re-signin (affected Google too, not just Apple). Now: on a new uid, look up by email and **re-link** the existing row to the new uid instead of inserting a duplicate. Diagnosed from live `[authdbg]` API logs.
+
+### Bug Fix
+- **`core/llm_config/adapters/tts.py`** — Deepgram `/v1/speak` caps input at 2000 chars/request; the generator's ~4500-char segments hit `413 Payload Too Large`. Added sentence-boundary chunking (≤1800 chars) that concatenates the MP3 segments, in both sync + async paths. Found by generating a real Deepgram show end-to-end (9.3-min episode produced + uploaded to S3 + served via presigned playback).
+- **`tests/test_tts_deepgram.py`** — chunking test (long text → multiple ≤1800-char calls, segments concatenated)
+
 ## 2026-06-18 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Feature
@@ -34,7 +59,24 @@ sources (standalone=False).
 - **`api/routes/sources.py`** — `create_source` threads `format`/`angle` into the ingest enqueue payload + log line
 - **`worker/handlers/ingest.py`** — `handle_ingest` reads `format`/`angle` from payload, passes as `show_name`/`angle_override` to `_run_standalone` (was `None`)
 
----
+## 2026-06-17 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Deepgram Aura TTS provider — available like every other TTS provider (config-selectable per speaker). Plain REST (`POST /v1/speak?model=<voice>&encoding=mp3`, `Authorization: Token`), returns MP3; the Deepgram "voice" is the model query param, so a speaker's `voice_id` (e.g. `aura-2-thalia-en`) overrides the alias `model_id`. Native sync + async paths, stub fallback when `DEEPGRAM_API_KEY` unset — same contract as the others.
+- **`core/llm_config/schema.py`** — `deepgram` added to `ProviderType`
+- **`core/llm_config/adapters/tts.py`** — `_synthesize_deepgram` + `_async_deepgram`; dispatch + `output_format` (mp3) wired
+- **`config/models.yaml`** — `deepgram` provider + `deepgram-aura` model alias (model_id `aura-2-thalia-en`, bit_rate 48000)
+- **`.env.example`** — `DEEPGRAM_API_KEY`
+- **`tests/test_tts_deepgram.py`** — 6 tests: config wiring, mp3 output, sync/async request shape, voice_id→model override, error handling (httpx mocked)
+
+### Feature
+Sign in with Apple — token revocation on account deletion (App Store 5.1.1(v)). Required because Apple only returns name/email on first authorization and won't resend until the app is de-authorized; deleting without revoking left a nameless "ghost" account on re-signin. Revoke also satisfies Apple's review requirement.
+- **`core/apple.py`** — new; ES256 client-secret JWT (PyJWT + .p8), `exchange_code` (auth code → refresh token, tries dev+prod client_ids), `revoke`. Best-effort, never raises.
+- **`api/routes/auth.py`** — `POST /auth/apple` stores the refresh token + client_id per user at sign-in
+- **`core/account.py`** — `delete_account` revokes the Apple grant (outside the txn, best-effort) before wiping the user
+- **`pyproject.toml`** — `pyjwt[crypto]>=2.8`
+- **`tests/test_account_delete.py`** — mock updated for the new apple-token lookup
+- Requires: `users.apple_refresh_token` + `users.apple_client_id` columns (idempotent ALTER on RDS) and APPLE_* secrets (Team ID, Key ID, .p8, client_ids)
 
 ## 2026-06-11 · Arihant + Claude (claude-fable-5)
 

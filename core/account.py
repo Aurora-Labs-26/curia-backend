@@ -70,6 +70,9 @@ async def delete_account(user_id: str) -> dict:
         firebase_uid = await conn.fetchval(
             "SELECT firebase_uid FROM users WHERE id = $1", user_id
         )
+        apple = await conn.fetchrow(
+            "SELECT apple_refresh_token, apple_client_id FROM users WHERE id = $1", user_id
+        )
 
         def _count(res: str) -> int:
             # asyncpg execute() returns e.g. "DELETE 7"
@@ -128,5 +131,15 @@ async def delete_account(user_id: str) -> dict:
             fb_delete_user(firebase_uid)
         except Exception as exc:
             logger.warning(f"[account] firebase cleanup failed for {user_id}: {exc}")
+
+    # Revoke the Apple grant (App Store 5.1.1(v); also lets Apple resend name/email
+    # on a future fresh sign-in instead of returning a ghost user).
+    if apple and apple.get("apple_refresh_token") and apple.get("apple_client_id"):
+        try:
+            from core.apple import revoke as apple_revoke
+
+            await apple_revoke(apple["apple_refresh_token"], apple["apple_client_id"])
+        except Exception as exc:
+            logger.warning(f"[account] apple revoke failed for {user_id}: {exc}")
 
     return summary

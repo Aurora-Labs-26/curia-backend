@@ -21,6 +21,9 @@
         { "name": "CURIA_STORAGE_BACKEND", "value": "s3" },
         { "name": "CURIA_S3_BUCKET", "value": "curia-audio" },
         { "name": "CURIA_S3_REGION", "value": "us-east-1" },
+        { "name": "APPLE_TEAM_ID", "value": "CL4769MA4G" },
+        { "name": "APPLE_KEY_ID", "value": "7AB24ZA862" },
+        { "name": "APPLE_CLIENT_IDS", "value": "com.bhabani1999.curia,com.bhabani1999.curia.dev" },
         { "name": "CURIA_CORS_ORIGINS", "value": "*" }
       ],
       "secrets": [
@@ -29,7 +32,9 @@
         { "name": "OPENAI_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/openai-api-key" },
         { "name": "FIRECRAWL_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firecrawl-api-key" },
         { "name": "SMALLEST_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/smallest-api-key" },
-        { "name": "FIREBASE_SERVICE_ACCOUNT_JSON", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firebase-service-account" }
+        { "name": "FIREBASE_SERVICE_ACCOUNT_JSON", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/firebase-service-account" },
+        { "name": "APPLE_PRIVATE_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/apple-private-key" },
+        { "name": "DEEPGRAM_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:617341601034:secret:curia/deepgram-api-key" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",

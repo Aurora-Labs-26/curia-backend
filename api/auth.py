@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
+from loguru import logger
 
 from core.db.connection import db_execute, db_fetchrow
 
@@ -56,7 +57,7 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
             email = decoded.get("email")
             name = decoded.get("name")
 
-            # Upsert user by firebase_uid
+            # Known user by firebase_uid → done.
             row = await db_fetchrow(
                 "SELECT id, role FROM users WHERE firebase_uid = $uid",
                 {"uid": firebase_uid},
@@ -64,7 +65,28 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
             if row:
                 return CurrentUser(id=str(row["id"]), role=str(row.get("role") or "user"))
 
-            # Auto-provision new user
+            # New firebase_uid. The same person may already have a row under this
+            # email with a DIFFERENT uid — Firebase mints a fresh uid after account
+            # deletion or Apple/Google de-authorization. Re-link that row to the new
+            # uid instead of failing on the users_email unique constraint (which was
+            # caught and surfaced as 401 → ghost user).
+            if email:
+                existing = await db_fetchrow(
+                    "SELECT id, role FROM users WHERE email = $email",
+                    {"email": email},
+                )
+                if existing:
+                    await db_execute(
+                        """
+                        UPDATE users SET firebase_uid = $uid,
+                            name = COALESCE($name, name), updated_at = now()
+                        WHERE id = $id
+                        """,
+                        {"uid": firebase_uid, "name": name, "id": str(existing["id"])},
+                    )
+                    return CurrentUser(id=str(existing["id"]), role=str(existing.get("role") or "user"))
+
+            # Genuinely new account.
             import uuid
             user_id = str(uuid.uuid4())
             await db_execute(
@@ -79,7 +101,8 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
                 {"id": user_id, "email": email, "name": name, "uid": firebase_uid},
             )
             return CurrentUser(id=user_id, role="user")
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"[auth] firebase provisioning failed: {type(exc).__name__}: {exc}")
             pass  # fall through to api_token lookup
 
     # Legacy fallback: lookup by api_token
