@@ -10,6 +10,11 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-06-19 · Arihant + Claude (claude-fable-5)
 
 ### Bug Fix
+- **`api/auth.py`** — Firebase user auto-provisioning crashed with `UniqueViolationError: users_email_key` when a returning person signed in with a NEW `firebase_uid` but an existing email (happens after account deletion or Apple/Google de-authorization — Firebase mints a fresh uid). The `INSERT … ON CONFLICT (firebase_uid)` ignored the separate UNIQUE(email) constraint; the error was swallowed → 401 → "ghost user" on re-signin (affected Google too, not just Apple). Now: on a new uid, look up by email and **re-link** the existing row to the new uid instead of inserting a duplicate. Diagnosed from live `[authdbg]` API logs.
+
+
+
+### Bug Fix
 - **`core/llm_config/adapters/tts.py`** — Deepgram `/v1/speak` caps input at 2000 chars/request; the generator's ~4500-char segments hit `413 Payload Too Large`. Added sentence-boundary chunking (≤1800 chars) that concatenates the MP3 segments, in both sync + async paths. Found by generating a real Deepgram show end-to-end (9.3-min episode produced + uploaded to S3 + served via presigned playback).
 - **`tests/test_tts_deepgram.py`** — chunking test (long text → multiple ≤1800-char calls, segments concatenated)
 

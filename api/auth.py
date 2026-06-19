@@ -36,7 +36,6 @@ class CurrentUser:
 
 async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
     if not authorization or not authorization.lower().startswith("bearer "):
-        logger.warning(f"[authdbg] missing/malformed auth header: present={authorization is not None}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or malformed Authorization header (expected 'Bearer <token>')",
@@ -48,7 +47,6 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Empty bearer token",
         )
-    logger.info(f"[authdbg] token received len={len(token)} prefix={token[:8]}")
 
     # Try Firebase first if initialized
     from core.firebase import is_initialized, verify_id_token
@@ -59,7 +57,7 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
             email = decoded.get("email")
             name = decoded.get("name")
 
-            # Upsert user by firebase_uid
+            # Known user by firebase_uid → done.
             row = await db_fetchrow(
                 "SELECT id, role FROM users WHERE firebase_uid = $uid",
                 {"uid": firebase_uid},
@@ -67,7 +65,28 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
             if row:
                 return CurrentUser(id=str(row["id"]), role=str(row.get("role") or "user"))
 
-            # Auto-provision new user
+            # New firebase_uid. The same person may already have a row under this
+            # email with a DIFFERENT uid — Firebase mints a fresh uid after account
+            # deletion or Apple/Google de-authorization. Re-link that row to the new
+            # uid instead of failing on the users_email unique constraint (which was
+            # caught and surfaced as 401 → ghost user).
+            if email:
+                existing = await db_fetchrow(
+                    "SELECT id, role FROM users WHERE email = $email",
+                    {"email": email},
+                )
+                if existing:
+                    await db_execute(
+                        """
+                        UPDATE users SET firebase_uid = $uid,
+                            name = COALESCE($name, name), updated_at = now()
+                        WHERE id = $id
+                        """,
+                        {"uid": firebase_uid, "name": name, "id": str(existing["id"])},
+                    )
+                    return CurrentUser(id=str(existing["id"]), role=str(existing.get("role") or "user"))
+
+            # Genuinely new account.
             import uuid
             user_id = str(uuid.uuid4())
             await db_execute(
@@ -83,10 +102,8 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
             )
             return CurrentUser(id=user_id, role="user")
         except Exception as exc:
-            logger.warning(f"[authdbg] firebase verify_id_token FAILED: {type(exc).__name__}: {exc}")
+            logger.warning(f"[auth] firebase provisioning failed: {type(exc).__name__}: {exc}")
             pass  # fall through to api_token lookup
-    else:
-        logger.warning("[authdbg] firebase NOT initialized at request time")
 
     # Legacy fallback: lookup by api_token
     row = await db_fetchrow(
