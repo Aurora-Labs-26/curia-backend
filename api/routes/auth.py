@@ -17,6 +17,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 class AppleLinkRequest(BaseModel):
     authorization_code: str
+    # Apple returns the user's name (and email) ONLY on the first authorization,
+    # and never in the identity token — so the client captures them from the native
+    # credential and forwards them here. Optional: absent on later sign-ins.
+    name: str | None = None
+    email: str | None = None
 
 
 @router.get("/me", response_model=AuthUserResponse)
@@ -39,11 +44,36 @@ async def auth_me(user: CurrentUser = Depends(current_user)) -> AuthUserResponse
 @router.post("/apple", status_code=204)
 async def link_apple(req: AppleLinkRequest, user: CurrentUser = Depends(current_user)) -> None:
     """
-    Called right after a Sign in with Apple. Exchanges the one-time authorization
-    code for a long-lived refresh token and stores it, so account deletion can
-    revoke the Apple grant (App Store 5.1.1(v) + fixes the ghost-user re-login).
-    Best-effort: a failure here must never block sign-in — returns 204 regardless.
+    Called right after a Sign in with Apple. Does two things:
+      1) Persists the one-time name/email Apple hands the client on first auth
+         (Apple never resends them, and they're not in the identity token).
+      2) Exchanges the one-time authorization code for a long-lived refresh token
+         so account deletion can revoke the Apple grant (App Store 5.1.1(v) +
+         fixes the ghost-user re-login).
+    Both steps are independent and best-effort: a failure in one must not block the
+    other, and nothing here blocks sign-in — returns 204 regardless.
     """
+    # 1) Name/email — persist FIRST, independent of the (slower, network) code
+    # exchange. COALESCE+NULLIF so we only ever FILL a missing value, never null
+    # one out on a later sign-in that omits it. current_user has already
+    # provisioned the row, so the UPDATE always targets an existing user.
+    if req.name or req.email:
+        try:
+            await db_execute(
+                """
+                UPDATE users SET
+                    name  = COALESCE(NULLIF($name, ''),  name),
+                    email = COALESCE(NULLIF($email, ''), email),
+                    updated_at = now()
+                WHERE id = $id
+                """,
+                {"name": req.name, "email": req.email, "id": user.id},
+            )
+            logger.info(f"[auth] stored apple name/email for user_id={user.id}")
+        except Exception as exc:
+            logger.warning(f"[auth] apple name/email persist failed for user_id={user.id}: {exc}")
+
+    # 2) Refresh token for revoke-on-delete.
     from core.apple import exchange_code
 
     try:
