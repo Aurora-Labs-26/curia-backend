@@ -10,6 +10,18 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-06-19 · Arihant + Claude (claude-opus-4-8)
 
 ### Test
+Integration-test coverage for v2.8's new surface + a stale-doc fix. Verified live against the
+deployed v2.8 (bad-format → 422, `author` present in the source list).
+- **`tests/test_aws_smoke.py`** — `test_bad_format_override_is_rejected` (valid URL + unknown
+  `format` → 422 at the API edge, no row created → free) and `test_source_schema_exposes_author`
+  (deployed `/sources` response carries the `author` key). Both in the cheap `TestApiSurface` layer.
+- **`tests/test_e2e_generate.py`** — docstring no longer claims `HUME_API_KEY`; documents the real
+  TTS options (edge-tts / SMALLEST / DEEPGRAM / ELEVENLABS per `config/models.yaml`). No code change —
+  the generation e2e already matches current code (kenji+emeka pairs, current signatures).
+
+## 2026-06-19 · Arihant + Claude (claude-opus-4-8)
+
+### Test
 Coverage expansion — 24 new unit-test files (~412 tests) on top of the merged `v2.8`. All mock-only
 (no DB / network / API keys); full suite now 747 passing, 6 known-baseline fails unchanged.
 - **`tests/`** — `test_account_external`, `test_apple`, `test_blob_storage`, `test_briefing`,

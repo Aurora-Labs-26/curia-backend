@@ -277,6 +277,27 @@ class TestApiSurface:
         r = http.post("/sources", headers=auth, json={"url": "not-a-url"})
         assert r.status_code == 422
 
+    def test_bad_format_override_is_rejected(self, http, auth):
+        """v2.8: POST /sources accepts an optional format override, validated at the
+        API edge. A valid URL with an unknown format must 422 *before* any source row
+        is created (so this stays free — no scrape/LLM/TTS). Guards the deployed
+        format-override wiring against regression."""
+        r = http.post(
+            "/sources",
+            headers=auth,
+            json={"url": "https://example.com/not-created", "format": "not-a-real-format"},
+        )
+        assert r.status_code == 422
+
+    def test_source_schema_exposes_author(self, http, auth):
+        """v2.8: source rows carry an `author` column surfaced in SourceSummary. Confirm
+        the deployed list response includes the key (value may be null for rows scraped
+        before the feature)."""
+        rows = http.get("/sources", headers=auth).json()
+        if not rows:
+            pytest.skip("smoke user has no sources yet — run the FULL suite once")
+        assert "author" in rows[0], f"author missing from source schema: {sorted(rows[0])}"
+
     def test_audio_presign_serves_real_mp3(self, http, auth):
         """Find any ready episode for the smoke user and stream its first bytes
         through the presigned URL — proves API→S3 presign→playback end to end."""

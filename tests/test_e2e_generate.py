@@ -6,7 +6,9 @@ for all 4 formats, and produces audio files.
 Requires:
   - DATABASE_URL env var pointing to a Postgres instance with source data
   - ANTHROPIC_API_KEY (or whatever LLM provider is configured)
-  - HUME_API_KEY for real audio (falls back to silent WAV stubs without it)
+  - A configured TTS provider key for real audio — edge-tts (no key), or
+    SMALLEST_API_KEY / DEEPGRAM_API_KEY / ELEVENLABS_API_KEY per config/models.yaml;
+    falls back to silent WAV stubs when the active provider's key is unset
 
 Usage:
     DATABASE_URL="postgresql://..." ANTHROPIC_API_KEY="..." python -m pytest tests/test_e2e_generate.py -v -s
