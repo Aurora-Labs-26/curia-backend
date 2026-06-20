@@ -86,7 +86,10 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
                     )
                     return CurrentUser(id=str(existing["id"]), role=str(existing.get("role") or "user"))
 
-            # Genuinely new account.
+            # Genuinely new account. Apple only sends email/name on the FIRST
+            # authorization (and "Hide My Email" users may send neither, just a
+            # relay or nothing) — so on the conflict path COALESCE keeps any
+            # value already stored instead of nulling it out on a later sign-in.
             import uuid
             user_id = str(uuid.uuid4())
             await db_execute(
@@ -94,8 +97,8 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
                 INSERT INTO users (id, email, name, firebase_uid, role)
                 VALUES ($id, $email, $name, $uid, 'user')
                 ON CONFLICT (firebase_uid) DO UPDATE SET
-                    email = EXCLUDED.email,
-                    name = EXCLUDED.name,
+                    email = COALESCE(EXCLUDED.email, users.email),
+                    name = COALESCE(EXCLUDED.name, users.name),
                     updated_at = now()
                 """,
                 {"id": user_id, "email": email, "name": name, "uid": firebase_uid},

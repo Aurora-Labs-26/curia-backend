@@ -60,6 +60,33 @@ Scrape and store `og:image` from articles so frontend can display real article t
 
 ---
 
+## 2026-06-20 · Arihant + Claude (claude-opus-4-8)
+
+### Bug Fix
+Sign in with Apple — the user's name was never persisted. Root cause (found by auditing the whole
+flow incl. the frontend + Apple/Firebase docs): Apple returns name/email to the client **only on the
+first authorization** and **never in the identity token**; Firebase does not copy them onto the user,
+so the client must capture `credential.fullName` and forward it. The app discarded it, so the backend
+read a null `name` from the token and stored null. Fix forwards the captured name/email to the backend
+and persists them fill-only.
+- **`api/routes/auth.py`** — `AppleLinkRequest` gains optional `name` + `email`; `link_apple` persists
+  them with `COALESCE(NULLIF(...), col)` (fill-only, never nulls a stored value) **independent of** the
+  refresh-token exchange, so a slow/failed Apple exchange can't lose the name.
+- **`api/auth.py`** — provisioning `ON CONFLICT (firebase_uid)` now `COALESCE`s email/name instead of
+  overwriting with `EXCLUDED.*`, so a later sign-in that omits them (Apple's first-auth-only behaviour)
+  can't wipe stored values. Also makes the no-email / Hide-My-Email path safe (email column is nullable;
+  relay addresses are treated as normal emails; returning users resolve by `firebase_uid`).
+- **`tests/test_apple_auth.py`** — 9 mock-only tests (no DB/network/deploy): no-email provisioning,
+  relay email, re-link by email, ON CONFLICT COALESCE, and `link_apple` name/email fill-only + refresh
+  token + independence from exchange failure.
+- Frontend (curia-frontend): `context/AuthContext.tsx` captures `credential.fullName`/`email`,
+  `updateProfile({displayName})`, forwards them via `linkApple`, and re-fetches the profile after; the
+  delete→revoke→re-signin loop then yields a fresh first-auth so Apple resends the name.
+- Known follow-up: the client nonce still uses `Math.random` (should move to `expo-crypto`'s secure RNG —
+  needs the dep + a native rebuild, deferred).
+
+---
+
 ## 2026-06-19 · Arihant + Claude (claude-opus-4-8)
 
 ### Test
