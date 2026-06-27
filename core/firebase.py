@@ -4,6 +4,7 @@ Firebase Admin SDK initialization and token verification.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Optional
 
@@ -21,6 +22,19 @@ def init_firebase() -> None:
     if _app is not None:
         return
 
+    # Priority 1: inline JSON via env var (preferred for cloud deployments like Railway)
+    sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if sa_json:
+        try:
+            sa_dict = json.loads(sa_json)
+            cred = credentials.Certificate(sa_dict)
+            _app = firebase_admin.initialize_app(cred)
+            logger.info("[firebase] initialized with FIREBASE_SERVICE_ACCOUNT_JSON")
+            return
+        except Exception as e:
+            logger.error(f"[firebase] failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+
+    # Priority 2: file path (local dev)
     cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if cred_path:
         cred = credentials.Certificate(cred_path)
@@ -34,8 +48,9 @@ def init_firebase() -> None:
             logger.info(f"[firebase] initialized with project ID: {project_id}")
         else:
             logger.warning(
-                "[firebase] No credentials found. Set GOOGLE_APPLICATION_CREDENTIALS "
-                "or FIREBASE_PROJECT_ID. Auth will fall back to legacy token mode."
+                "[firebase] No credentials found. Set FIREBASE_SERVICE_ACCOUNT_JSON, "
+                "GOOGLE_APPLICATION_CREDENTIALS, or FIREBASE_PROJECT_ID. "
+                "Auth will fall back to legacy token mode."
             )
 
 

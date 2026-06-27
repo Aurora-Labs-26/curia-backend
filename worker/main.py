@@ -129,8 +129,10 @@ async def main() -> None:
     from core.logging import setup_logging
     from core.prompt_watcher import check_prompt_changes, init_prompt_hashes
     from core.prompts.loader import PROMPTS_DIR
+    from core.firebase import init_firebase
 
     setup_logging(service="worker")
+    init_firebase()
     init_prompt_hashes(PROMPTS_DIR)
 
     worker_id = default_worker_id()

@@ -79,11 +79,8 @@ async def _resolve_token(authorization: Optional[str]) -> CurrentUser:
                 {"id": user_id, "email": email, "name": name, "uid": firebase_uid},
             )
             return CurrentUser(id=user_id, role="user")
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid Firebase token: {e}",
-            )
+        except Exception:
+            pass  # fall through to api_token lookup
 
     # Legacy fallback: lookup by api_token
     row = await db_fetchrow(
