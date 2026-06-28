@@ -62,6 +62,10 @@ The outline defines the structure. Execute it segment by segment.
 - Cover every segment in order. Do not skip, merge, or reorder.
 - For each segment, draw ONLY from that segment's primitives_used.
 - Each segment has a purpose — execute it, do not editorialize around it.
+- Tag every line with the "segment" field — the integer segment number from the outline it belongs to
+- A real, multi-second pause now follows the last line of every segment before the next one
+  begins. The line that closes each segment must land as a complete beat on its own — never
+  trail off expecting an immediate reply, since none follows until after the pause.
 
 Distribute words by argumentative weight, not evenly:
 - Load-bearing segments (claim, mechanism, expansion, key insight): develop fully.
@@ -297,8 +301,8 @@ Write in this order:
 
 Output format — no wrapper, no fences, raw JSON only:
 [
-  {"speaker": "HOST_B_NAME", "text": "..."},
-  {"speaker": "HOST_B_NAME", "text": "..."}
+  {"speaker": "HOST_B_NAME", "text": "...", "segment":1},
+  {"speaker": "HOST_B_NAME", "text": "...", "segment":1}
 ]
 
 Replace HOST_B_NAME with the actual speaker name from the <speaker> block.

@@ -41,13 +41,17 @@ class GenerateTranscript(dspy.Signature):
         desc=(
             "Episode outline as JSON, wrapped in <outline> tags. "
             "Contains: title, thread, and segments array. "
-            "Each segment has: segment number, title, purpose, primitives_used, transition. "
+            "Each segment has: segment number, title, purpose, primitives_used, transition, vibe. "
             "Execute this structure exactly — do not redesign it."
         )
     )
 
     transcript_json: str = dspy.OutputField(
-        desc='JSON array of {"speaker": str, "text": str}. No wrapper object, no markdown fences.'
+        desc=(
+            'JSON array of {"speaker": str, "text": str, "segment": int}. No wrapper object, '
+            "no markdown fences. segment is the outline segment number for body lines, "
+            "-1 for the intro lines you write, 0 for the outro lines you write."
+        )
     )
 
 

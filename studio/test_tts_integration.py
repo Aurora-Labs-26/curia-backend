@@ -126,7 +126,7 @@ def test_hume(tmpdir: str) -> None:
     try:
         output_path = os.path.join(tmpdir, "hume_episode.mp3")
         t0 = time.time()
-        output, tts_timings = synthesize_and_stitch_v2(
+        output, tts_timings, _ = synthesize_and_stitch_v2(
             transcript=TRANSCRIPT_HUME,
             show_name="clarity_engine",
             output_path=output_path,
@@ -155,7 +155,7 @@ def test_smallest(tmpdir: str) -> None:
 
     output_path = os.path.join(tmpdir, "smallest_episode.mp3")
     t0 = time.time()
-    output, tts_timings = synthesize_and_stitch_v2(
+    output, tts_timings, _ = synthesize_and_stitch_v2(
         transcript=TRANSCRIPT_SMALLEST,
         show_name="clarity_engine",
         output_path=output_path,

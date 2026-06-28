@@ -57,6 +57,14 @@ The outline defines the structure. Execute it segment by segment.
 - Cover every segment in order. Do not skip, merge, or reorder.
 - For each segment, draw ONLY from that segment's primitives_used.
 - Each segment has a purpose — execute it, do not editorialize around it.
+- Tag every line with the "segment" field — the integer segment number from the outline it belongs to
+- A real, multi-second pause now follows the last line of every segment before the next one
+  begins. The line that closes each segment must land as a complete beat on its own — do not
+  trail into what comes next.
+- The intro you write is not one of the outline's numbered segments — tag every intro line
+  with "segment": -1. The outro is also not a numbered segment — tag every outro line with
+  "segment": 0. A pause follows the intro before segment 1 begins, and a pause follows the
+  last body segment before the outro begins, same as between any two body segments.
 
 Distribute words by argumentative weight, not evenly:
 - Load-bearing segments (claim, mechanism, expansion, key insight): develop fully.
@@ -326,7 +334,10 @@ Write in this order:
 
 Output format — no wrapper, no fences, raw JSON only:
 [
-  {"speaker": "kenji", "text": "..."},
-  {"speaker": "kenji", "text": "..."}
+  {"speaker": "kenji", "text": "...", "segment": -1},
+  {"speaker": "kenji", "text": "...", "segment": 1},
+  {"speaker": "kenji", "text": "...", "segment": 1},
+  {"speaker": "kenji", "text": "...", "segment": 0}
 ]
+(segment -1 = intro lines, 0 = outro lines, 1..N = body segments in order)
 </execution>

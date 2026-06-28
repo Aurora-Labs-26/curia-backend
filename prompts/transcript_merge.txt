@@ -57,6 +57,17 @@ SEGMENT COVERAGE CHECK (do this before writing the outro):
 - If a segment is missing or thin, expand it from the host whose transcript is closest
 - Do not invent new material — only expand from what the hosts wrote
 
+SEGMENT TAGGING (applies to every line you output, including the intro/outro you write):
+- Host A and Host B's lines already carry the outline's "segment" field — preserve it as-is
+- The intro you write is not one of the outline's numbered segments — tag every intro line
+  with "segment": -1
+- The outro you write is also not a numbered segment — tag every outro line with "segment": 0
+- A real, multi-second pause now follows the last line of every segment before the next one
+  begins — this includes after the intro (before segment 1) and after the last body segment
+  (before the outro), same as between any two body segments. Every segment's closing line,
+  including the intro's and each body segment's, must land as a complete beat on its own —
+  never trail into what comes next.
+
 INTERLEAVING:
 - Host A builds; Host B reacts, extends, or challenges
 - Natural turn length: Host A typically 2-4 lines before Host B responds
@@ -141,10 +152,14 @@ Write in this order:
 
 Output format — no wrapper, no fences, raw JSON only:
 [
-  {"speaker": "host_a_name", "text": "..."},
-  {"speaker": "host_b_name", "text": "..."},
-  {"speaker": "host_a_name", "text": "..."}
+  {"speaker": "host_a_name", "text": "...", "segment": -1},
+  {"speaker": "host_b_name", "text": "...", "segment": -1},
+  {"speaker": "host_a_name", "text": "...", "segment": 1},
+  {"speaker": "host_b_name", "text": "...", "segment": 1},
+  {"speaker": "host_a_name", "text": "...", "segment": 2},
+  {"speaker": "host_b_name", "text": "...", "segment": 0}
 ]
+(segment -1 = intro lines you write, 0 = outro lines you write, 1..N = body segments in order)
 
 Use the actual speaker names (lowercase) provided in the inputs.
 </execution>

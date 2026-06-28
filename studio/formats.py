@@ -19,6 +19,37 @@ WORDS_PER_MINUTE = 150  # standard spoken English TTS rate
 INTRO_WORDS = 150  # ~8-12 sentences — host intro, show name, pile reference, source name, tease
 OUTRO_WORDS = 70   # ~4-5 sentences
 
+# ---------------------------------------------------------------------------
+# Vibe tagging — segment-level mood used to pick BGM bank clips and to place
+# pause/SFX cues at transitions. Sentinel segment ids (-1, 0) mark the spoken
+# intro/outro, which sit outside the outline's 1..N body segments and are
+# never LLM-chosen — only body segments get a vibe assigned by the outline LLM.
+# ---------------------------------------------------------------------------
+INTRO_SEGMENT = -1
+OUTRO_SEGMENT = 0
+INTRO_VIBE = "intro"
+OUTRO_VIBE = "outro"
+
+VIBE_DEFINITIONS: dict[str, str] = {
+    "grounding":  "Establish context. Scene-setting. Definitions. Orientation.",
+    "curious":    "Raise a question or introduce something unexpected. Create curiosity without resolving it.",
+    "building":   "Explain how something works. Step-by-step reasoning. Add evidence or context.",
+    "tension":    "Introduce contradiction, conflict, uncertainty, competing explanations, or stakes that remain unresolved.",
+    "momentum":   "Deliver important discoveries quickly. Multiple connected insights. Listener should feel pulled forward.",
+    "expansive":  "Zoom out. Connect this idea to a broader pattern, another field, or a larger implication.",
+    "payoff":     "Resolve a question raised earlier. Deliver the central insight or a satisfying intermediate conclusion.",
+    "reflective": "Slow down. Invite thought rather than resolution. Leave the listener with perspective instead of new information.",
+}
+DEFAULT_VIBE = "curious"  # fallback when the outline LLM omits or mistags a segment's vibe
+
+# Single global pause length — used for every body segment transition AND the
+# intro lead-in / outro tail-out silence (intentionally one constant, not
+# per-format, per-pacing tuned).
+SEGMENT_PAUSE_MS = 3000
+
+# Pad before the single SFX cue fires at each transition.
+SFX_PAD_MS = 100
+
 
 @dataclass
 class FormatConfig:

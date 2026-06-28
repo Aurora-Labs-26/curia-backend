@@ -153,7 +153,7 @@ async def get_episode(
         SELECT id, show_name, title, status, created_at, error,
                transcript, outline, audio_path, source_ids, editorial_direction,
                quality_score, quality_feedback, quality_violations, regenerated,
-               length_minutes, speaker_override, tts_timings
+               length_minutes, speaker_override, tts_timings, bgm_plan
         FROM episode
         WHERE id = $id::uuid AND (user_id = $user_id OR (is_seed = true AND user_id = 'seed'))
         """,
