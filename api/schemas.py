@@ -52,6 +52,7 @@ class SourceSummary(BaseModel):
     error: Optional[str] = None
     covered_in: int = 0
     author: Optional[str] = None
+    og_image: Optional[str] = None
 
 
 class SourceDetail(SourceSummary):

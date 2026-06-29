@@ -7,6 +7,18 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-06-29 · Aditya + Claude (claude-sonnet-4-6)
+
+### Feature
+Scrape and store `og:image` from articles so frontend can display real article thumbnails.
+- **`alembic/versions/0029_source_og_image.py`** — migration adding `og_image TEXT` column to `source` table
+- **`core/scraper/cascade.py`** — all scrape functions now return 4-tuple `(content, title, author, og_image)`; trafilatura path reads `meta.image`, firecrawl path reads `metadata.ogImage`
+- **`core/ingest.py`** — `scrape_url` return type updated to 4-tuple; `og_image` stored in UPDATE alongside title/author
+- **`api/schemas.py`** — `SourceSummary` gains `og_image: Optional[str]`
+- **`api/routes/sources.py`** — both list-sources SELECTs now include `s.og_image`
+
+---
+
 ## 2026-06-19 · Arihant + Claude (claude-opus-4-8)
 
 ### Test

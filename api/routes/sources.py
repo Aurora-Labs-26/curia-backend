@@ -100,7 +100,7 @@ async def list_sources(
     if status:
         rows = await db_query(
             """
-            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author,
+            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author, s.og_image,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id AND s.status = $status AND s.hidden = false
@@ -111,7 +111,7 @@ async def list_sources(
     else:
         rows = await db_query(
             """
-            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author,
+            SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author, s.og_image,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id AND s.hidden = false

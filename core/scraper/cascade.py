@@ -74,7 +74,7 @@ async def resolve_redirects(url: str) -> str:
         return url
 
 
-async def scrape(url: str) -> tuple[str, str]:
+async def scrape(url: str) -> tuple[str, str, str, str]:
     # Normalize known broken URL patterns before anything else
     url = normalize_url(url)
 
@@ -98,10 +98,10 @@ async def scrape(url: str) -> tuple[str, str]:
         raise PermanentError(head.reason)
 
     try:
-        content, title, author = await _scrape_trafilatura(url)
+        content, title, author, og_image = await _scrape_trafilatura(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] trafilatura success: {len(content)} chars")
-            return content.strip(), title or url, author
+            return content.strip(), title or url, author, og_image
         logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
     except Exception as e:
         logger.info(f"[scraper] trafilatura failed ({e}), trying firecrawl...")
@@ -109,12 +109,12 @@ async def scrape(url: str) -> tuple[str, str]:
     return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
 
-async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str, str]:
+async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str, str, str]:
     try:
-        content, title, author = await _scrape_firecrawl(url)
+        content, title, author, og_image = await _scrape_firecrawl(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] firecrawl success: {len(content)} chars")
-            return content.strip(), title or url, author
+            return content.strip(), title or url, author, og_image
         logger.info(f"[scraper] firecrawl returned too little ({len(content.strip()) if content else 0} chars)")
     except Exception as e:
         logger.warning(f"[scraper] firecrawl failed: {e}")
@@ -134,7 +134,7 @@ async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str
     raise PermanentError(f"Could not extract content from {url} — tried trafilatura and firecrawl")
 
 
-async def _scrape_trafilatura(url: str) -> tuple[str, str]:
+async def _scrape_trafilatura(url: str) -> tuple[str, str, str, str]:
     import asyncio
     import httpx
     import trafilatura
@@ -154,6 +154,7 @@ async def _scrape_trafilatura(url: str) -> tuple[str, str]:
         content = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
         title = ""
         author = ""
+        og_image = ""
         try:
             from trafilatura.metadata import extract_metadata
             meta = extract_metadata(html)
@@ -164,14 +165,16 @@ async def _scrape_trafilatura(url: str) -> tuple[str, str]:
                     author = meta.author
                 elif meta.sitename:
                     author = meta.sitename
+                if meta.image:
+                    og_image = meta.image
         except Exception:
             pass
-        return content, title, author
+        return content, title, author, og_image
 
     return await asyncio.to_thread(_extract, html)
 
 
-async def _scrape_firecrawl(url: str) -> tuple[str, str]:
+async def _scrape_firecrawl(url: str) -> tuple[str, str, str, str]:
     api_key = os.getenv("FIRECRAWL_API_KEY")
     if not api_key:
         raise RuntimeError("FIRECRAWL_API_KEY not set — cannot use firecrawl fallback")
@@ -200,5 +203,6 @@ async def _scrape_firecrawl(url: str) -> tuple[str, str]:
     metadata = result.get("metadata", {})
     title = metadata.get("title", "") or ""
     author = metadata.get("author", "") or metadata.get("ogSiteName", "") or ""
+    og_image = metadata.get("ogImage", "") or metadata.get("og:image", "") or ""
 
-    return content, title, author
+    return content, title, author, og_image
