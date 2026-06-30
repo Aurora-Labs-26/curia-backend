@@ -31,6 +31,7 @@ load_dotenv(dotenv_path=CURIA_ROOT / ".env")
 from shows.profiles import EpisodeProfile, SpeakerProfile, SHOW_PROFILES, SPEAKER_PROFILES
 from briefing_builder import build_briefing_packet, briefing_packet_to_str
 from intelligence.selector import select_episode_sources, get_source_insights
+from core import analytics
 from core.db.connection import db_execute, db_fetchrow, db_query
 from core.kb import UserKB, load_kb
 from core.llm_config import resolve
@@ -1103,6 +1104,15 @@ async def process_episode(episode_id: str) -> None:
             f"title={title} duration={_ep_elapsed:.2f}s "
             f"quality_score={judgment.overall_score:.2f}"
         )
+        await analytics.track(user_id, "episode_generated", {
+            "episode_id": episode_id,
+            "show_format": show_name,
+            "source_count": len(source_uuids),
+            "duration_min": actual_length_minutes,
+            "quality_score": judgment.overall_score,
+            "generation_time_s": round(_ep_elapsed, 2),
+            "regenerated": regenerated,
+        })
 
     except Exception as e:
         _ep_elapsed = _ep_time.time() - _ep_start
@@ -1111,6 +1121,12 @@ async def process_episode(episode_id: str) -> None:
             f"duration={_ep_elapsed:.2f}s error={e}"
         )
         await _set_episode_status(episode_id, "failed", error=str(e)[:1000])
+        await analytics.track(user_id, "episode_generation_failed", {
+            "episode_id": episode_id,
+            "show_format": show_name,
+            "generation_time_s": round(_ep_elapsed, 2),
+            "error_type": type(e).__name__,
+        })
         raise
 
 

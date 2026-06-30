@@ -7,6 +7,36 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-01 · Aditya + Claude (claude-sonnet-5)
+
+### Feature
+Backend PostHog analytics — `episode_generated`/`episode_generation_failed` and
+`source_ingested`/`source_ingest_failed` events, closing the loop with the
+already-instrumented frontend. `distinct_id` is resolved to `firebase_uid` via
+a `users` table lookup per event (falls back to internal `user_id` for legacy
+api_token-only accounts with no `firebase_uid` on file). No-ops entirely when
+`POSTHOG_PROJECT_TOKEN` is unset — safe in local dev without configuring PostHog.
+- **`core/analytics.py`** (new) — singleton PostHog client, `resolve_distinct_id()`, `track()`/`capture()`, all fire-and-forget (never raises)
+- **`core/ingest.py`** — `process_source` fires `source_ingested` on success, `source_ingest_failed` on final-attempt failure
+- **`studio/generator.py`** — `process_episode` fires `episode_generated` on success, `episode_generation_failed` on failure
+- **`pyproject.toml`** — added `posthog` dependency
+- **`.env.example`** — documented `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST`
+
+### Feature
+Support YouTube videos as a source type — transcript is fetched via
+`youtube-transcript-api` (no API key) and metadata (title/author/thumbnail/
+duration/upload_date/view_count) via `yt-dlp`. The scrape contract grows
+from a 4-tuple to a 5-tuple `(content, title, author, og_image, extra_data)`;
+`extra_data` merges into `source.data` JSONB and is `{}` for non-YouTube paths.
+- **`alembic/versions/0030_source_type.py`** — adds `source.source_type` column, defaults existing rows to `'article'`
+- **`core/scraper/validator.py`** — YouTube removed from the `_VIDEO` block-list; added `_YOUTUBE` regex + `is_youtube_url()`
+- **`core/scraper/youtube.py`** (new) — `scrape_youtube()`: transcript via `youtube-transcript-api`, metadata via `yt-dlp`; optional Tor SOCKS proxy via `YOUTUBE_USE_TOR`
+- **`core/scraper/cascade.py`** — `scrape()` branches to `scrape_youtube()` on YouTube URLs; all return paths now 5-tuples
+- **`core/ingest.py`** — `process_source` sets `source_type` and merges scraper `extra_data` into `source.data` via `data || $extra_data::jsonb`
+- **`pyproject.toml`** — added `youtube-transcript-api`, `yt-dlp` dependencies
+- **`.env.example`** — documented `YOUTUBE_USE_TOR`
+- **`tests/test_validator.py`**, **`tests/test_url_validator.py`** — updated YouTube rejection tests to reflect new allow behavior; updated tuple-unpacking in cascade tests for the 5-tuple contract
+
 ## 2026-07-01 · Aditya + Claude (claude-opus-4-8)
 
 ### Test
