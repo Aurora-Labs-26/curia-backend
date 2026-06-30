@@ -285,17 +285,17 @@ class TestCascadingScraper:
         async def mock_traf(url):
             nonlocal traf_called
             traf_called = True
-            return ("Good content " * 100, "Title", None)
+            return ("Good content " * 100, "Title", None, "")
 
         async def mock_fire(url):
             nonlocal fire_called
             fire_called = True
-            return ("Fallback", "Title", None)
+            return ("Fallback", "Title", None, "")
 
         with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
             with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
                 with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                    content, title, author = await scrape("https://example.com/article")
+                    content, title, author, og_image = await scrape("https://example.com/article")
 
         assert traf_called
         assert not fire_called
@@ -307,15 +307,15 @@ class TestCascadingScraper:
         from unittest.mock import AsyncMock, patch
 
         async def mock_traf(url):
-            return ("", "", None)
+            return ("", "", None, "")
 
         async def mock_fire(url):
-            return ("Firecrawl got the content " * 50, "FC Title", None)
+            return ("Firecrawl got the content " * 50, "FC Title", None, "")
 
         with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
             with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
                 with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                    content, title, author = await scrape("https://example.com/js-heavy-page")
+                    content, title, author, og_image = await scrape("https://example.com/js-heavy-page")
 
         assert "Firecrawl" in content
         assert title == "FC Title"

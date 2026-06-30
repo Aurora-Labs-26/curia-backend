@@ -38,7 +38,7 @@ class TestScrapeFirecrawl:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch("core.scraper.cascade.httpx.AsyncClient", return_value=mock_client):
-            content, title, author = await _scrape_firecrawl("https://example.com")
+            content, title, author, og_image = await _scrape_firecrawl("https://example.com")
         assert "Article content" in content
         assert title == "Great Article"
         assert author == "Jane Doe"
@@ -68,7 +68,7 @@ class TestScrapeFirecrawl:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch("core.scraper.cascade.httpx.AsyncClient", return_value=mock_client):
-            content, title, author = await _scrape_firecrawl("https://example.com")
+            content, title, author, og_image = await _scrape_firecrawl("https://example.com")
         assert content == ""
         assert title == ""
 
@@ -88,7 +88,7 @@ class TestScrapeFirecrawl:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch("core.scraper.cascade.httpx.AsyncClient", return_value=mock_client):
-            _, _, author = await _scrape_firecrawl("https://example.com")
+            _, _, author, _ = await _scrape_firecrawl("https://example.com")
         assert author == "Site Name"
 
 
@@ -109,7 +109,7 @@ class TestScrapeTrafilatura:
              patch("core.scraper.cascade.is_likely_paywalled", return_value=False), \
              patch("core.scraper.cascade.is_twitter_url", return_value=False), \
              patch("core.scraper.cascade.head_check", new=AsyncMock(return_value=MagicMock(ok=True))), \
-             patch("core.scraper.cascade._scrape_trafilatura", new=AsyncMock(return_value=(content, "Title", "Author"))):
+             patch("core.scraper.cascade._scrape_trafilatura", new=AsyncMock(return_value=(content, "Title", "Author", ""))):
             result = await scrape("https://example.com")
         assert result[0] == content
         assert result[1] == "Title"
@@ -125,8 +125,8 @@ class TestScrapeTrafilatura:
              patch("core.scraper.cascade.is_likely_paywalled", return_value=False), \
              patch("core.scraper.cascade.is_twitter_url", return_value=False), \
              patch("core.scraper.cascade.head_check", new=AsyncMock(return_value=MagicMock(ok=True))), \
-             patch("core.scraper.cascade._scrape_trafilatura", new=AsyncMock(return_value=("short", "T", ""))), \
-             patch("core.scraper.cascade._try_firecrawl_or_fail", new=AsyncMock(return_value=(firecrawl_content, "Title2", "Auth2"))):
+             patch("core.scraper.cascade._scrape_trafilatura", new=AsyncMock(return_value=("short", "T", "", ""))), \
+             patch("core.scraper.cascade._try_firecrawl_or_fail", new=AsyncMock(return_value=(firecrawl_content, "Title2", "Auth2", ""))):
             result = await scrape("https://example.com")
         assert result[0] == firecrawl_content
 
@@ -142,6 +142,6 @@ class TestScrapeTrafilatura:
              patch("core.scraper.cascade.is_twitter_url", return_value=False), \
              patch("core.scraper.cascade.head_check", new=AsyncMock(return_value=MagicMock(ok=True))), \
              patch("core.scraper.cascade._scrape_trafilatura", new=AsyncMock(side_effect=RuntimeError("boom"))), \
-             patch("core.scraper.cascade._try_firecrawl_or_fail", new=AsyncMock(return_value=(firecrawl_content, "T", ""))):
+             patch("core.scraper.cascade._try_firecrawl_or_fail", new=AsyncMock(return_value=(firecrawl_content, "T", "", ""))):
             result = await scrape("https://example.com")
         assert result[0] == firecrawl_content

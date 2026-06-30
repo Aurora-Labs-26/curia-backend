@@ -7,6 +7,17 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-01 · Aditya + Claude (claude-opus-4-8)
+
+### Test
+Update scraper tests to the 4-tuple `(content, title, author, og_image)` contract
+introduced by the og_image feature; prod was correct, tests were stale.
+- **`tests/test_cascade_scraper.py`** — `_scrape_firecrawl`/`_try_firecrawl_or_fail` mocks → 4-tuples
+- **`tests/test_scraper_internals.py`** — firecrawl unpacking + `_scrape_trafilatura`/`_try_firecrawl_or_fail` mocks → 4-tuples
+- **`tests/test_url_validator.py`** — `TestCascadingScraper` traf/fire mocks + `scrape()` result unpack → 4-tuples
+
+---
+
 ## 2026-06-29 · Aditya + Claude (claude-sonnet-4-6)
 
 ### Feature

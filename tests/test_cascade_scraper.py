@@ -168,7 +168,7 @@ class TestResolveRedirects:
 
 class TestTryFirecrawlOrFail:
     async def test_paywall_domain_error(self):
-        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=("short", "", ""))):
+        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=("short", "", "", ""))):
             with pytest.raises(PermanentError, match="paywall"):
                 await _try_firecrawl_or_fail("https://wsj.com/article", is_paywall_domain=True)
 
@@ -179,19 +179,19 @@ class TestTryFirecrawlOrFail:
 
     async def test_firecrawl_success(self):
         content = "x" * 300
-        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=(content, "Title", "Author"))):
+        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=(content, "Title", "Author", ""))):
             result = await _try_firecrawl_or_fail("https://example.com", is_paywall_domain=False)
         assert result[0] == content.strip()
         assert result[1] == "Title"
 
     async def test_twitter_url_error(self):
-        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=("short", "", ""))), \
+        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=("short", "", "", ""))), \
              patch("core.scraper.cascade.is_twitter_url", return_value=True):
             with pytest.raises(PermanentError, match="Twitter"):
                 await _try_firecrawl_or_fail("https://x.com/user/status/123", is_paywall_domain=False)
 
     async def test_generic_failure_error(self):
-        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=("short", "", ""))), \
+        with patch("core.scraper.cascade._scrape_firecrawl", new=AsyncMock(return_value=("short", "", "", ""))), \
              patch("core.scraper.cascade.is_twitter_url", return_value=False):
             with pytest.raises(PermanentError, match="Could not extract"):
                 await _try_firecrawl_or_fail("https://example.com/broken", is_paywall_domain=False)
@@ -227,7 +227,7 @@ class TestScrapeFlow:
              patch("core.scraper.cascade.resolve_redirects", new=AsyncMock(return_value="https://x.com/status/1")), \
              patch("core.scraper.cascade.is_likely_paywalled", return_value=False), \
              patch("core.scraper.cascade.is_twitter_url", return_value=True), \
-             patch("core.scraper.cascade._try_firecrawl_or_fail", new=AsyncMock(return_value=(content, "Tweet", ""))), \
+             patch("core.scraper.cascade._try_firecrawl_or_fail", new=AsyncMock(return_value=(content, "Tweet", "", ""))), \
              patch("core.scraper.cascade.head_check") as mock_head, \
              patch("core.scraper.cascade._scrape_trafilatura") as mock_traf:
             result = await scrape("https://x.com/status/1")
