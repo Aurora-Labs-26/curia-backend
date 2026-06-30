@@ -113,14 +113,14 @@ class TestValidateUrl:
 
     # --- Video sites ---
 
-    def test_youtube_rejected(self):
+    def test_youtube_allowed(self):
+        # YouTube is allowed — transcript is extracted via youtube-transcript-api
         r = validate_url("https://youtube.com/watch?v=abc123")
-        assert r.valid is False
-        assert "Video" in r.reason
+        assert r.valid is True
 
-    def test_youtu_be_rejected(self):
+    def test_youtu_be_allowed(self):
         r = validate_url("https://youtu.be/abc123")
-        assert r.valid is False
+        assert r.valid is True
 
     def test_vimeo_rejected(self):
         r = validate_url("https://vimeo.com/12345")

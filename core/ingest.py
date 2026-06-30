@@ -20,15 +20,18 @@ import json
 import os
 import uuid
 from typing import Optional
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from loguru import logger
 
+from . import analytics
 from .db.connection import db_execute, db_fetchrow, db_query
 from .prompts.transformations import (
     TRANSFORMATION_NAMES,
     transformations as _transformations,
 )
+from .scraper.validator import is_youtube_url
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
 
@@ -40,8 +43,8 @@ ARTICLE_CHAR_CAP = 50_000
 # ---------------------------------------------------------------------------
 
 
-async def scrape_url(url: str) -> tuple[str, str, str, str]:
-    """Validate URL then scrape via cascade (trafilatura → firecrawl → fail). Returns (content, title, author, og_image)."""
+async def scrape_url(url: str) -> tuple[str, str, str, str, dict]:
+    """Validate URL then scrape via cascade (trafilatura → firecrawl → YouTube → fail). Returns (content, title, author, og_image, extra_data)."""
     from core.scraper.cascade import scrape
     return await scrape(url)
 
@@ -166,24 +169,38 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
     insights table is cleared or duplicates are tolerated).
     """
     row = await db_fetchrow(
-        "SELECT url, user_id, full_text FROM source WHERE id = $id::uuid",
+        "SELECT url, user_id, full_text, source_type FROM source WHERE id = $id::uuid",
         {"id": source_id},
     )
     if not row:
         raise ValueError(f"source {source_id} not found")
     url = row["url"]
+    user_id = row["user_id"]
+    url_domain = urlparse(url).hostname or ""
+    source_type = row.get("source_type") or "article"
 
     try:
         # 1. Scrape (skip if full_text already populated — supports resumed runs)
         if not row.get("full_text"):
             await _set_status(source_id, "scraping")
-            full_text, title, author, og_image = await scrape_url(url)
+            full_text, title, author, og_image, extra_data = await scrape_url(url)
+            source_type = "youtube" if is_youtube_url(url) else "article"
             await db_execute(
                 """
-                UPDATE source SET title = $title, full_text = $full_text, author = $author, og_image = $og_image, updated_at = now()
+                UPDATE source
+                SET title = $title, full_text = $full_text, author = $author, og_image = $og_image,
+                    source_type = $source_type, data = data || $extra_data::jsonb, updated_at = now()
                 WHERE id = $id::uuid
                 """,
-                {"id": source_id, "title": title, "full_text": full_text, "author": author or None, "og_image": og_image or None},
+                {
+                    "id": source_id,
+                    "title": title,
+                    "full_text": full_text,
+                    "author": author or None,
+                    "og_image": og_image or None,
+                    "source_type": source_type,
+                    "extra_data": extra_data or {},
+                },
             )
         else:
             full_text = row["full_text"]
@@ -219,11 +236,21 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
         # 4. Done
         await _set_status(source_id, "ready")
         logger.info(f"Ingestion complete: {source_id}")
+        await analytics.track(user_id, "source_ingested", {
+            "source_id": source_id,
+            "url_domain": url_domain,
+            "source_type": source_type,
+        })
 
     except Exception as e:
         err = str(e)[:1000]
         if is_final_attempt:
             await _set_status(source_id, "failed", error=err)
+            await analytics.track(user_id, "source_ingest_failed", {
+                "source_id": source_id,
+                "url_domain": url_domain,
+                "error_type": type(e).__name__,
+            })
         else:
             # Retry pending — record the error but keep the in-progress status so
             # the pile doesn't show "Failed" mid-retry.

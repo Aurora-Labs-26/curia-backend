@@ -17,9 +17,12 @@ class ValidationResult:
 
 
 _VIDEO = re.compile(
-    r"(youtube\.com|youtu\.be|vimeo\.com|tiktok\.com|twitch\.tv|dailymotion\.com|rumble\.com)",
+    r"(vimeo\.com|tiktok\.com|twitch\.tv|dailymotion\.com|rumble\.com)",
     re.IGNORECASE,
 )
+
+# YouTube is allowed — transcript is extracted via youtube-transcript-api
+_YOUTUBE = re.compile(r"(youtube\.com|youtu\.be)", re.IGNORECASE)
 
 # Twitter/X is allowed — threads can be good content
 _SOCIAL = re.compile(
@@ -133,5 +136,13 @@ def is_twitter_url(url: str) -> bool:
     try:
         hostname = urlparse(url).hostname or ""
         return bool(_TWITTER.search(hostname))
+    except Exception:
+        return False
+
+
+def is_youtube_url(url: str) -> bool:
+    try:
+        hostname = urlparse(url).hostname or ""
+        return bool(_YOUTUBE.search(hostname))
     except Exception:
         return False

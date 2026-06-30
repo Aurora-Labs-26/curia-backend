@@ -35,6 +35,9 @@ dependencies = [
     "hume>=0.7",
     "smallestai>=1.0",
     "apscheduler>=3.10",             # cron scheduling for push notifications
+    "youtube-transcript-api>=1.2",   # YouTube transcript fetch
+    "yt-dlp>=2024.1",                # YouTube metadata (title/duration/upload_date) — no API key needed
+    "posthog>=3.7",                  # backend analytics (episode_generated, source_ingested, etc.)
 ]
 
 [project.optional-dependencies]

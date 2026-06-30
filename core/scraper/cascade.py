@@ -14,7 +14,7 @@ import httpx
 from loguru import logger
 
 from core.errors import PermanentError
-from .validator import validate_url, is_likely_paywalled, is_twitter_url
+from .validator import validate_url, is_likely_paywalled, is_twitter_url, is_youtube_url
 
 
 def normalize_url(url: str) -> str:
@@ -74,13 +74,18 @@ async def resolve_redirects(url: str) -> str:
         return url
 
 
-async def scrape(url: str) -> tuple[str, str, str, str]:
+async def scrape(url: str) -> tuple[str, str, str, str, dict]:
     # Normalize known broken URL patterns before anything else
     url = normalize_url(url)
 
     result = validate_url(url)
     if not result.valid:
         raise PermanentError(result.reason)
+
+    if is_youtube_url(url):
+        logger.info(f"[scraper] YouTube URL detected — fetching transcript")
+        from .youtube import scrape_youtube
+        return await scrape_youtube(url)
 
     # Resolve any redirects (e.g. open.substack.com share links → real article URL)
     url = await resolve_redirects(url)
@@ -101,7 +106,7 @@ async def scrape(url: str) -> tuple[str, str, str, str]:
         content, title, author, og_image = await _scrape_trafilatura(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] trafilatura success: {len(content)} chars")
-            return content.strip(), title or url, author, og_image
+            return content.strip(), title or url, author, og_image, {}
         logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
     except Exception as e:
         logger.info(f"[scraper] trafilatura failed ({e}), trying firecrawl...")
@@ -109,12 +114,12 @@ async def scrape(url: str) -> tuple[str, str, str, str]:
     return await _try_firecrawl_or_fail(url, is_paywall_domain)
 
 
-async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str, str, str]:
+async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str, str, str, dict]:
     try:
         content, title, author, og_image = await _scrape_firecrawl(url)
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] firecrawl success: {len(content)} chars")
-            return content.strip(), title or url, author, og_image
+            return content.strip(), title or url, author, og_image, {}
         logger.info(f"[scraper] firecrawl returned too little ({len(content.strip()) if content else 0} chars)")
     except Exception as e:
         logger.warning(f"[scraper] firecrawl failed: {e}")

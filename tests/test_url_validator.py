@@ -11,8 +11,6 @@ class TestURLValidator:
     def test_rejects_video_sites(self):
         from core.scraper.validator import validate_url
         for url in [
-            "https://www.youtube.com/watch?v=abc123",
-            "https://youtu.be/abc123",
             "https://vimeo.com/123456",
             "https://www.tiktok.com/@user/video/123",
             "https://www.twitch.tv/channel",
@@ -21,6 +19,13 @@ class TestURLValidator:
             result = validate_url(url)
             assert not result.valid, f"Should reject video: {url}"
             assert "video" in result.reason.lower()
+
+    def test_allows_youtube(self):
+        # YouTube is allowed — transcript is extracted via youtube-transcript-api
+        from core.scraper.validator import validate_url
+        for url in ["https://www.youtube.com/watch?v=abc123", "https://youtu.be/abc123"]:
+            result = validate_url(url)
+            assert result.valid, f"Should allow YouTube: {url}"
 
     def test_rejects_social_media_except_twitter(self):
         from core.scraper.validator import validate_url
@@ -271,7 +276,7 @@ class TestCascadingScraper:
     async def test_rejects_invalid_url(self):
         from core.scraper.cascade import scrape
         with pytest.raises(ValueError, match="(?i)video"):
-            await scrape("https://www.youtube.com/watch?v=123")
+            await scrape("https://vimeo.com/123")
 
     @pytest.mark.asyncio
     async def test_trafilatura_first(self):
@@ -295,7 +300,7 @@ class TestCascadingScraper:
         with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
             with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
                 with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                    content, title, author, og_image = await scrape("https://example.com/article")
+                    content, title, author, og_image, extra_data = await scrape("https://example.com/article")
 
         assert traf_called
         assert not fire_called
@@ -315,7 +320,7 @@ class TestCascadingScraper:
         with patch("core.scraper.cascade.head_check", return_value=_ok_head()):
             with patch("core.scraper.cascade._scrape_trafilatura", side_effect=mock_traf):
                 with patch("core.scraper.cascade._scrape_firecrawl", side_effect=mock_fire):
-                    content, title, author, og_image = await scrape("https://example.com/js-heavy-page")
+                    content, title, author, og_image, extra_data = await scrape("https://example.com/js-heavy-page")
 
         assert "Firecrawl" in content
         assert title == "FC Title"
