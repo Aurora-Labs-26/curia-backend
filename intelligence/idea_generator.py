@@ -4,7 +4,10 @@ LangGraph workflow — generates show ideas from the archive.
 Runs in background, writes to show_ideas table.
 
 Workflow:
-  load_archive → cluster_sources → diff_clusters → evaluate_ideas → filter_covered → save_ideas → auto_generate
+  load_archive → cluster_sources → diff_clusters → evaluate_ideas → filter_covered → save_ideas → supersede_stale
+
+Episodes are never auto-generated here (ShowIdeas+Streaming.md): the pipeline ends
+at show_idea rows; the user picks an idea in the app to generate an episode.
 """
 
 import asyncio
@@ -38,11 +41,12 @@ class IdeaGenState(TypedDict, total=False):
     user_id: str
     user_kb: UserKB | None        # KB loaded once at archive load; propagated to evaluator
     sources: list[dict]           # [{id, title, insights: {type: content}}]
-    clusters: list[list[str]]     # groups of source_ids
+    clusters: list[list[str]]     # NEW clusters only (after diff) — groups of source_ids
+    all_clusters: list[list[str]] # full clustering of the archive this run — used by supersede_stale
     raw_ideas: list[dict]         # ideas from evaluate_ideas
     filtered_ideas: list[dict]    # ideas passed to save
     saved_count: int
-    auto_generated_count: int
+    superseded_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +116,7 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
     if len(sources) < 2:
         # Nothing to cluster — treat each as standalone
         clusters = [[s["id"]] for s in sources]
-        return {**state, "clusters": clusters}
+        return {**state, "clusters": clusters, "all_clusters": clusters}
 
     # Fetch primitive embeddings (core_tensions + counterpoints) per source
     from core.embeddings import get_embedding_column
@@ -261,7 +265,7 @@ async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
         logger.info(f"[cluster_sources] [{kind}] {members}")
 
     logger.info(f"[cluster_sources] {len(clusters)} clusters formed ({len([c for c in clusters if len(c) > 1])} multi-source, {len([c for c in clusters if len(c) == 1])} standalone)")
-    return {**state, "clusters": clusters}
+    return {**state, "clusters": clusters, "all_clusters": clusters}
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +276,13 @@ async def diff_clusters(state: IdeaGenState) -> IdeaGenState:
     user_id = state["user_id"]
     clusters = state["clusters"]
 
+    # Only non-superseded ideas block re-evaluation of an exact-match cluster:
+    # - generated=false, superseded=false → idea is live in the tab, don't duplicate it
+    # - generated=true → user already consumed this exact cluster, don't re-offer it
+    # - superseded=true → retired; if the exact cluster reappears (reshuffle), a
+    #   fresh idea should be created for it.
     existing = await db_query(
-        "SELECT source_ids FROM show_idea WHERE user_id = $user_id",
+        "SELECT source_ids FROM show_idea WHERE user_id = $user_id AND superseded = false",
         {"user_id": user_id}
     )
     existing_sets = [frozenset(str(s) for s in row["source_ids"]) for row in (existing or [])]
@@ -504,68 +513,47 @@ async def save_ideas(state: IdeaGenState) -> IdeaGenState:
 
 
 # ---------------------------------------------------------------------------
-# Node: auto_generate
+# Node: supersede_stale
 # ---------------------------------------------------------------------------
 
-async def auto_generate(state: IdeaGenState) -> IdeaGenState:
-    user_id = state["user_id"]
-    import uuid as _uuid
+async def supersede_stale(state: IdeaGenState) -> IdeaGenState:
+    """
+    Invalidation rule (ShowIdeas+Streaming.md): a live idea (generated=false,
+    superseded=false) is stale iff its exact source_ids set is no longer one of
+    the clusters produced by the current run. This handles cluster growth
+    ([A2] → [A2,A4,A6]) and reshuffles ([A2,A4,A6] → [A2,A6,A7] + [A4]) without
+    falsely retiring overlapping-but-still-valid clusters ([A1,A3] and [A1,A5]
+    can coexist when the clique clustering legitimately produces both).
 
-    new_ideas = await db_query(
+    generated=true ideas are never touched — they're consumed (have an episode).
+    Superseded rows are kept: they remain generatable if a user had the detail
+    sheet open when the retirement happened.
+    """
+    user_id = state["user_id"]
+    all_clusters = state.get("all_clusters") or []
+    current_sets = {frozenset(str(s).replace("source:", "") for s in c) for c in all_clusters}
+
+    live = await db_query(
         """
-        SELECT id, format, source_ids, angle
-        FROM show_idea
-        WHERE user_id = $user_id
-          AND generated = false
+        SELECT id, source_ids FROM show_idea
+        WHERE user_id = $user_id AND generated = false AND superseded = false
         """,
         {"user_id": user_id},
     )
 
-    from core.queue import enqueue
-    from studio.formats import FORMATS
-
-    count = 0
-    for idea in (new_ideas or []):
-        fmt = idea["format"]
-        if fmt not in FORMATS:
-            fmt = "clarity_engine"
-
-        episode_id = str(_uuid.uuid4())
-        try:
+    superseded_count = 0
+    for row in (live or []):
+        idea_set = frozenset(str(s) for s in (row["source_ids"] or []))
+        if idea_set not in current_sets:
             await db_execute(
-                """
-                INSERT INTO episode
-                    (id, user_id, show_name, show_idea_id, editorial_direction,
-                     length_minutes, speaker_override, source_ids, status)
-                VALUES
-                    ($id::uuid, $user_id, $show, $idea_id::uuid, $direction,
-                     NULL, NULL, $source_ids, 'queued')
-                """,
-                {
-                    "id": episode_id,
-                    "user_id": user_id,
-                    "show": fmt,
-                    "idea_id": str(idea["id"]),
-                    "direction": idea.get("angle", ""),
-                    "source_ids": idea.get("source_ids") or [],
-                },
+                "UPDATE show_idea SET superseded = true WHERE id = $id::uuid",
+                {"id": str(row["id"])},
             )
-            await db_execute(
-                "UPDATE show_idea SET generated = true WHERE id = $id::uuid",
-                {"id": str(idea["id"])},
-            )
-            await enqueue(
-                type="generate_episode",
-                payload={"episode_id": episode_id, "user_id": user_id},
-                user_id=user_id,
-            )
-            logger.info(f"[auto_generate] Enqueued episode {episode_id} for idea {idea['id']}")
-            count += 1
-        except Exception as e:
-            logger.warning(f"[auto_generate] Failed to create episode for idea {idea['id']}: {e}")
+            superseded_count += 1
+            logger.info(f"[supersede_stale] retired idea {row['id']} (cluster no longer current)")
 
-    logger.info(f"[auto_generate] {count} episodes enqueued")
-    return {**state, "auto_generated_count": count}
+    logger.info(f"[supersede_stale] {superseded_count} ideas superseded")
+    return {**state, "superseded_count": superseded_count}
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +569,7 @@ def build_graph():
     graph.add_node("evaluate_ideas", evaluate_ideas)
     graph.add_node("filter_covered", filter_covered)
     graph.add_node("save_ideas", save_ideas)
-    graph.add_node("auto_generate", auto_generate)
+    graph.add_node("supersede_stale", supersede_stale)
 
     graph.set_entry_point("load_archive")
     graph.add_edge("load_archive", "cluster_sources")
@@ -589,8 +577,8 @@ def build_graph():
     graph.add_edge("diff_clusters", "evaluate_ideas")
     graph.add_edge("evaluate_ideas", "filter_covered")
     graph.add_edge("filter_covered", "save_ideas")
-    graph.add_edge("save_ideas", "auto_generate")
-    graph.add_edge("auto_generate", END)
+    graph.add_edge("save_ideas", "supersede_stale")
+    graph.add_edge("supersede_stale", END)
 
     return graph.compile()
 
@@ -606,10 +594,14 @@ async def run_idea_generator(user_id: str = "default"):
         "user_id": user_id,
         "sources": [],
         "clusters": [],
+        "all_clusters": [],
         "raw_ideas": [],
         "filtered_ideas": [],
         "saved_count": 0,
-        "auto_generated_count": 0,
+        "superseded_count": 0,
     })
-    logger.info(f"Idea generator complete — {result['saved_count']} ideas saved")
+    logger.info(
+        f"Idea generator complete — {result['saved_count']} ideas saved, "
+        f"{result.get('superseded_count', 0)} superseded"
+    )
     return result

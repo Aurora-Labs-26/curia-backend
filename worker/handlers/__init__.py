@@ -10,6 +10,7 @@ from typing import Awaitable, Callable
 from .ingest import handle_ingest
 from .generate_ideas import handle_generate_ideas
 from .generate_episode import handle_generate_episode
+from .outline_idea import handle_outline_idea
 from .optimization import handle_optimize
 
 
@@ -17,6 +18,7 @@ HANDLERS: dict[str, Callable[[dict], Awaitable[None]]] = {
     "ingest": handle_ingest,
     "generate_ideas": handle_generate_ideas,
     "generate_episode": handle_generate_episode,
+    "outline_idea": handle_outline_idea,
     "optimize": handle_optimize,
 }
 
@@ -25,5 +27,6 @@ __all__ = [
     "handle_ingest",
     "handle_generate_ideas",
     "handle_generate_episode",
+    "handle_outline_idea",
     "handle_optimize",
 ]

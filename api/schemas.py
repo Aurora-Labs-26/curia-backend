@@ -19,7 +19,9 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 class CreateSourceRequest(BaseModel):
     url: HttpUrl
-    standalone: bool = True  # True = evaluate this source alone; False = run full cluster pipeline
+    # DEPRECATED (ShowIdeas+Streaming.md): ingest always runs the cluster
+    # pipeline now. Field kept so older app builds that still send it don't 422.
+    standalone: bool = True
 
 
 class SourceSummary(BaseModel):
@@ -59,8 +61,50 @@ class ShowIdeaSummary(BaseModel):
     idea_type: str
     format: str
     source_ids: list[UUID]
+    source_objects: list["EpisodeSourceObject"] = Field(default_factory=list)
     generated: bool
     created_at: datetime
+    # Outline cache (ShowIdeas+Streaming.md) — null until the outline_idea job ran
+    title: Optional[str] = None
+    description: Optional[str] = None
+    duration_estimate_seconds: Optional[int] = None
+    chapters: Optional[Any] = None
+    superseded: bool = False
+
+
+class ShowIdeaDetail(ShowIdeaSummary):
+    outline: Optional[Any] = None
+
+
+class OutlineJobResponse(BaseModel):
+    """POST /ideas/:id/outline — job handle for the client's 5s poll loop.
+    status='done' with job_id=None means the outline was already cached."""
+    idea_id: UUID
+    job_id: Optional[UUID] = None
+    status: str = "queued"
+
+
+class GenerateFromIdeaRequest(BaseModel):
+    """POST /ideas/:id/generate — all fields optional; absent = idea defaults.
+    Changing format/angle/length invalidates the cached outline (the episode
+    re-runs the outlining stage). Speaker changes never invalidate it."""
+    format: Optional[str] = None            # backend name or frontend slug
+    angle: Optional[str] = None             # replaces the idea's angle
+    length_minutes: Optional[int] = Field(default=None, ge=3, le=30)
+    speaker: Optional[Literal["kenji", "arjun", "emeka"]] = None
+    speaker_pair: Optional[List[Literal["kenji", "arjun", "emeka"]]] = None
+
+    @field_validator("speaker_pair")
+    @classmethod
+    def validate_speaker_pair(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        if len(v) != 2:
+            raise ValueError("speaker_pair must contain exactly 2 names")
+        if v[0] == v[1]:
+            raise ValueError("speaker_pair must contain 2 distinct names")
+        priority = {"kenji": 1, "arjun": 2, "emeka": 3}
+        return sorted(v, key=lambda s: priority.get(s, 99))
 
 
 # ---------------------------------------------------------------------------

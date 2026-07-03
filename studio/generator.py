@@ -938,7 +938,7 @@ async def generate_episode_script(episode_id: str) -> None:
     row = await db_fetchrow(
         """
         SELECT user_id, show_name, show_idea_id, editorial_direction,
-               length_minutes, speaker_override, speaker_pair
+               length_minutes, speaker_override, speaker_pair, outline
         FROM episode WHERE id = $id::uuid
         """,
         {"id": episode_id},
@@ -989,12 +989,24 @@ async def generate_episode_script(episode_id: str) -> None:
     )
     briefing = briefing_packet_to_str(packet)
 
-    # 3. Generate outline (sync DSPy call — offload to thread pool)
-    await _set_episode_status(episode_id, "outlining")
+    # 3. Outline — use the one cached on the episode row when present
+    #    (copied from show_idea by POST /ideas/:id/generate when the user made
+    #    no outline-invalidating customisation), otherwise generate fresh.
     loop = asyncio.get_running_loop()
-    outline = await loop.run_in_executor(
-        None, generate_outline, briefing, show_name
-    )
+    cached_outline = row.get("outline")
+    if isinstance(cached_outline, str):
+        try:
+            cached_outline = json.loads(cached_outline)
+        except (json.JSONDecodeError, TypeError):
+            cached_outline = None
+    if cached_outline and cached_outline.get("segments"):
+        outline = cached_outline
+        logger.info(f"  using cached outline from show_idea ('{outline.get('title', 'untitled')}')")
+    else:
+        await _set_episode_status(episode_id, "outlining")
+        outline = await loop.run_in_executor(
+            None, generate_outline, briefing, show_name
+        )
     title = outline.get("title", show_name)
 
     # 4. Generate transcript — pick single-host or two-host based on speaker count

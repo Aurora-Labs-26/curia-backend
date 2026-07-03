@@ -70,6 +70,7 @@ def default_worker_id() -> str:
 _JOB_PRIORITY: dict[str, int] = {
     "ingest": 1,
     "generate_ideas": 2,
+    "outline_idea": 3,       # user is actively waiting on the idea detail sheet
     "generate_episode": 10,  # long-running; yields to ingest
 }
 

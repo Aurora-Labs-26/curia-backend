@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from loguru import logger
 from pydantic import BaseModel
 
 from api.auth import current_user_id
@@ -229,6 +230,67 @@ async def update_episode_progress(
             "play_position_seconds": play_position_seconds,
             "listened": listened,
         },
+    )
+
+
+@router.delete("/episodes/{episode_id}", status_code=204)
+async def delete_episode(
+    episode_id: uuid.UUID, user_id: str = Depends(current_user_id)
+) -> None:
+    """
+    Cancel-or-delete (ShowIdeas+Streaming.md):
+    - status='queued' → atomically cancel the queued job, delete the row, and flip
+      the source idea back to generated=false so it reappears in the ideas tab
+      (unless it was superseded meanwhile — then it stays hidden, which is correct).
+    - status in ('ready','failed') → plain delete.
+    - any mid-generation status → 409; the worker owns the row and cannot be
+      interrupted (cancel is only supported before a worker picks the job up).
+    """
+    row = await db_fetchrow(
+        """
+        SELECT status, show_idea_id, is_seed FROM episode
+        WHERE id = $id::uuid AND user_id = $user_id
+        """,
+        {"id": str(episode_id), "user_id": user_id},
+    )
+    if not row:
+        raise HTTPException(404, "episode not found")
+
+    status = row["status"]
+    if status == "queued":
+        # Atomic claim: only one of cancel-vs-dequeue wins. If the worker already
+        # grabbed the job (status='running'), this updates nothing → 409.
+        cancelled = await db_query(
+            """
+            UPDATE jobs SET status = 'cancelled', updated_at = now()
+            WHERE type = 'generate_episode'
+              AND status = 'queued'
+              AND user_id = $user_id
+              AND payload->>'episode_id' = $episode_id
+            RETURNING id
+            """,
+            {"user_id": user_id, "episode_id": str(episode_id)},
+        )
+        if not cancelled:
+            still = await db_fetchrow(
+                "SELECT status FROM episode WHERE id = $id::uuid",
+                {"id": str(episode_id)},
+            )
+            raise HTTPException(
+                409, f"episode generation already started (status={still['status'] if still else 'unknown'})"
+            )
+        if row.get("show_idea_id"):
+            await db_execute(
+                "UPDATE show_idea SET generated = false WHERE id = $id::uuid",
+                {"id": str(row["show_idea_id"])},
+            )
+        logger.info(f"[delete_episode] cancelled queued episode {episode_id} (job {cancelled[0]['id']})")
+    elif status not in ("ready", "failed"):
+        raise HTTPException(409, f"episode is generating (status={status}); cannot delete mid-flight")
+
+    await db_execute(
+        "DELETE FROM episode WHERE id = $id::uuid AND user_id = $user_id",
+        {"id": str(episode_id), "user_id": user_id},
     )
 
 
