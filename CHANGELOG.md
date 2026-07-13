@@ -7,6 +7,19 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-13 · Arihant + Claude (claude-fable-5)
+
+### Config
+BGM bank shipped to prod and verified end-to-end: episode "Staying Upwind" mixed with
+music in 8/8 transition pauses (−27 dBFS in pauses, ducked ~12 dB under voice).
+Bank uploaded via one-shot GitHub Actions workflow (473MB local uplink was
+impractical); scoped IAM user's access key deleted after use.
+- **`infra/RUNBOOK.md`** — worker task role gained `s3:ListBucket` on `curia-audio`
+  prefix-scoped to `assets/*` (vibe-mix bank sync lists the prefix; Get/Put alone
+  → AccessDenied; first episode shipped silent via the designed fallback)
+- **`.github/workflows/bgm-sync.yml`** (on `main`) — reusable manual sync
+  feat/bgm-sfx `assets/` → `s3://curia-audio/assets/`
+
 ## 2026-07-13 · s0radummy + Arihant + Claude (claude-fable-5)
 
 ### Feature

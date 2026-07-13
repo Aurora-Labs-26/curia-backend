@@ -154,7 +154,9 @@ Fargate CPU architecture chosen in the task def, or use Fargate ARM64 and skip t
   ⚠️ URLs signed with task-role *temporary* creds expire when the session token does, which can
   be sooner than `expires_in=3600`. Fine here — the app fetches a fresh URL per play
   (`PlaybackContext`) — but if long-lived URLs are ever needed, sign with a dedicated IAM user.
-- `curia-worker-task-role`: `s3:PutObject` + `s3:GetObject` on `arn:aws:s3:::curia-audio/*`.
+- `curia-worker-task-role`: `s3:PutObject` + `s3:GetObject` on `arn:aws:s3:::curia-audio/*`;
+  **+ `s3:ListBucket` on the bucket, prefix-scoped to `assets/*`** (2026-07-13 — the vibe-mix
+  BGM bank sync lists `assets/bgm_bank/`; Get/Put alone gave AccessDenied on ListObjectsV2).
 - Phase 4 adds SQS permissions to both.
 
 ### 3c. Cluster + services
