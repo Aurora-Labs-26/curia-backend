@@ -7,6 +7,35 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-13 · s0radummy + Arihant + Claude (claude-fable-5)
+
+### Feature
+Per-segment vibe BGM + transition SFX (integrated from `feat/bgm-sfx`, code-only
+cherry-pick of `29f7bff` by s0radummy). Every outline segment gets a vibe tag
+(8 vibes; outline LLM assigns, `DEFAULT_VIBE=curious` fallback); one bank clip per
+segment crossfaded across segment pauses, sidechain-ducked under voice (ffmpeg),
+plus a transition SFX at each boundary. Degrades to voice-only on any asset/mix
+failure. Replaces the single-track music system.
+- **`core/audio/vibe_mix.py`** (new) — segment bounds, BGM/SFX layers, sidechain, `build_vibe_mix()`
+- **`studio/generator.py`** — emits tts_timings + segment_transitions; calls the mixer; drops old music bed
+- **`studio/formats.py`** — VIBE_DEFINITIONS, intro/outro sentinels, SEGMENT_PAUSE_MS, SFX_PAD_MS
+- **`core/prompts/outline.py` + `prompts/*.txt`** — per-segment vibe assignment in outline; transcript prompts aligned
+- **`studio/shows/profiles.py`** — per-show music config removed; **`studio/test_music_bed.py`** deleted
+- **`api/schemas.py` / `api/routes/episodes.py`** — expose `episode.bgm_plan` (QA)
+
+**Integration decisions (differ from the branch):**
+- **BGM bank (473MB of mp3s) is NOT in git or the image** — it lives at
+  `s3://curia-audio/assets/bgm_bank/` (+ `assets/sfx/`). `vibe_mix` resolves:
+  `$CURIA_BGM_DIR` → repo `assets/` → one-time S3 sync to `$CURIA_BGM_CACHE_DIR`.
+  Music is swappable without a redeploy; worker role already had S3 read.
+- Migration renumbered **0029_episode_bgm_plan → 0033** (collided with
+  0029_source_og_image; prod already stamped at 0032).
+- **`tests/test_vibe_mix.py`** (new) — 18 tests: bounds math (intro/outro ordering
+  trap), bleed/crossfade overlap, clip fallback, full S3 resolution chain (mocked)
+- **`.env.example`** — CURIA_BGM_DIR / CURIA_BGM_S3_BUCKET / CURIA_BGM_CACHE_DIR / CURIA_SFX_PATH
+- **`pyproject.toml`** — `pytest-asyncio` moved into the dev dependency-group
+  (plain `uv sync` had pruned it, breaking collection)
+
 ## 2026-07-13 · Arihant + Claude (claude-fable-5)
 
 ### Feature
