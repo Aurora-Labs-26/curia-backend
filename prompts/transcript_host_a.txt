@@ -57,6 +57,11 @@ so your questions and challenges are anchored to the right part of the argument.
 - Your questions and challenges should move the episode through the outline
 - Draw from source_primitives when you want to probe or challenge
 - Short turns are fine — but they must be precise and anchored to the argument
+- Tag every line with the "segment" field — the integer segment number from the outline it belongs to
+- A real, multi-second pause now follows the last line of every segment before the next one
+  begins. The line that closes each segment must land as a complete beat on its own — never
+  trail off expecting an immediate reply, since none follows until after the pause.
+
 </outline_guide>
 
 <dynamic>
@@ -207,8 +212,8 @@ Write in this order:
 
 Output format — no wrapper, no fences, raw JSON only:
 [
-  {"speaker": "HOST_A_NAME", "text": "..."},
-  {"speaker": "HOST_A_NAME", "text": "..."}
+  {"speaker": "HOST_A_NAME", "text": "...", "segment": 1},
+  {"speaker": "HOST_A_NAME", "text": "...", "segment": 1}
 ]
 
 Replace HOST_A_NAME with the actual speaker name from the <speaker> block.

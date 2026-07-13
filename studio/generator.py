@@ -30,6 +30,15 @@ load_dotenv(dotenv_path=CURIA_ROOT / ".env")
 
 from shows.profiles import EpisodeProfile, SpeakerProfile, SHOW_PROFILES, SPEAKER_PROFILES
 from briefing_builder import build_briefing_packet, briefing_packet_to_str
+from formats import (
+    VIBE_DEFINITIONS,
+    DEFAULT_VIBE,
+    INTRO_SEGMENT,
+    OUTRO_SEGMENT,
+    INTRO_VIBE,
+    OUTRO_VIBE,
+    SEGMENT_PAUSE_MS,
+)
 from intelligence.selector import select_episode_sources, get_source_insights
 from core import analytics
 from core.db.connection import db_execute, db_fetchrow, db_query
@@ -84,14 +93,17 @@ def generate_outline(briefing: str, show_name: str) -> dict:
     try:
         outline = json.loads(raw)
         # Strip unknown keys from segments to avoid downstream issues
-        allowed_segment_keys = {"segment", "title", "purpose", "primitives_used", "transition"}
+        allowed_segment_keys = {"segment", "title", "purpose", "primitives_used", "transition", "vibe"}
         for seg in outline.get("segments", []):
             for k in list(seg.keys()):
                 if k not in allowed_segment_keys:
                     del seg[k]
+            # Defensive: vibe_mix requires every body segment to have a valid vibe.
+            if seg.get("vibe") not in VIBE_DEFINITIONS:
+                seg["vibe"] = DEFAULT_VIBE
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Outline JSON parse failed ({e}), raw response:\n{raw[:300]}")
-        outline = {"title": show_name, "thread": "Follow the material.", "segments": [{"segment": i+1, "title": f"Segment {i+1}", "purpose": f"Segment {i+1}", "primitives_used": [], "transition": ""} for i in range(8)]}
+        outline = {"title": show_name, "thread": "Follow the material.", "segments": [{"segment": i+1, "title": f"Segment {i+1}", "purpose": f"Segment {i+1}", "primitives_used": [], "transition": "", "vibe": DEFAULT_VIBE} for i in range(8)]}
     logger.info(f"Outline: '{outline.get('title', 'untitled')}' — {len(outline.get('segments', []))} segments")
     return outline
 
@@ -330,53 +342,18 @@ def generate_transcript_two_host(
 # TTS + stitching
 # ---------------------------------------------------------------------------
 #
-# Audio output is configurable via env + per-show profile:
+# Audio output is configurable via env:
 #   CURIA_AUDIO_BITRATE      MP3 bitrate (default '128k')
-#   CURIA_STITCH_GAP_MS      silence between transcript lines (default 400)
+#   CURIA_STITCH_GAP_MS      silence between transcript lines within the same
+#                            outline segment (default 400)
 #
-# Per show profile (studio/shows/profiles.py):
-#   intro_audio_path         pre-rendered WAV/MP3 crossfaded into the TTS body
-#   outro_audio_path         crossfaded out from the TTS body
-#   music_audio_path         looped + overlaid under the body at music_gain_db
-#
-# All three are optional; behavior with none set matches the pre-existing
-# "speech only, 400 ms gaps" stitcher.
-#
-# Intro/outro crossfade constants — tune by ear, no code changes needed:
-INTRO_FULL_MS     = 8000   # intro plays at full volume for this long
-INTRO_FADE_MS     = 5000   # intro fades out over this long, overlapping TTS start
-INTRO_GAIN_DB     = 4.0    # dB above episode level (intro punches over voice at open)
-OUTRO_FADE_IN_MS  = 5000   # outro fades in under last N ms of TTS
-OUTRO_FULL_MS     = 3000   # outro plays at full volume after TTS ends
-OUTRO_FADE_OUT_MS = 2000   # outro fades to silence
-OUTRO_GAIN_DB     = 0.0    # dB relative to episode level (matched, sits underneath)
-
-
-def _load_optional_segment(path: str | None, label: str) -> "AudioSegment | None":
-    """Load a sound file from disk if the path is set + the file exists. Logs and skips otherwise."""
-    if not path:
-        return None
-    p = Path(path) if not Path(path).is_absolute() else Path(path)
-    if not p.is_absolute():
-        p = (CURIA_ROOT / path).resolve()
-    if not p.exists():
-        logger.warning(f"  {label}_audio_path set to {path} but file not found; skipping.")
-        return None
-    try:
-        return AudioSegment.from_file(str(p))
-    except Exception as e:
-        logger.warning(f"  Could not decode {label} audio at {p}: {e}; skipping.")
-        return None
-
-
-def _overlay_music(body: "AudioSegment", music: "AudioSegment", gain_db: float) -> "AudioSegment":
-    """Loop `music` to match `body` length, attenuate by gain_db, overlay under body."""
-    if len(music) == 0:
-        return body
-    loops_needed = (len(body) // len(music)) + 1
-    track = music * loops_needed
-    track = track[: len(body)] + gain_db   # `+ gain_db` adjusts amplitude (negative = quieter)
-    return body.overlay(track)
+# Segment-to-segment transitions (including the intro lead-in and outro
+# tail-out) use SEGMENT_PAUSE_MS (studio/formats.py) instead of the small
+# intra-segment gap. The old single-track intro/outro/music system
+# (EpisodeProfile.intro_audio_path/outro_audio_path/music_audio_path) has
+# been removed in favor of the per-segment vibe BGM + SFX mix built by
+# core/audio/vibe_mix.py from the lead-in/tail-out silence and the
+# segment_transitions this function now returns.
 
 
 def _derive_display_fields(
@@ -384,10 +361,11 @@ def _derive_display_fields(
 ) -> tuple[str, list[dict]]:
     """Extract description and chapters from the outline dict.
 
-    intro_ms: the number of milliseconds of intro music that precede the first
-    spoken word in the final stitched MP3. Chapter 1 always starts at 0:00
-    (it absorbs the intro visually); all subsequent chapters are shifted right
-    by intro_ms so their scrubber positions match the stitched file.
+    intro_ms: where body segment 1 actually starts in the final stitched MP3 —
+    i.e. everything before it (lead-in silence + spoken intro lines + transition
+    pause) in milliseconds. Chapter 1 always starts at 0:00 (it absorbs the intro
+    visually); all subsequent chapters are shifted right by intro_ms so their
+    scrubber positions match the stitched file.
     """
     description = outline.get("thread") or outline.get("central_tension") or ""
     segments = outline.get("segments") or []
@@ -523,18 +501,28 @@ def synthesize_and_stitch_v2(
     output_path: str,
     speaker_override: str | None = None,
     speaker_pair: list[str] | None = None,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], list[dict]]:
     """
-    Segment-based synthesis — merges same-speaker lines into paragraphs,
-    makes far fewer TTS calls, and produces more natural prosody.
+    Segment-based synthesis — merges same-speaker, same-outline-segment lines into
+    paragraphs, makes far fewer TTS calls, and produces more natural prosody.
 
-    Returns (output_path, tts_timings) matching synthesize_and_stitch's signature.
+    Returns (output_path, tts_timings, segment_transitions).
     tts_timings: [{line_index, start_ms, end_ms, speaker, text}]
+    segment_transitions: [{at_ms, from_segment, to_segment}] — one entry per outline-segment
+    boundary actually present in the transcript (including intro(-1)->1 and N->outro(0)).
+    at_ms is the end of the transitioning chunk's audio, before the SEGMENT_PAUSE_MS pause
+    that follows it. Consumed by core/audio/vibe_mix.py to place the per-segment BGM
+    crossfade and the transition SFX cue.
 
     Key improvements over v1:
     - Reuses TTS adapter per speaker → generation_id chaining (voice consistency)
     - Word-level timestamps from Hume/Smallest.ai → accurate line timings
     - Proportional fallback for other providers
+
+    Pause structure: a SEGMENT_PAUSE_MS silence leads in before the first chunk and trails
+    out after the last chunk (replacing the old pre-rendered intro/outro sting crossfade —
+    that whole system has been removed). Between any two chunks, the gap is SEGMENT_PAUSE_MS
+    if they belong to different outline segments, else the small intra-segment CURIA_STITCH_GAP_MS.
     """
     from core.audio.stitcher import prepare_segments
 
@@ -552,7 +540,7 @@ def synthesize_and_stitch_v2(
     segments = prepare_segments(transcript)
     logger.info(
         f"Synthesizing {len(transcript)} lines as {len(segments)} segments "
-        f"(bitrate={bitrate}, gap={gap_ms}ms)..."
+        f"(bitrate={bitrate}, gap={gap_ms}ms, segment_pause={SEGMENT_PAUSE_MS}ms)..."
     )
 
     clips: list[AudioSegment] = []
@@ -573,7 +561,7 @@ def synthesize_and_stitch_v2(
             adapter = adapters[raw_speaker]
 
             clip_path = os.path.join(tmpdir, f"segment_{i:04d}.wav")
-            logger.info(f"  [{i+1}/{len(segments)}] {raw_speaker}: {seg['text'][:60]}...")
+            logger.info(f"  [{i+1}/{len(segments)}] (seg {seg.get('segment')}) {raw_speaker}: {seg['text'][:60]}...")
 
             word_timings = adapter.synthesize_with_timings(seg["text"], clip_path)
             segment_word_timings.append(word_timings)
@@ -585,57 +573,49 @@ def synthesize_and_stitch_v2(
                 clips.append(AudioSegment.from_wav(clip_path))
 
         logger.info("Stitching segments...")
-        gap = AudioSegment.silent(duration=gap_ms)
-        body = AudioSegment.empty()
-        for clip in clips:
-            body += clip + gap
 
-        intro = _load_optional_segment(profile.intro_audio_path, "intro")
-        outro = _load_optional_segment(profile.outro_audio_path, "outro")
-        music = _load_optional_segment(profile.music_audio_path, "music")
+        # gap_after[i] = ms of silence placed after clips[i] (0 for the very last clip —
+        # the tail-out silence is added once, separately, after the loop).
+        # segment_transitions records every outline-segment boundary found between
+        # consecutive chunks — built once here and reused for both the audio stitch
+        # below and the tts_timings cursor walk, so the two can never drift apart.
+        gap_after: list[int] = []
+        segment_transitions: list[dict] = []
+        if clips:
+            running_ms = SEGMENT_PAUSE_MS  # lead-in silence
+            for i, clip in enumerate(clips):
+                running_ms += len(clip)
+                if i < len(clips) - 1:
+                    current_segment = segments[i].get("segment")
+                    next_segment = segments[i + 1].get("segment")
+                    if current_segment != next_segment:
+                        segment_transitions.append({
+                            "at_ms": running_ms,
+                            "from_segment": current_segment,
+                            "to_segment": next_segment,
+                        })
+                        gap_after.append(SEGMENT_PAUSE_MS)
+                        running_ms += SEGMENT_PAUSE_MS
+                    else:
+                        gap_after.append(gap_ms)
+                        running_ms += gap_ms
+                else:
+                    gap_after.append(0)
 
-        intro_offset_ms = 0
-
-        if intro is not None:
-            logger.info(f"  crossfading intro ({len(intro)/1000:.1f}s source)")
-            episode_dbfs = body.dBFS
-            intro_gain = (episode_dbfs - intro.dBFS + INTRO_GAIN_DB) if intro.dBFS != float("-inf") else 0
-            intro = intro.apply_gain(intro_gain)
-            intro_full_clip = intro[:INTRO_FULL_MS]
-            intro_fade_clip = intro[INTRO_FULL_MS: INTRO_FULL_MS + INTRO_FADE_MS].fade_out(INTRO_FADE_MS)
-            body = intro_full_clip + body
-            body = body.overlay(intro_fade_clip, position=INTRO_FULL_MS)
-            intro_offset_ms = INTRO_FULL_MS
-
-        if outro is not None:
-            logger.info(f"  crossfading outro ({len(outro)/1000:.1f}s source)")
-            episode_dbfs = body.dBFS
-            outro_gain = (episode_dbfs - outro.dBFS + OUTRO_GAIN_DB) if outro.dBFS != float("-inf") else 0
-            outro = outro.apply_gain(outro_gain)
-            outro_fade_in   = outro[:OUTRO_FADE_IN_MS].fade_in(OUTRO_FADE_IN_MS)
-            outro_full_clip = outro[OUTRO_FADE_IN_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS]
-            outro_fade_out  = outro[OUTRO_FADE_IN_MS + OUTRO_FULL_MS: OUTRO_FADE_IN_MS + OUTRO_FULL_MS + OUTRO_FADE_OUT_MS].fade_out(OUTRO_FADE_OUT_MS)
-            outro_ready = outro_fade_in + outro_full_clip + outro_fade_out
-            tts_end_pos   = len(body)
-            outro_start_pos = tts_end_pos - OUTRO_FADE_IN_MS
-            tail_ms = OUTRO_FULL_MS + OUTRO_FADE_OUT_MS
-            body = body + AudioSegment.silent(duration=tail_ms)
-            body = body.overlay(outro_ready, position=max(0, outro_start_pos))
-
-        if music is not None:
-            logger.info(
-                f"  overlaying music ({len(music)/1000:.1f}s loop) "
-                f"at {profile.music_gain_db:+.1f} dB"
-            )
-            body = _overlay_music(body, music, profile.music_gain_db)
+        body = AudioSegment.silent(duration=SEGMENT_PAUSE_MS)  # lead-in
+        for i, clip in enumerate(clips):
+            body += clip
+            if gap_after[i] > 0:
+                body += AudioSegment.silent(duration=gap_after[i])
+        body += AudioSegment.silent(duration=SEGMENT_PAUSE_MS)  # tail-out
 
         body.export(output_path, format="mp3", bitrate=bitrate)
 
     # Build tts_timings — map word timestamps back to original transcript line indices
     tts_timings: list[dict] = []
-    cursor_ms = intro_offset_ms
+    cursor_ms = SEGMENT_PAUSE_MS  # lead-in silence precedes the first chunk
 
-    for seg, clip, word_timings in zip(segments, clips, segment_word_timings):
+    for i, (seg, clip, word_timings) in enumerate(zip(segments, clips, segment_word_timings)):
         clip_ms = len(clip)
         line_indices = seg.get("line_indices", [])
         line_char_ranges = seg.get("line_char_ranges", [])
@@ -660,7 +640,7 @@ def synthesize_and_stitch_v2(
                 transcript=transcript,
             ))
 
-        cursor_ms += clip_ms + gap_ms
+        cursor_ms += clip_ms + gap_after[i]
 
     # Sort by line_index to match expected order
     tts_timings.sort(key=lambda x: x["line_index"])
@@ -674,8 +654,11 @@ def synthesize_and_stitch_v2(
             seen[idx] = entry
     tts_timings = [seen[k] for k in sorted(seen)]
 
-    logger.info(f"Audio exported: {output_path} ({len(body)/1000:.1f}s), {len(tts_timings)} timing entries")
-    return output_path, tts_timings
+    logger.info(
+        f"Audio exported: {output_path} ({len(body)/1000:.1f}s), "
+        f"{len(tts_timings)} timing entries, {len(segment_transitions)} segment transitions"
+    )
+    return output_path, tts_timings, segment_transitions
 
 
 # ---------------------------------------------------------------------------
@@ -897,10 +880,6 @@ async def process_episode(episode_id: str) -> None:
                 format_name=profile.format_name,
                 language=profile.language,
                 speaker_config=dynamic_config,
-                intro_audio_path=profile.intro_audio_path,
-                outro_audio_path=profile.outro_audio_path,
-                music_audio_path=profile.music_audio_path,
-                music_gain_db=profile.music_gain_db,
             )
             logger.info(f"  speaker_pair override → {a} (role A) + {b} (role B)")
     logger.info(f"--- Processing episode {episode_id} (show={show_name}, user={user_id}) ---")
@@ -1010,20 +989,42 @@ async def process_episode(episode_id: str) -> None:
         # 5. Synthesize + stitch (sync TTS + pydub — offload to thread pool)
         await _set_episode_status(episode_id, "synthesizing")
         audio_path = str(EPISODES_DIR / f"{episode_id}.mp3")
-        _, tts_timings = await loop.run_in_executor(
+        voice_path = str(EPISODES_DIR / f"{episode_id}_voice.mp3")
+        _, tts_timings, segment_transitions = await loop.run_in_executor(
             None, synthesize_and_stitch_v2,
-            transcript, show_name, audio_path, speaker_override, speaker_pair,
+            transcript, show_name, voice_path, speaker_override, speaker_pair,
         )
 
+        # 5b. Layer per-segment vibe BGM + transition SFX onto the voice track.
+        from core.audio.vibe_mix import build_vibe_mix, compute_segment_bounds
+
+        segment_vibes: dict[int, str] = {
+            seg["segment"]: seg.get("vibe", DEFAULT_VIBE)
+            for seg in outline.get("segments", [])
+        }
+        segment_vibes[INTRO_SEGMENT] = INTRO_VIBE
+        segment_vibes[OUTRO_SEGMENT] = OUTRO_VIBE
+
+        await loop.run_in_executor(
+            None, build_vibe_mix,
+            voice_path, transcript, tts_timings, segment_transitions, segment_vibes, audio_path,
+        )
+        try:
+            os.remove(voice_path)
+        except OSError:
+            pass
+
         # 6. Persist results onto the existing row
-        # Derive actual duration from the stitched MP3
+        # Derive actual duration from the stitched MP3 (BGM/SFX overlay never changes length)
         actual_duration_seconds: int | None = None
         actual_length_minutes: int | None = None
+        voice_length_ms = 0
         try:
             from pydub import AudioSegment as _AS
             _audio = await asyncio.to_thread(_AS.from_mp3, audio_path)
             actual_duration_seconds = int(_audio.duration_seconds)
             actual_length_minutes = max(1, round(_audio.duration_seconds / 60))
+            voice_length_ms = len(_audio)
         except Exception:
             pass
 
@@ -1039,8 +1040,10 @@ async def process_episode(episode_id: str) -> None:
             except Exception as upload_err:
                 logger.error(f"[process_episode] R2 upload failed, keeping local path: {upload_err}")
 
-        # Pass intro_ms so chapter startMinutes are offset correctly in the stitched file
-        intro_ms = tts_timings[0]["start_ms"] if tts_timings else 0
+        # intro_ms = where body segment 1 actually starts (lead-in silence + spoken
+        # intro + transition pause), so chapter 1 absorbs exactly that and no more.
+        _, voice_bounds = compute_segment_bounds(transcript, tts_timings, voice_length_ms)
+        intro_ms = voice_bounds.get(1, (tts_timings[0]["start_ms"] if tts_timings else 0, 0))[0]
         description, chapters = _derive_display_fields(outline, actual_duration_seconds or 0, intro_ms=intro_ms)
 
         source_uuids = _coerce_source_uuids(source_ids)
@@ -1062,6 +1065,7 @@ async def process_episode(episode_id: str) -> None:
                 duration_seconds = $duration_seconds,
                 description = $description,
                 chapters = $chapters::jsonb,
+                bgm_plan = $bgm_plan::jsonb,
                 status = 'ready',
                 error = NULL
             WHERE id = $id::uuid
@@ -1083,6 +1087,10 @@ async def process_episode(episode_id: str) -> None:
                 "duration_seconds": actual_duration_seconds,
                 "description": description,
                 "chapters": json.dumps(chapters),
+                "bgm_plan": json.dumps({
+                    "segment_vibes": segment_vibes,
+                    "transitions": segment_transitions,
+                }),
             },
         )
 

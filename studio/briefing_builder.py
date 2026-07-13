@@ -12,7 +12,7 @@ import json
 from typing import Optional
 
 from core.kb import UserKB
-from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS
+from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS, VIBE_DEFINITIONS
 
 PRIMITIVE_FIELDS = ["key_insights", "human_stakes", "core_tensions", "counterpoints", "examples"]
 
@@ -138,6 +138,7 @@ def build_briefing_packet(
         },
         "editorial_direction": editorial_direction or "Follow the most interesting thread in the material.",
         "source_primitives": build_source_primitives(sources, insights),
+        "vibe_options": VIBE_DEFINITIONS,
     }
 
     listener_context = _kb_listener_context(user_kb)

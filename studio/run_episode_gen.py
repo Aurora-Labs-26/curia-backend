@@ -180,7 +180,7 @@ def main() -> None:
     smallest_elapsed = 0.0
     try:
         t0 = time.time()
-        _, smallest_timings = synthesize_and_stitch_v2(
+        _, smallest_timings, _ = synthesize_and_stitch_v2(
             transcript=transcript,
             show_name=SHOW_NAME,
             output_path=smallest_path,
@@ -210,7 +210,7 @@ def main() -> None:
     try:
         hume_path = str(output_dir / "clarity_engine_hume.mp3")
         t0 = time.time()
-        _, hume_timings = synthesize_and_stitch_v2(
+        _, hume_timings, _ = synthesize_and_stitch_v2(
             transcript=transcript,
             show_name=SHOW_NAME,
             output_path=hume_path,

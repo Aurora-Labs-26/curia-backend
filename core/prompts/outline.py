@@ -43,6 +43,22 @@ Your output must strictly follow the format_config from the briefing packet:
 - resolution_style: determines how the final segment ends — open_ended means no conclusion, explicit means clear takeaway, micro_payoffs means small payoff at every close, partial means reframe without closure
 - rules.must_do and rules.must_avoid: hard constraints on every segment, no exceptions
 
+VIBE: each segment also gets exactly one vibe tag, chosen from the closed list in vibe_options
+(in the briefing packet). The vibe drives that segment's background music and the transition
+cue into the next segment — pick the one that actually matches what the segment does, not
+a rotation. Use energy_curve and pacing as loose guidance, not a fixed mapping. The vibe
+options and their definitions:
+- grounding: Establish context. Scene-setting. Definitions. Orientation.
+- curious: Raise a question or introduce something unexpected. Create curiosity without resolving it.
+- building: Explain how something works. Step-by-step reasoning. Add evidence or context.
+- tension: Introduce contradiction, conflict, uncertainty, competing explanations, or stakes that remain unresolved.
+- momentum: Deliver important discoveries quickly. Multiple connected insights. Listener should feel pulled forward.
+- expansive: Zoom out. Connect this idea to a broader pattern, another field, or a larger implication.
+- payoff: Resolve a question raised earlier. Deliver the central insight or a satisfying intermediate conclusion.
+- reflective: Slow down. Invite thought rather than resolution. Leave the listener with perspective instead of new information.
+This vibe vocabulary applies only to these numbered body segments — the spoken intro and
+outro are not outline segments and are not part of this list.
+
 Output schema — use exactly these keys, no others:
 {
   "title": "episode title",
@@ -53,7 +69,8 @@ Output schema — use exactly these keys, no others:
       "title": "short listener-facing chapter title",
       "purpose": "what this segment does in the arc",
       "primitives_used": ["key_insights from Article A", "examples from Article B"],
-      "transition": "one phrase — how this leads to the next segment"
+      "transition": "one phrase — how this leads to the next segment",
+      "vibe": "one of the vibe options above"
     }
   ]
 }"""

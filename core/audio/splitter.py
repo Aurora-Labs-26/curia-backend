@@ -5,11 +5,18 @@ Split merged paragraphs into TTS-sized segments.
 Respects:
   - max_chars: TTS API character limit (default 4500 to stay under 5000 with overhead)
   - Speaker changes always force a new segment
+  - Outline-segment changes always force a new segment
   - Long paragraphs are split at sentence boundaries
 
-Carries line_indices and line_char_ranges metadata from merger.py through to each
-output segment so that word-level timestamps can be mapped back to original transcript
-line indices.
+Carries line_indices, line_char_ranges, and segment metadata from merger.py through to
+each output segment so that word-level timestamps can be mapped back to original transcript
+line indices, and so the stitcher knows where outline-segment boundaries fall.
+
+The outline-segment check here matters independently of merger.py's own segment-aware
+flush: this function re-merges consecutive same-speaker *paragraphs* up to max_chars, and
+without also checking segment here, two paragraphs from the same speaker but different
+outline segments (now common after merger.py's fix) would get glued back together,
+silently erasing the seam the pause/BGM/SFX logic depends on.
 """
 
 from __future__ import annotations
@@ -114,11 +121,12 @@ def split_into_segments(
 
     Rules:
       - Speaker change → new segment
+      - Outline-segment change → new segment
       - Single paragraph exceeding max_chars → split at sentence boundaries
-      - Consecutive same-speaker paragraphs merged until max_chars
+      - Consecutive same-speaker, same-outline-segment paragraphs merged until max_chars
 
     Each output segment carries:
-      speaker, text, line_indices, line_char_ranges
+      speaker, text, segment, line_indices, line_char_ranges
     where line_char_ranges are relative to the segment's text (not the original paragraph).
     """
     if not paragraphs:
@@ -126,6 +134,7 @@ def split_into_segments(
 
     segments: list[dict] = []
     current_speaker: str | None = None
+    current_segment: int | None = None
     current_text = ""
     current_line_indices: list[int] = []
     current_line_char_ranges: list[tuple[int, int]] = []
@@ -139,6 +148,7 @@ def split_into_segments(
             segments.append({
                 "speaker": current_speaker,
                 "text": text,
+                "segment": current_segment,
                 "line_indices": list(current_line_indices),
                 "line_char_ranges": list(current_line_char_ranges),
             })
@@ -152,6 +162,7 @@ def split_into_segments(
                 segments.append({
                     "speaker": current_speaker,
                     "text": chunk,
+                    "segment": current_segment,
                     "line_indices": chunk_indices,
                     "line_char_ranges": chunk_ranges,
                 })
@@ -162,6 +173,7 @@ def split_into_segments(
 
     for para in paragraphs:
         speaker = (para.get("speaker") or "").strip().lower()
+        segment = para.get("segment")
         text = (para.get("text") or "").strip()
         line_indices = para.get("line_indices", [])
         line_char_ranges = para.get("line_char_ranges", [])
@@ -169,14 +181,15 @@ def split_into_segments(
         if not text:
             continue
 
-        if speaker != current_speaker:
+        if speaker != current_speaker or segment != current_segment:
             _flush()
             current_speaker = speaker
+            current_segment = segment
             current_text = text
             current_line_indices = list(line_indices)
             current_line_char_ranges = list(line_char_ranges)
         else:
-            # Merge same-speaker paragraphs — remap char ranges relative to combined text
+            # Merge same-speaker, same-segment paragraphs — remap char ranges relative to combined text
             offset = len(current_text) + 1  # +1 for the space
             combined = current_text + " " + text if current_text else text
             if len(combined) <= max_chars:
@@ -188,6 +201,7 @@ def split_into_segments(
             else:
                 _flush()
                 current_speaker = speaker
+                current_segment = segment
                 current_text = text
                 current_line_indices = list(line_indices)
                 current_line_char_ranges = list(line_char_ranges)

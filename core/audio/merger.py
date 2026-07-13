@@ -8,6 +8,12 @@ After:  80 lines → ~5-10 paragraphs → natural prosody within each chunk
 Each merged paragraph carries line_indices and line_char_ranges so that
 word-level timestamps from the TTS provider can be mapped back to the
 original transcript line indices for the mobile player.
+
+A chunk also flushes on outline-segment change, not just speaker change.
+Without this, a single-host show (speaker never changes) would merge the
+entire transcript into one TTS call, leaving no seam anywhere to insert the
+segment-transition pause/BGM-crossfade/SFX. Each output paragraph carries
+its segment id so downstream stitching knows where those seams are.
 """
 
 from __future__ import annotations
@@ -15,12 +21,14 @@ from __future__ import annotations
 
 def merge_paragraphs(transcript: list[dict]) -> list[dict]:
     """
-    Group consecutive lines from the same speaker into single paragraphs.
+    Group consecutive lines from the same speaker AND the same outline segment
+    into single paragraphs.
 
-    Input:  [{speaker: "kenji", text: "A."}, {speaker: "kenji", text: "B."}, {speaker: "arjun", text: "C."}]
+    Input:  [{speaker: "kenji", text: "A.", segment: 1}, {speaker: "kenji", text: "B.", segment: 1},
+             {speaker: "kenji", text: "C.", segment: 2}]
     Output: [
-        {speaker: "kenji",  text: "A. B.", line_indices: [0, 1], line_char_ranges: [(0, 2), (4, 6)]},
-        {speaker: "arjun",  text: "C.",    line_indices: [2],    line_char_ranges: [(0, 2)]},
+        {speaker: "kenji", text: "A. B.", segment: 1, line_indices: [0, 1], line_char_ranges: [(0, 2), (4, 6)]},
+        {speaker: "kenji", text: "C.",    segment: 2, line_indices: [2],    line_char_ranges: [(0, 2)]},
     ]
 
     line_char_ranges: list of (start_char, end_char) for each original line within the
@@ -31,6 +39,7 @@ def merge_paragraphs(transcript: list[dict]) -> list[dict]:
 
     merged: list[dict] = []
     current_speaker: str | None = None
+    current_segment: int | None = None
     current_texts: list[str] = []
     current_indices: list[int] = []
 
@@ -48,22 +57,25 @@ def merge_paragraphs(transcript: list[dict]) -> list[dict]:
         merged.append({
             "speaker": current_speaker,
             "text": merged_text,
+            "segment": current_segment,
             "line_indices": list(current_indices),
             "line_char_ranges": char_ranges,
         })
 
     for idx, line in enumerate(transcript):
         speaker = (line.get("speaker") or "").strip().lower()
+        segment = line.get("segment")
         text = (line.get("text") or "").strip()
         if not text:
             continue
 
-        if speaker == current_speaker:
+        if speaker == current_speaker and segment == current_segment:
             current_texts.append(text)
             current_indices.append(idx)
         else:
             _flush()
             current_speaker = speaker
+            current_segment = segment
             current_texts = [text]
             current_indices = [idx]
 

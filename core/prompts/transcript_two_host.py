@@ -38,10 +38,13 @@ Output ONLY a valid JSON array. No prose, no explanation, no markdown."""
         desc="Host A speaker definition wrapped in <speaker> tags: name, backstory, role, speech_patterns."
     )
     outline: str = dspy.InputField(
-        desc="Episode outline as JSON, wrapped in <outline> tags."
+        desc="Episode outline as JSON, wrapped in <outline> tags. Each segment has a vibe tag."
     )
     host_a_json: str = dspy.OutputField(
-        desc='JSON array of {"speaker": str, "text": str}. No wrapper, no markdown fences.'
+        desc=(
+            'JSON array of {"speaker": str, "text": str, "segment": int}. No wrapper, no '
+            "markdown fences. segment is the outline segment number — you write no intro/outro."
+        )
     )
 
 
@@ -62,13 +65,16 @@ You are REACTING to Host A's actual words provided in <host_a_transcript>."""
         desc="Host B speaker definition wrapped in <speaker> tags: name, backstory, role, speech_patterns."
     )
     outline: str = dspy.InputField(
-        desc="Episode outline as JSON, wrapped in <outline> tags."
+        desc="Episode outline as JSON, wrapped in <outline> tags. Each segment has a vibe tag."
     )
     host_a_transcript: str = dspy.InputField(
         desc="Host A's full transcript JSON, wrapped in <host_a_transcript> tags. React to their actual words."
     )
     host_b_json: str = dspy.OutputField(
-        desc='JSON array of {"speaker": str, "text": str}. No wrapper, no markdown fences.'
+        desc=(
+            'JSON array of {"speaker": str, "text": str, "segment": int}. No wrapper, no '
+            "markdown fences. segment is the outline segment number — you write no intro/outro."
+        )
     )
 
 
@@ -88,15 +94,19 @@ Output ONLY a valid JSON array. No prose, no explanation, no markdown."""
         desc="Episode outline as JSON, wrapped in <outline> tags. Use this to verify segment coverage."
     )
     host_a_transcript: str = dspy.InputField(
-        desc="Host A's full transcript JSON, wrapped in <host_a_transcript> tags."
+        desc="Host A's full transcript JSON, wrapped in <host_a_transcript> tags. Lines are already segment-tagged."
     )
     host_b_transcript: str = dspy.InputField(
-        desc="Host B's full transcript JSON, wrapped in <host_b_transcript> tags."
+        desc="Host B's full transcript JSON, wrapped in <host_b_transcript> tags. Lines are already segment-tagged."
     )
     speaker_a_name: str = dspy.InputField(desc="Host A's speaker name (lowercase)")
     speaker_b_name: str = dspy.InputField(desc="Host B's speaker name (lowercase)")
     merged_json: str = dspy.OutputField(
-        desc='Interleaved JSON array of {"speaker": str, "text": str} with intro and outro.'
+        desc=(
+            'Interleaved JSON array of {"speaker": str, "text": str, "segment": int} with '
+            "intro and outro you write yourself. Preserve each line's segment from Host A/B; "
+            "tag the intro you write with segment -1 and the outro you write with segment 0."
+        )
     )
 
 

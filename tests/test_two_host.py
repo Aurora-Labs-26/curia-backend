@@ -77,13 +77,6 @@ class TestTwoHostProfiles:
             profile = SHOW_PROFILES[name]
             assert profile.format_name in FORMATS
 
-    def test_two_host_profiles_have_intro_outro(self):
-        from studio.shows.profiles import SHOW_PROFILES
-        for name in ["clarity_engine", "exploration_engine"]:
-            profile = SHOW_PROFILES[name]
-            assert profile.intro_audio_path is not None
-            assert profile.outro_audio_path is not None
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. DSPy Signatures

@@ -163,6 +163,7 @@ class EpisodeDetail(EpisodeSummary):
     quality_violations: list[str] = Field(default_factory=list)
     regenerated: bool = False
     tts_timings: Optional[Any] = None
+    bgm_plan: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------

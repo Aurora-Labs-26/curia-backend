@@ -25,9 +25,11 @@ def prepare_segments(
 ) -> list[dict]:
     """
     Transform raw transcript lines into TTS-ready segments.
-    Merges same-speaker runs, then splits at TTS API limits.
+    Merges same-speaker, same-outline-segment runs, then splits at TTS API limits.
 
-    Returns list of {speaker, text} dicts — far fewer than input lines.
+    Returns list of {speaker, text, segment, line_indices, line_char_ranges} dicts —
+    far fewer than input lines. Every output dict's "segment" is the outline segment
+    (or sentinel -1/0 for intro/outro) all of its lines belong to.
     """
     if not transcript:
         return []
