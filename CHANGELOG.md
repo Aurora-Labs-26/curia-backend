@@ -9,6 +9,17 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-07-13 · Arihant + Claude (claude-fable-5)
 
+### Bug Fix
+YouTube ingest: a blocked transcript request (YouTube rejects datacenter IPs —
+confirmed live from prod's NAT) raised a non-permanent exception, so SQS retried
+it uselessly and the source card spun on "scraping" forever (same class as the
+perpetual-Queued bug fixed in 176db3c). `RequestBlocked` now raises
+`PermanentError` → clean "failed" state with a user-readable message. Note: YT
+ingestion remains non-functional from AWS until a proxy is configured
+(`YOUTUBE_USE_TOR` exists; rotating-residential proxy is the robust option).
+- **`core/scraper/youtube.py`** — catch `RequestBlocked` (incl. `IpBlocked`) → `PermanentError`
+- **`tests/test_youtube_scraper.py`** — blocked-IP → permanent test
+
 ### Config
 BGM bank shipped to prod and verified end-to-end: episode "Staying Upwind" mixed with
 music in 8/8 transition pauses (−27 dBFS in pauses, ducked ~12 dB under voice).

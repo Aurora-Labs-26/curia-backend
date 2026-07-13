@@ -119,3 +119,14 @@ class TestScrapeYoutube:
     async def test_unparseable_url_raises_permanent(self):
         with pytest.raises(PermanentError, match="video ID"):
             await scrape_youtube("https://example.com/not-a-video")
+
+    def test_ip_block_raises_permanent_not_transient(self):
+        # YouTube blocks datacenter IPs; retries share one NAT IP so this must be
+        # permanent (transient handling left sources stuck on "scraping" forever).
+        from youtube_transcript_api import RequestBlocked
+
+        api = MagicMock()
+        api.return_value.fetch.side_effect = RequestBlocked(VID)
+        with patch("youtube_transcript_api.YouTubeTranscriptApi", api):
+            with pytest.raises(PermanentError, match="blocked"):
+                youtube._fetch_transcript_sync(VID)

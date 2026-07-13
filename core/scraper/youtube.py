@@ -41,13 +41,28 @@ def _build_proxy_config():
 
 
 def _fetch_transcript_sync(video_id: str) -> tuple[str, dict]:
-    from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
+    from youtube_transcript_api import (
+        RequestBlocked,
+        TranscriptsDisabled,
+        NoTranscriptFound,
+        VideoUnavailable,
+        YouTubeTranscriptApi,
+    )
 
     ytt = YouTubeTranscriptApi(proxy_config=_build_proxy_config())
     try:
         transcript = ytt.fetch(video_id)
     except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as e:
         raise PermanentError(f"No transcript available for this YouTube video: {e}")
+    except RequestBlocked as e:
+        # YouTube blocks datacenter IPs; all worker egress shares one NAT IP, so
+        # SQS retries can't succeed — treating this as transient left sources
+        # spinning on "scraping" forever (found live 2026-07-13). Permanent until
+        # a proxy (YOUTUBE_USE_TOR / rotating residential) is configured.
+        raise PermanentError(
+            "YouTube blocked the transcript request from our server. "
+            "This video can't be ingested right now — try an article link instead."
+        ) from e
 
     content = " ".join(s.text for s in transcript)
     extra = {
