@@ -4,7 +4,8 @@ name: bgm-sync
 on:
   workflow_dispatch: {}
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   sync:
