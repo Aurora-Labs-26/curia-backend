@@ -1,0 +1,26 @@
+name: bgm-sync
+# One-shot: sync the BGM bank from feat/bgm-sfx to S3 (assets are too large
+# for git history on v3 / the Docker image — see "topics v1.md" session notes).
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/bgm-sfx
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.BGM_SYNC_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BGM_SYNC_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - name: Sync bank + sfx to S3
+        run: |
+          aws s3 sync assets/bgm_bank s3://curia-audio/assets/bgm_bank --no-progress
+          aws s3 sync assets/sfx s3://curia-audio/assets/sfx --no-progress
+          echo "=== result ==="
+          aws s3 ls s3://curia-audio/assets/ --recursive --summarize | tail -3
