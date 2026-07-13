@@ -7,6 +7,68 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-13 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Topics v1 — per-source topic bucketing (design: `topics v1.md`). Deterministic pins
+from publisher-declared structure (seed domain map + URL section slugs; section beats
+domain) + one LLM judge (haiku) with pins as constraints; ID-coded wire format
+hard-validated against the taxonomy (32 Tier-1 = 28 IAB minus Pets + 4 custom essay
+categories); ≤3 Tier-1 × ≤2 Tier-2, per-tag `src` provenance, `{"tags": []}` valid,
+LLM-error → pins or NULL (retry). Never fails an ingest. Full suite 822 passed
+(+35 new), known-baseline fails unchanged.
+- **`core/taxonomy/buckets.py`** (new) — TAXONOMY with stable numeric IDs + custom flags, SEED_DOMAIN_PINS, SECTION_SLUGS, import-time label validation
+- **`core/taxonomy/classify.py`** (new) — `resolve_pins`, DSPy `JudgeTopics` (prompt-file `classify_topics`), wire parser/validator, merge, `classify_source()`
+- **`core/taxonomy/__init__.py`** (new) — public surface
+- **`core/ingest.py`** — `process_source` step 2b: learned-pin lookup (`domain_pins`), classify via executor, write `source.topics`; `source_ingested` event gains `topics_tier1`/`topics_src`
+- **`config/models.yaml`** — `classify.topics: haiku-4-5` task binding
+- **`api/routes/eval.py`** — `/eval/sources/{id}` returns `topics`; header chip shows Tier-1s (was `metadata.category`)
+- **`tests/test_topics_classify.py`** (new) — 35 mock-only tests: taxonomy integrity, pin resolution, wire validation, merge, terminal states
+
+### Refactor
+Deleted the 12-label `category` field from the metadata transformation — `topics` is
+now the only topical axis; `metadata` keeps only formal facts. Zero functional
+consumers existed (grep-verified; only the eval-UI chip, updated above). Old stored
+metadata JSON rows keep the key harmlessly.
+- **`core/prompts/transformations.py`** — `ExtractMetadata` docstring + output desc drop `category`; module docstring updated
+- **`prompts/extract_metadata.txt`** — runtime prompt override rewritten without `category`
+
+### Migration
+- **`alembic/versions/0031_source_topics.py`** — `source.topics JSONB` + GIN index; `domain_pins` table (learned pins, Phase 3). Run `python -m alembic upgrade head` when Postgres is up (was down at implementation time).
+
+### Docs
+- **`topics v1.md`** — design doc for source topic-bucketing (renamed from the
+  earlier `iab tagging v1.md` draft after design review). Final architecture:
+  deterministic pins (domain + URL-section, publisher-declared structure only) +
+  single LLM judge with pins as constraints; keyword/token matching, LLM hints, and
+  the source-level confidence gate were all cut in review. Per-tag `src` provenance
+  in `source.topics` JSONB; `domain_pins` table with learned-pin promotion loop;
+  4 custom Tier-1s; old 12-label `metadata.category` to be deleted; eval gates
+  downstream use. Design only — no code yet; implementation file map inside.
+
+## 2026-07-13 · Arihant + Claude (claude-opus-4-8)
+
+### Test
+New unit coverage for the v2.9 features (YouTube source, PostHog analytics, og_image
+contract) — 30 tests, all mock-only (no DB / network / API keys; `posthog`,
+`youtube-transcript-api`, `yt-dlp` need not be installed). Full suite: 787 passed,
+6 known-baseline fails unchanged, 5 e2e errors are pre-existing environmental
+(they skip cleanly in isolation).
+- **`tests/test_youtube_scraper.py`** — `extract_video_id` patterns; `scrape_youtube`
+  5-tuple contract, extra_data merge, title→video_id fallback, empty-transcript and
+  unparseable-URL `PermanentError` (mocks `_fetch_transcript_sync`/`_fetch_metadata_sync`)
+- **`tests/test_analytics.py`** — `_get_client` no-op when token unset + caching;
+  `resolve_distinct_id` firebase_uid-vs-user_id fallback; `capture`/`track` arg
+  forwarding and never-raises (mocks `_get_client`/`db_fetchrow`)
+- **`tests/test_og_image_contract.py`** — `scrape()` 5-tuple + og_image propagation on
+  trafilatura and firecrawl paths; YouTube routing to `scrape_youtube`; validator allows
+  YouTube; `SourceSummary.og_image` field
+
+### Chore
+Reconciled the diverged v2.9 line: local `v2.9` moved to `origin/v2.9` (og_image,
+YouTube, PostHog) and the Apple name/email COALESCE fix (`644b8e8`) cherry-picked on
+top so the v2.9 line retains it. CHANGELOG conflict resolved keeping both histories.
+
 ## 2026-07-01 · Aditya + Claude (claude-sonnet-5)
 
 ### Feature

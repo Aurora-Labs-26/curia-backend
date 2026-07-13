@@ -169,7 +169,10 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
     insights table is cleared or duplicates are tolerated).
     """
     row = await db_fetchrow(
-        "SELECT url, user_id, full_text, source_type FROM source WHERE id = $id::uuid",
+        """
+        SELECT url, user_id, title, full_text, source_type, data->>'channel' AS channel
+        FROM source WHERE id = $id::uuid
+        """,
         {"id": source_id},
     )
     if not row:
@@ -178,6 +181,8 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
     user_id = row["user_id"]
     url_domain = urlparse(url).hostname or ""
     source_type = row.get("source_type") or "article"
+    title = row.get("title")
+    channel = row.get("channel")
 
     try:
         # 1. Scrape (skip if full_text already populated — supports resumed runs)
@@ -202,6 +207,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
                     "extra_data": extra_data or {},
                 },
             )
+            channel = (extra_data or {}).get("channel") or channel
         else:
             full_text = row["full_text"]
 
@@ -212,11 +218,13 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
             (name, loop.run_in_executor(None, run_transformation, full_text, name))
             for name in TRANSFORMATION_NAMES
         ]
+        insight_contents: dict[str, Optional[str]] = {}
         for insight_type, task in tasks:
             try:
                 content = await task
                 if content and content.strip().lower() == "null":
                     content = None
+                insight_contents[insight_type] = content
                 await db_execute(
                     """
                     INSERT INTO source_insight (source_id, insight_type, content)
@@ -228,6 +236,35 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
             except Exception as e:
                 logger.warning(f"  ✗ {insight_type}: {e}")
 
+        # 2b. Topics — deterministic pins + LLM judge (see "topics v1.md").
+        #     Never fails the ingest; NULL topics = classify again on a future run.
+        topics_env = None
+        try:
+            from core.taxonomy import classify_source
+
+            host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+            pin_key = f"yt:{channel}" if (source_type == "youtube" and channel) else host
+            pin_row = await db_fetchrow(
+                "SELECT tier1, tier2 FROM domain_pins WHERE hostname = $h",
+                {"h": pin_key},
+            )
+            learned_pin = (pin_row["tier1"], pin_row.get("tier2")) if pin_row else None
+            text_signal = insight_contents.get("summary") or (full_text or "")[:1500]
+            topics_env = await loop.run_in_executor(
+                None, classify_source, url, title, text_signal,
+                source_type, channel, learned_pin,
+            )
+            if topics_env is not None:
+                await db_execute(
+                    "UPDATE source SET topics = $t::jsonb, updated_at = now() WHERE id = $id::uuid",
+                    {"id": source_id, "t": topics_env},
+                )
+                logger.info(f"  ✓ topics ({len(topics_env['tags'])} tag(s))")
+            else:
+                logger.warning("  ✗ topics: judge failed with no pins — left NULL for retry")
+        except Exception as e:
+            logger.warning(f"  ✗ topics: {e}")
+
         # 3. Embed chunks + primitive
         await _set_status(source_id, "embedding")
         await embed_chunks(source_id, full_text)
@@ -236,11 +273,15 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
         # 4. Done
         await _set_status(source_id, "ready")
         logger.info(f"Ingestion complete: {source_id}")
-        await analytics.track(user_id, "source_ingested", {
+        ingested_props = {
             "source_id": source_id,
             "url_domain": url_domain,
             "source_type": source_type,
-        })
+        }
+        if topics_env is not None:
+            ingested_props["topics_tier1"] = [t["tier1"] for t in topics_env["tags"]]
+            ingested_props["topics_src"] = [t["src"] for t in topics_env["tags"]]
+        await analytics.track(user_id, "source_ingested", ingested_props)
 
     except Exception as e:
         err = str(e)[:1000]

@@ -107,7 +107,7 @@ async def eval_ingest(body: IngestRequest, bg: BackgroundTasks):
 @router.get("/sources/{source_id}")
 async def eval_source(source_id: str):
     source = await db_fetchrow(
-        "SELECT id, title, url, status, full_text, error FROM source WHERE id = $id::uuid",
+        "SELECT id, title, url, status, full_text, error, topics FROM source WHERE id = $id::uuid",
         {"id": source_id},
     )
     if not source:
@@ -129,6 +129,7 @@ async def eval_source(source_id: str):
         "error": source["error"],
         "char_count": len(source["full_text"] or ""),
         "full_text": source["full_text"],
+        "topics": source.get("topics"),
         "transforms": transforms,
     }
 
@@ -431,8 +432,11 @@ async function render(data){
     const m=typeof data.transforms.metadata==='string'
       ?JSON.parse(data.transforms.metadata):data.transforms.metadata;
     if(m?.type)meta.push(m.type.replace(/_/g,' '));
-    if(m?.category?.length)meta.push(m.category.join(', '));
     if(m?.language)meta.push(m.language);
+  }catch{}
+  try{
+    const t=typeof data.topics==='string'?JSON.parse(data.topics):data.topics;
+    if(t?.tags?.length)meta.push(t.tags.map(x=>x.tier1).join(', '));
   }catch{}
   if(data.char_count)meta.push(data.char_count.toLocaleString()+' chars');
   $('src-meta').textContent=meta.join(' · ');

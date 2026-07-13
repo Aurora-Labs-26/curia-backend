@@ -4,7 +4,8 @@ DSPy modules for the 7 ingest-time transformations.
 
 Each transformation extracts a specific kind of primitive from an article:
   - summary        (Tier 1 — always present, plain-text 2-4 sentence summary)
-  - metadata       (Tier 1 — always present, structured JSON: author, category, type, etc)
+  - metadata       (Tier 1 — always present, structured JSON: author, type, tone, etc.
+                    Topical categorization lives in source.topics — see core/taxonomy/)
   - key_insights   (Tier 1 — always present)
   - human_stakes   (Tier 2 — null if not applicable)
   - core_tensions  (Tier 2 — null if not applicable)
@@ -63,10 +64,6 @@ by the text.
 Required fields:
 - "author":        author name(s) if mentioned in the text, else null. String or null.
 - "publication":   publication or website name if discernible from the text, else null. String or null.
-- "category":      1 or 2 broad domain tags from this exact set (no others, no novel labels):
-                   ["technology", "science", "philosophy", "economics_business",
-                    "culture_arts", "politics_society", "psychology", "history",
-                    "design", "media", "health", "other"]. List of strings.
 - "type":          exactly one of:
                    ["essay", "news_article", "research_summary", "opinion",
                     "interview", "review", "personal_reflection", "tutorial", "other"]
@@ -84,7 +81,6 @@ Output ONLY a single valid JSON object. No prose, no markdown, no code fences:
 {
   "author": "...",
   "publication": "...",
-  "category": ["technology"],
   "type": "essay",
   "tone": "journalistic",
   "length_bucket": "medium",
@@ -95,7 +91,7 @@ Output ONLY a single valid JSON object. No prose, no markdown, no code fences:
 
     article: str = dspy.InputField(desc="Full article text (capped at 50k chars by caller)")
     metadata_json: str = dspy.OutputField(
-        desc="JSON object with author, publication, category, type, tone, length_bucket, key_entities, approx_year, language"
+        desc="JSON object with author, publication, type, tone, length_bucket, key_entities, approx_year, language"
     )
 
 

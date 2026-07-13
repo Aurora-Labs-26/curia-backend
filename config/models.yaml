@@ -361,6 +361,8 @@ bindings:
     transformation.counterpoints:  haiku-4-5
     transformation.examples:       haiku-4-5
 
+    classify.topics:         haiku-4-5
+
     idea_evaluation.batch:   haiku-4-5
     idea_evaluation.single:  haiku-4-5
 
