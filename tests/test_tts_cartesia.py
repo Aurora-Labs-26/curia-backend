@@ -82,3 +82,82 @@ def test_error_status_raises(adapter):
     with patch("core.llm_config.adapters.tts.httpx.Client", FakeClient):
         with pytest.raises(RuntimeError, match="401"):
             adapter._synthesize_cartesia("hello", tempfile.mktemp(suffix=".wav"), "ca_key")
+
+
+# ---------------------------------------------------------------------------
+# Streamed-WAV header repair — Cartesia emits placeholder RIFF sizes
+# (0xFFFFFFFF) because it streams; wave-module consumers would misread.
+# ---------------------------------------------------------------------------
+
+import io
+import struct
+import wave
+
+from core.llm_config.adapters.tts import _fix_streamed_wav_header
+
+
+def _wav_with_bogus_sizes(n_frames: int = 2205, sample_rate: int = 22050) -> bytes:
+    """A real WAV whose RIFF and data sizes are overwritten with 0xFFFFFFFF."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(b"\x00\x00" * n_frames)
+    blob = bytearray(buf.getvalue())
+    blob[4:8] = struct.pack("<I", 0xFFFFFFFF)               # RIFF size
+    data_idx = blob.find(b"data")
+    blob[data_idx + 4:data_idx + 8] = struct.pack("<I", 0xFFFFFFFF)  # data size
+    return bytes(blob)
+
+
+def test_fix_streamed_wav_header_repairs_bogus_sizes():
+    path = tempfile.mktemp(suffix=".wav")
+    with open(path, "wb") as f:
+        f.write(_wav_with_bogus_sizes(n_frames=2205))
+
+    # before: wave reports a nonsense frame count
+    with wave.open(path, "rb") as w:
+        assert w.getnframes() != 2205
+
+    _fix_streamed_wav_header(path)
+    with wave.open(path, "rb") as w:
+        assert w.getnframes() == 2205
+        assert w.getframerate() == 22050
+
+
+def test_fix_streamed_wav_header_noop_on_wellformed():
+    path = tempfile.mktemp(suffix=".wav")
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(22050)
+        w.writeframes(b"\x00\x00" * 100)
+    before = open(path, "rb").read()
+    _fix_streamed_wav_header(path)
+    assert open(path, "rb").read() == before
+
+
+def test_fix_streamed_wav_header_noop_on_non_wav():
+    path = tempfile.mktemp(suffix=".bin")
+    with open(path, "wb") as f:
+        f.write(b"ID3not-a-wav-at-all" * 10)
+    before = open(path, "rb").read()
+    _fix_streamed_wav_header(path)
+    assert open(path, "rb").read() == before
+
+
+def test_synthesize_repairs_header_end_to_end(adapter):
+    bogus = _wav_with_bogus_sizes(n_frames=441)
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, *a, **k):
+            return _Resp(content=bogus)
+
+    with patch("core.llm_config.adapters.tts.httpx.Client", FakeClient):
+        out = tempfile.mktemp(suffix=".wav")
+        adapter._synthesize_cartesia("hello", out, "ca_key")
+
+    with wave.open(out, "rb") as w:                # readable by wave = repaired
+        assert w.getnframes() == 441

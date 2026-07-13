@@ -67,6 +67,35 @@ def _write_silent_wav(output_path: str, duration_seconds: float = 1.0) -> None:
     _write_wav_from_pcm(silence, sample_rate, output_path)
 
 
+def _fix_streamed_wav_header(path: str) -> None:
+    """
+    Repair RIFF/data chunk sizes on WAVs from streaming servers (e.g. Cartesia),
+    which emit placeholder sizes (0 or 0xFFFFFFFF) because the final length is
+    unknown at header-write time. ffmpeg tolerates that; Python's `wave` module
+    and naive parsers do not. No-op for well-formed files and non-RIFF content.
+    """
+    import struct
+
+    size = os.path.getsize(path)
+    with open(path, "r+b") as f:
+        head = f.read(256)
+        if len(head) < 44 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+            return
+        declared_riff = struct.unpack("<I", head[4:8])[0]
+        data_idx = head.find(b"data")
+        if data_idx < 0:
+            return
+        declared_data = struct.unpack("<I", head[data_idx + 4:data_idx + 8])[0]
+        actual_riff = size - 8
+        actual_data = size - (data_idx + 8)
+        if declared_riff == actual_riff and declared_data == actual_data:
+            return
+        f.seek(4)
+        f.write(struct.pack("<I", actual_riff))
+        f.seek(data_idx + 4)
+        f.write(struct.pack("<I", actual_data))
+
+
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
@@ -349,6 +378,8 @@ class TTSAdapter:
         if resp.status_code != 200:
             raise RuntimeError(f"Cartesia error {resp.status_code}: {resp.text[:300]}")
         await asyncio.to_thread(_write_bytes, output_path, resp.content)
+        # Cartesia streams WAV with placeholder RIFF sizes — repair them.
+        await asyncio.to_thread(_fix_streamed_wav_header, output_path)
 
     async def _async_smallest(self, text: str, output_path: str, api_key: str) -> None:
         """Smallest.ai Lightning TTS via SDK — SDK handles chunking internally."""
@@ -569,6 +600,8 @@ class TTSAdapter:
                 raise RuntimeError(f"Cartesia TTS error {resp.status_code}: {resp.text[:300]}")
             with open(output_path, "wb") as f:
                 f.write(resp.content)
+            # Cartesia streams WAV with placeholder RIFF sizes — repair them.
+            _fix_streamed_wav_header(output_path)
         except RuntimeError:
             raise
         except Exception as e:

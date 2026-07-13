@@ -32,6 +32,13 @@ spend on JS-heavy pages.
 - **`tests/test_jina_reader.py`** (new) — parsing, auth header, cascade ordering, key-gating
 - **`.env.example`** — documented `JINA_API_KEY`, `JINA_READER_URL`
 
+### Bug Fix
+Cartesia streams WAV with placeholder RIFF/data sizes (0xFFFFFFFF) — ffmpeg/pydub
+tolerate it, but Python `wave` consumers misread (a 9.5s sample claimed 27 hours).
+Found via live e2e sampling; the adapter now repairs the header after download.
+- **`core/llm_config/adapters/tts.py`** — `_fix_streamed_wav_header()` applied in both `_synthesize_cartesia` and `_async_cartesia`
+- **`tests/test_tts_cartesia.py`** — repair, no-op-on-wellformed, no-op-on-non-WAV, end-to-end synth cases
+
 ### Feature
 Sarvam AI (Bulbul) + Cartesia (Sonic) TTS adaptability. Sarvam is a new adapter:
 chunked ≤`max_chars` at sentence boundaries, base64-WAV responses concatenated at
