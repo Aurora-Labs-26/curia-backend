@@ -31,6 +31,7 @@ from .prompts.transformations import (
     TRANSFORMATION_NAMES,
     transformations as _transformations,
 )
+from .scraper.prettify import prettify
 from .scraper.validator import is_youtube_url
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
@@ -170,7 +171,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
     """
     row = await db_fetchrow(
         """
-        SELECT url, user_id, title, full_text, source_type, data->>'channel' AS channel
+        SELECT url, user_id, title, full_text, clean_text, source_type, data->>'channel' AS channel
         FROM source WHERE id = $id::uuid
         """,
         {"id": source_id},
@@ -190,10 +191,12 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
             await _set_status(source_id, "scraping")
             full_text, title, author, og_image, extra_data = await scrape_url(url)
             source_type = "youtube" if is_youtube_url(url) else "article"
+            clean_text = prettify(full_text)
             await db_execute(
                 """
                 UPDATE source
-                SET title = $title, full_text = $full_text, author = $author, og_image = $og_image,
+                SET title = $title, full_text = $full_text, clean_text = $clean_text,
+                    author = $author, og_image = $og_image,
                     source_type = $source_type, data = data || $extra_data::jsonb, updated_at = now()
                 WHERE id = $id::uuid
                 """,
@@ -201,6 +204,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
                     "id": source_id,
                     "title": title,
                     "full_text": full_text,
+                    "clean_text": clean_text,
                     "author": author or None,
                     "og_image": og_image or None,
                     "source_type": source_type,
@@ -210,12 +214,23 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
             channel = (extra_data or {}).get("channel") or channel
         else:
             full_text = row["full_text"]
+            clean_text = row.get("clean_text")
+            if not clean_text:
+                # Resumed / pre-prettifier row — clean it now (backfill-on-touch).
+                clean_text = prettify(full_text)
+                await db_execute(
+                    "UPDATE source SET clean_text = $ct, updated_at = now() WHERE id = $id::uuid",
+                    {"id": source_id, "ct": clean_text},
+                )
+
+        # Every LLM/embedding consumer reads the prettified text; raw stays for audit.
+        text_for_llm = clean_text or full_text
 
         # 2. Run transformations in parallel
         await _set_status(source_id, "transforming")
         loop = asyncio.get_running_loop()
         tasks = [
-            (name, loop.run_in_executor(None, run_transformation, full_text, name))
+            (name, loop.run_in_executor(None, run_transformation, text_for_llm, name))
             for name in TRANSFORMATION_NAMES
         ]
         insight_contents: dict[str, Optional[str]] = {}
@@ -249,7 +264,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
                 {"h": pin_key},
             )
             learned_pin = (pin_row["tier1"], pin_row.get("tier2")) if pin_row else None
-            text_signal = insight_contents.get("summary") or (full_text or "")[:1500]
+            text_signal = insight_contents.get("summary") or (text_for_llm or "")[:1500]
             topics_env = await loop.run_in_executor(
                 None, classify_source, url, title, text_signal,
                 source_type, channel, learned_pin,
@@ -267,7 +282,7 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
 
         # 3. Embed chunks + primitive
         await _set_status(source_id, "embedding")
-        await embed_chunks(source_id, full_text)
+        await embed_chunks(source_id, text_for_llm)
         await embed_primitive(source_id)
 
         # 4. Done

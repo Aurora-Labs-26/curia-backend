@@ -172,9 +172,14 @@ class TestProcessSource:
              patch("core.ingest.embed_primitive", new=AsyncMock()), \
              patch("core.ingest.TRANSFORMATION_NAMES", ["summary"]):
             await ingest.process_source("sid-2")
-        # The "null" string should be converted to None in the DB insert
-        insert_call = mock_exec.call_args_list[0]
-        assert insert_call[0][1]["content"] is None
+        # The "null" string should be converted to None in the DB insert.
+        # (Locate the insight INSERT by SQL — other db_execute calls, e.g. the
+        # clean_text backfill UPDATE, may precede it.)
+        insert_calls = [
+            c for c in mock_exec.call_args_list if "source_insight" in c[0][0]
+        ]
+        assert insert_calls, "no source_insight INSERT was issued"
+        assert insert_calls[0][0][1]["content"] is None
 
     async def test_final_attempt_sets_failed(self):
         row = {"url": "https://example.com", "user_id": "u1", "full_text": None}
