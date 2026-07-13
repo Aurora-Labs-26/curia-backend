@@ -54,6 +54,16 @@ providers:
     api_key_env: DEEPGRAM_API_KEY
     base_url: https://api.deepgram.com
 
+  sarvam:
+    type: sarvam
+    api_key_env: SARVAM_API_KEY
+    base_url: https://api.sarvam.ai
+
+  cartesia:
+    type: cartesia
+    api_key_env: CARTESIA_API_KEY
+    base_url: https://api.cartesia.ai
+
   # ── LLM providers ───────────────────────────────────────────────────────────
   #
   # vllm:
@@ -125,10 +135,7 @@ providers:
   #   api_key_env: OPENAI_API_KEY
   #   base_url: https://api.openai.com/v1
   #
-  # cartesia:
-  #   type: cartesia
-  #   api_key_env: CARTESIA_API_KEY
-  #   base_url: https://api.cartesia.ai
+  # (cartesia moved to the active TTS providers above)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -336,12 +343,21 @@ models:
   #     response_format: wav
   #     speed: 1.0
   #
-  # cartesia-sonic:
-  #   provider: cartesia
-  #   model_id: sonic-2
-  #   kind: tts
-  #   defaults:
-  #     sample_rate: 22050
+  cartesia-sonic:
+    provider: cartesia
+    model_id: sonic-2
+    kind: tts
+    defaults:
+      sample_rate: 22050
+
+  sarvam-bulbul:
+    provider: sarvam
+    model_id: bulbul:v2
+    kind: tts
+    defaults:
+      target_language_code: en-IN
+      sample_rate: 22050
+      max_chars: 450
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -439,6 +455,11 @@ bindings:
   #   arjun:
   #     model: cartesia-sonic
   #     voice_id: <cartesia-voice-uuid>
+  #   emeka:
+  #     model: sarvam-bulbul
+  #     voice_id: anushka            # Sarvam named speaker; set
+  #                                  # target_language_code (e.g. hi-IN) via
+  #                                  # the model alias defaults for Indian languages
 
   # Reserved for later (cohort + user scopes — empty for v1)
   cohort: {}

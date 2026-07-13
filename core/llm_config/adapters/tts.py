@@ -167,6 +167,8 @@ class TTSAdapter:
                 self._synthesize_hume(text, output_path, api_key)
             elif self.provider.type == "deepgram":
                 self._synthesize_deepgram(text, output_path, api_key)
+            elif self.provider.type == "sarvam":
+                self._synthesize_sarvam(text, output_path, api_key)
             elif self.provider.type == "edge_tts":
                 self._synthesize_edge_tts(text, output_path)
             else:
@@ -237,6 +239,8 @@ class TTSAdapter:
                 await self._async_hume(text, output_path, api_key)
             elif self.provider.type == "deepgram":
                 await self._async_deepgram(text, output_path, api_key)
+            elif self.provider.type == "sarvam":
+                await self._async_sarvam(text, output_path, api_key)
             elif self.provider.type == "xai":
                 await self._async_xai(text, output_path, api_key)
             else:
@@ -972,6 +976,99 @@ class TTSAdapter:
                     raise RuntimeError(f"Deepgram error {resp.status_code}: {resp.text[:300]}")
                 out += resp.content
         await asyncio.to_thread(_write_bytes, output_path, bytes(out))
+
+    # -- Sarvam AI (Bulbul) --------------------------------------------------
+    # Sarvam caps text per request, so we chunk at sentence boundaries (reusing
+    # the deepgram chunker with a Sarvam-sized limit) and concatenate the WAV
+    # segments at the PCM frame level. Response: JSON {"audios": ["<b64 wav>"]}.
+
+    _SARVAM_MAX_CHARS = 450
+
+    def _sarvam_body(self, text: str) -> dict:
+        return {
+            "text": text,
+            "model": self.model.model_id,
+            "speaker": self.voice_id,
+            "target_language_code": self.settings.get("target_language_code", "en-IN"),
+            "speech_sample_rate": int(self.settings.get("sample_rate", 22050)),
+            "enable_preprocessing": True,
+        }
+
+    def _sarvam_max_chars(self) -> int:
+        return int(self.settings.get("max_chars", self._SARVAM_MAX_CHARS))
+
+    @staticmethod
+    def _sarvam_decode_audios(payload: dict) -> list[bytes]:
+        import base64
+
+        audios = payload.get("audios") or []
+        if not audios:
+            raise RuntimeError("Sarvam response contained no audio")
+        return [base64.b64decode(a) for a in audios]
+
+    @staticmethod
+    def _combine_wavs(wav_blobs: list[bytes], output_path: str) -> None:
+        """Concatenate WAV blobs at the frame level into one file."""
+        import io
+
+        if len(wav_blobs) == 1:
+            _write_bytes(output_path, wav_blobs[0])
+            return
+        params = None
+        frames = bytearray()
+        for blob in wav_blobs:
+            with wave.open(io.BytesIO(blob), "rb") as w:
+                if params is None:
+                    params = w.getparams()
+                frames += w.readframes(w.getnframes())
+        with wave.open(output_path, "wb") as out:
+            out.setnchannels(params.nchannels)
+            out.setsampwidth(params.sampwidth)
+            out.setframerate(params.framerate)
+            out.writeframes(bytes(frames))
+
+    def _sarvam_request(self, text: str, api_key: str) -> list[bytes]:
+        """One Sarvam /text-to-speech call for a single chunk → WAV blobs."""
+        base_url = (self.provider.base_url or "https://api.sarvam.ai").rstrip("/")
+        with httpx.Client(timeout=120) as client:
+            resp = client.post(
+                f"{base_url}/text-to-speech",
+                headers={
+                    "api-subscription-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=self._sarvam_body(text),
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Sarvam error {resp.status_code}: {resp.text[:300]}")
+        return self._sarvam_decode_audios(resp.json())
+
+    def _synthesize_sarvam(self, text: str, output_path: str, api_key: str) -> None:
+        """Sarvam Bulbul TTS via REST — chunked, WAV frame-level concat."""
+        try:
+            blobs: list[bytes] = []
+            for chunk in self._chunk_for_deepgram(text, self._sarvam_max_chars()):
+                blobs.extend(self._sarvam_request(chunk, api_key))
+            self._combine_wavs(blobs, output_path)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Sarvam TTS request failed: {e}") from e
+
+    async def _async_sarvam(self, text: str, output_path: str, api_key: str) -> None:
+        """Sarvam Bulbul TTS via REST (native async httpx) — chunked, WAV concat."""
+        base_url = (self.provider.base_url or "https://api.sarvam.ai").rstrip("/")
+        headers = {"api-subscription-key": api_key, "Content-Type": "application/json"}
+        blobs: list[bytes] = []
+        async with httpx.AsyncClient(timeout=120) as client:
+            for chunk in self._chunk_for_deepgram(text, self._sarvam_max_chars()):
+                resp = await client.post(
+                    f"{base_url}/text-to-speech", headers=headers, json=self._sarvam_body(chunk),
+                )
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Sarvam error {resp.status_code}: {resp.text[:300]}")
+                blobs.extend(self._sarvam_decode_audios(resp.json()))
+        await asyncio.to_thread(self._combine_wavs, blobs, output_path)
 
     async def _async_hume(self, text: str, output_path: str, api_key: str) -> None:
         """Hume AI Octave TTS via SDK (async via thread pool) — chains generation_id."""

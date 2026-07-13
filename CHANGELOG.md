@@ -10,6 +10,41 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-07-13 · Arihant + Claude (claude-fable-5)
 
 ### Feature
+Prettifier layer — rule-based clean-text pass on every article after scraping,
+before ANY LLM consumer (revamp v1 "Layer 1"; no LLM involved). Fixes encoding
+(entities, mojibake, zero-width chars), strips short boilerplate lines
+(subscribe/cookie/share patterns), dedups scraper double-grabbed paragraphs,
+normalizes whitespace; safety valve returns the original if >70% was removed.
+Transformations, chunk embeddings, and the topics text-signal now all read
+`clean_text or full_text`; raw `full_text` kept for audit.
+- **`core/scraper/prettify.py`** (new) — `prettify()`, deterministic and idempotent
+- **`core/ingest.py`** — prettify on scrape + store `clean_text`; backfill-on-touch for pre-prettifier rows; `text_for_llm` feeds transformations/embeddings/topics
+- **`alembic/versions/0032_source_clean_text.py`** — adds `source.clean_text`
+- **`tests/test_prettify.py`** (new) — 14 tests incl. over-strip valve + idempotence
+- **`tests/test_ingest_pipeline.py`** — insight-INSERT assertion made position-independent (clean_text backfill UPDATE may precede it)
+
+### Feature
+Jina Reader as scrape tier 2 (trafilatura → jina → firecrawl) — hosted
+URL→LLM-ready-markdown extraction (r.jina.ai, non-generative). Key-gated:
+without `JINA_API_KEY` the cascade behaves exactly as before. Cuts firecrawl
+spend on JS-heavy pages.
+- **`core/scraper/cascade.py`** — `_scrape_jina()` + gated tier in `scrape()`
+- **`tests/test_jina_reader.py`** (new) — parsing, auth header, cascade ordering, key-gating
+- **`.env.example`** — documented `JINA_API_KEY`, `JINA_READER_URL`
+
+### Feature
+Sarvam AI (Bulbul) + Cartesia (Sonic) TTS adaptability. Sarvam is a new adapter:
+chunked ≤`max_chars` at sentence boundaries, base64-WAV responses concatenated at
+the PCM frame level, sync + native-async paths, `target_language_code` setting for
+Indian languages. Cartesia's existing synth method is now wired to active config.
+Speaker bindings unchanged (smallest) — switching a voice is a models.yaml edit.
+- **`core/llm_config/adapters/tts.py`** — `_synthesize_sarvam`/`_async_sarvam`, `_sarvam_request`, `_combine_wavs`; dispatch entries
+- **`core/llm_config/schema.py`** — `sarvam` provider type
+- **`config/models.yaml`** — `sarvam` + `cartesia` providers active; `sarvam-bulbul`, `cartesia-sonic` model aliases; commented speaker examples
+- **`.env.example`** — `SARVAM_API_KEY`, `CARTESIA_API_KEY`
+- **`tests/test_tts_sarvam.py`** (new), **`tests/test_tts_cartesia.py`** (new) — request shapes, chunk+concat, error paths, config wiring
+
+### Feature
 Topics v1 — per-source topic bucketing (design: `topics v1.md`). Deterministic pins
 from publisher-declared structure (seed domain map + URL section slugs; section beats
 domain) + one LLM judge (haiku) with pins as constraints; ID-coded wire format

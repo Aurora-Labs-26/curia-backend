@@ -32,6 +32,7 @@ ProviderType = Literal[
     "cartesia",       # TTS (Cartesia)
     "hume",           # TTS (Hume AI Octave)
     "deepgram",       # TTS (Deepgram Aura)
+    "sarvam",         # TTS (Sarvam AI Bulbul — Indian languages/accents)
     "jina",           # embedding (Jina)
     "mistral",        # embedding (Mistral)
 ]
