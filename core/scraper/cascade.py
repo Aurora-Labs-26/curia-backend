@@ -107,11 +107,45 @@ async def scrape(url: str) -> tuple[str, str, str, str, dict]:
         if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
             logger.info(f"[scraper] trafilatura success: {len(content)} chars")
             return content.strip(), title or url, author, og_image, {}
-        logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
+        logger.info(f"[scraper] trafilatura returned too little ({len(content.strip()) if content else 0} chars), trying next tier...")
     except Exception as e:
-        logger.info(f"[scraper] trafilatura failed ({e}), trying firecrawl...")
+        logger.info(f"[scraper] trafilatura failed ({e}), trying next tier...")
+
+    # Tier 2: Jina Reader (free/cheap hosted extraction) — only when a key is
+    # configured; without JINA_API_KEY the cascade behaves exactly as before.
+    if os.getenv("JINA_API_KEY"):
+        try:
+            content, title, author, og_image = await _scrape_jina(url)
+            if content and len(content.strip()) >= MIN_CONTENT_LENGTH:
+                logger.info(f"[scraper] jina reader success: {len(content)} chars")
+                return content.strip(), title or url, author, og_image, {}
+            logger.info(f"[scraper] jina reader returned too little ({len(content.strip()) if content else 0} chars), trying firecrawl...")
+        except Exception as e:
+            logger.info(f"[scraper] jina reader failed ({e}), trying firecrawl...")
 
     return await _try_firecrawl_or_fail(url, is_paywall_domain)
+
+
+async def _scrape_jina(url: str) -> tuple[str, str, str, str]:
+    """
+    Jina Reader (r.jina.ai) — hosted URL→LLM-ready-markdown extraction.
+    Non-generative pipeline; returns (content, title, author, og_image).
+    Author/og_image are not provided by Reader → empty strings.
+    """
+    api_key = os.getenv("JINA_API_KEY")
+    base = os.getenv("JINA_READER_URL", "https://r.jina.ai").rstrip("/")
+    async with httpx.AsyncClient(timeout=90) as client:
+        resp = await client.get(
+            f"{base}/{url}",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+            },
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"jina reader error {resp.status_code}: {resp.text[:200]}")
+    data = resp.json().get("data") or {}
+    return (data.get("content") or "", data.get("title") or "", "", "")
 
 
 async def _try_firecrawl_or_fail(url: str, is_paywall_domain: bool) -> tuple[str, str, str, str, dict]:
