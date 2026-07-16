@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+ENV/
+curia/
+.git/
+.DS_Store
+app/data/runs/
+sa-key.json
+service-key.json
+*.md

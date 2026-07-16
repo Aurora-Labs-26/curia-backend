@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: curia-harness-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: curia
+      POSTGRES_PASSWORD: curia_dev
+      POSTGRES_DB: curia_harness
+    ports:
+      # Host port 5433 (not 5432) so this never collides with a Postgres a
+      # developer already has running locally.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Official postgres image auto-runs every *.sql/*.sh in this directory,
+      # in filename-sorted order, but ONLY the first time the volume is empty.
+      # For repeat/idempotent application after that, use scripts/bootstrap_db.py.
+      - ./db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curia -d curia_harness"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

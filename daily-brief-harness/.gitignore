@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+ENV/
+curia/
+.DS_Store
+app/data/runs/
+sa-key.json
+service-key.json
+*:Zone.Identifier
