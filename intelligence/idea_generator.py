@@ -297,9 +297,10 @@ async def diff_clusters(state: IdeaGenState) -> IdeaGenState:
 
 
 def has_complete_insights(source: dict) -> bool:
-    """A source passes quality check if it has key_insights (tier 1, always present)."""
+    """A source passes quality check if its transformations completed — gated on
+    summary (tier 1, always present). key_insights was removed 2026-07-20."""
     insights = source.get("insights", {})
-    return bool(insights.get("key_insights"))
+    return bool(insights.get("summary"))
 
 
 def format_group(group_id: str, label: str, sources: list[dict]) -> str:
@@ -307,8 +308,8 @@ def format_group(group_id: str, label: str, sources: list[dict]) -> str:
     for s in sources:
         lines.append(f"Title: {s['title']}")
         insights = s.get("insights", {})
-        if insights.get("key_insights"):
-            lines.append(f"Key insights: {insights['key_insights']}")
+        if insights.get("summary"):
+            lines.append(f"Summary: {insights['summary']}")
         if insights.get("core_tensions"):
             lines.append(f"Core tensions: {insights['core_tensions']}")
         if insights.get("counterpoints"):

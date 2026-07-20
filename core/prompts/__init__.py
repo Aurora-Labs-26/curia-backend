@@ -9,10 +9,10 @@ Why this exists:
   - Prompt content lives in Signature docstrings — readable, versioned, optimizable
   - Each module is GEPA / MIPRO compatible without further refactor
   - Optimized prompt artifacts (post-Phase) load by replacing the module:
-        transformations.key_insights.load("prompts/optimized/key_insights_v1.json")
+        transformations.core_tensions.load("prompts/optimized/core_tensions_v1.json")
 
 Layout:
-  transformations.py    5 ingest extractions (summary, metadata, key_insights, core_tensions, counterpoints)
+  transformations.py    4 ingest extractions (summary, metadata, core_tensions, counterpoints)
   idea_evaluation.py    batch + per-group fallback for show idea generation
   outline.py            episode outline generation (Haiku)
   transcript.py         episode transcript generation (Sonnet)
@@ -26,7 +26,6 @@ from core import dspy_setup  # noqa: F401
 from .transformations import (
     ExtractSummary,
     ExtractMetadata,
-    ExtractKeyInsights,
     ExtractCoreTensions,
     ExtractCounterpoints,
     Transformations,
@@ -48,7 +47,6 @@ __all__ = [
     # transformations
     "ExtractSummary",
     "ExtractMetadata",
-    "ExtractKeyInsights",
     "ExtractCoreTensions",
     "ExtractCounterpoints",
     "Transformations",

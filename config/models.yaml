@@ -371,7 +371,6 @@ bindings:
   task:
     transformation.summary:        haiku-4-5
     transformation.metadata:       haiku-4-5
-    transformation.key_insights:   haiku-4-5
     transformation.core_tensions:  haiku-4-5
     transformation.counterpoints:  haiku-4-5
 

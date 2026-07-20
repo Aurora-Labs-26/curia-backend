@@ -33,7 +33,7 @@ DATA_DIR = Path("data")
 VERDICTS_FILE = DATA_DIR / "eval_verdicts.jsonl"
 
 TRANSFORMS = [
-    "summary", "metadata", "key_insights",
+    "summary", "metadata",
     "core_tensions", "counterpoints",
 ]
 
@@ -368,7 +368,6 @@ const CARDS=[
   {k:'scrape',       label:'Scraped Content', tier:null},
   {k:'summary',      label:'Summary',         tier:1},
   {k:'metadata',     label:'Metadata',        tier:1},
-  {k:'key_insights', label:'Key Insights',    tier:1},
   {k:'core_tensions',label:'Core Tensions',   tier:2},
   {k:'counterpoints',label:'Counterpoints',   tier:2},
 ];

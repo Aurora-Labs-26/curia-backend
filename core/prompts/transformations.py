@@ -1,22 +1,24 @@
 """
 core/prompts/transformations.py
-DSPy modules for the 5 ingest-time transformations.
+DSPy modules for the 4 ingest-time transformations.
 
 Each transformation extracts a specific kind of primitive from an article:
-  - summary        (Tier 1 — always present, plain-text 2-4 sentence summary)
+  - summary        (Tier 1 — always present, plain-text 2-4 sentence summary; UI blurb +
+                    selection prompts only — measured inert in the briefing)
   - metadata       (Tier 1 — always present, structured JSON: author, type, tone, etc.
                     Topical categorization lives in source.topics — see core/taxonomy/)
-  - key_insights   (Tier 1 — always present)
   - core_tensions  (Tier 2 — null if not applicable)
   - counterpoints  (Tier 2 — null if not applicable)
 
-Removed 2026-07-16 (see "companion selection research v1.md" + CHANGELOG):
+Removed (see "ablation results v1.md" + CHANGELOG):
   - human_stakes — derivable from clean_text by the transcript LLM; never load-bearing
   - examples     — rarely useful, often hallucinated (revamp v1 verdict); unconsumed
+  - key_insights — measured inert in the briefing (0.56 alone; zero marginal value on
+                   top of tensions+counterpoints) once article_text is present
 
 Each is a separate DSPy Signature so it can be optimized independently
 (MIPRO/GEPA target one Signature at a time). The `Transformations` Module
-runs all seven and returns them as a dict for backward compatibility with
+runs all four and returns them as a dict for backward compatibility with
 the existing ingest pipeline.
 
 Article text is capped at 50_000 chars at the call site (matches existing
@@ -97,24 +99,6 @@ Output ONLY a single valid JSON object. No prose, no markdown, no code fences:
     )
 
 
-class ExtractKeyInsights(dspy.Signature):
-    """You are extracting material for a single-host audio podcast.
-
-From the article below, extract the 3 to 4 most important insights, ideas, or claims.
-These could be surprising, counterintuitive, or simply the sharpest things the piece says.
-
-Requirements:
-- 3 to 4 insights, no more
-- Each one specific and concrete — include actual numbers, names, claims, or mechanisms if present
-- Plain numbered list, one insight per line
-- No markdown, no headers, no bold, no hedging language
-- Never refuse — if the piece is a personal essay or reflection, extract the central ideas it is built around"""
-
-    article: str = dspy.InputField(desc="Full article text (capped at 50k chars by caller)")
-    insights: str = dspy.OutputField(
-        desc="Plain numbered list of 3-4 insights, one per line, no markdown"
-    )
-
 
 class ExtractCoreTensions(dspy.Signature):
     """You are extracting material for a single-host audio podcast.
@@ -153,12 +137,12 @@ Requirements:
 
 
 # ---------------------------------------------------------------------------
-# Module — runs all five transformations
+# Module — runs all four transformations
 # ---------------------------------------------------------------------------
 
 
 class Transformations(dspy.Module):
-    """Runs all 5 ingest transformations on an article and returns them as a dict.
+    """Runs all 4 ingest transformations on an article and returns them as a dict.
 
     Backward-compatible interface — returns dict keyed by insight_type with raw string values,
     matching the shape the rest of the codebase expects.
@@ -170,7 +154,6 @@ class Transformations(dspy.Module):
         # Tier 1 (always present)
         self.summary = dspy.Predict(with_prompt(ExtractSummary, "extract_summary"))
         self.metadata = dspy.Predict(with_prompt(ExtractMetadata, "extract_metadata"))
-        self.key_insights = dspy.Predict(with_prompt(ExtractKeyInsights, "extract_key_insights"))
         # Tier 2 (may be "null")
         self.core_tensions = dspy.Predict(with_prompt(ExtractCoreTensions, "extract_core_tensions"))
         self.counterpoints = dspy.Predict(with_prompt(ExtractCounterpoints, "extract_counterpoints"))
@@ -179,7 +162,6 @@ class Transformations(dspy.Module):
         return {
             "summary":       self.summary(article=article).summary.strip(),
             "metadata":      self.metadata(article=article).metadata_json.strip(),
-            "key_insights":  self.key_insights(article=article).insights.strip(),
             "core_tensions": self.core_tensions(article=article).tension.strip(),
             "counterpoints": self.counterpoints(article=article).counterpoint.strip(),
         }
@@ -193,7 +175,6 @@ class Transformations(dspy.Module):
         runner = {
             "summary":       lambda: self.summary(article=article).summary,
             "metadata":      lambda: self.metadata(article=article).metadata_json,
-            "key_insights":  lambda: self.key_insights(article=article).insights,
             "core_tensions": lambda: self.core_tensions(article=article).tension,
             "counterpoints": lambda: self.counterpoints(article=article).counterpoint,
         }
@@ -219,11 +200,10 @@ TRANSFORMATION_NAMES = (
     # Tier 1
     "summary",
     "metadata",
-    "key_insights",
     # Tier 2
     "core_tensions",
     "counterpoints",
 )
 
-TIER_1 = ("summary", "metadata", "key_insights")
+TIER_1 = ("summary", "metadata")
 TIER_2 = ("core_tensions", "counterpoints")

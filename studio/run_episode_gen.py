@@ -129,7 +129,6 @@ def main() -> None:
     # insights: dict[source_id, dict_of_primitive_fields]
     insights = {
         "src-001": {
-            "key_insights": SOURCE_TEXT.strip(),
             "core_tensions": "Model-centric vs. scaffold-centric explanations of AI performance gains.",
             "counterpoints": "Some gains may be scaffold-specific and not transfer to new problem types.",
         }
