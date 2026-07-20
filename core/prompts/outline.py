@@ -23,11 +23,12 @@ class GenerateOutline(dspy.Signature):
 Your job is to read the briefing packet and produce a structured episode outline.
 You allocate — you do not write prose, you do not editorialize.
 
-SOURCE PRIMITIVES are your raw material. Allocate them across segments:
-- Use key_insights early to hook the listener
+SOURCE MATERIAL: each source carries its full article_text — that is your primary
+raw material. core_tensions and counterpoints are pre-extracted structural aids.
+- Build the hook from the article's own sharpest claims, details, and numbers
 - Place core_tensions and counterpoints at the structural turn
-- Each primitive should appear in at most one segment
-- Declare which primitives you used in each segment via primitives_used
+- Ground every segment in specifics from the article text, not generic restatement
+- Declare what each segment draws on via primitives_used
 
 MULTIPLE SOURCES:
 - Structure the episode around ideas, not sources
@@ -67,7 +68,7 @@ Output schema — use exactly these keys, no others:
       "segment": 1,
       "title": "short listener-facing chapter title",
       "purpose": "what this segment does in the arc",
-      "primitives_used": ["key_insights from Article A", "core_tensions from Article B"],
+      "primitives_used": ["article_text from Article A", "core_tensions from Article B"],
       "transition": "one phrase — how this leads to the next segment",
       "vibe": "one of the vibe options above"
     }

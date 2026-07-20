@@ -14,14 +14,24 @@ from typing import Optional
 from core.kb import UserKB
 from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS, VIBE_DEFINITIONS
 
-PRIMITIVE_FIELDS = ["key_insights", "core_tensions", "counterpoints"]
+# Ablation-validated composition ("ablation results v1.md", arm F): the article
+# text is the primary material; tensions + counterpoints are the only primitives
+# that measurably helped alongside it. key_insights/summary measured inert.
+PRIMITIVE_FIELDS = ["core_tensions", "counterpoints"]
 
 
-def build_source_primitives(sources: list[dict], insights: dict[str, dict]) -> list[dict]:
+def build_source_primitives(
+    sources: list[dict],
+    insights: dict[str, dict],
+    texts: Optional[dict[str, str]] = None,
+) -> list[dict]:
     """
-    Assemble per-source primitive dicts from the insights map.
-    insights keyed by bare source_id (no 'source:' prefix).
+    Assemble per-source dicts: article text (primary material) + the two
+    briefing primitives. insights/texts keyed by bare source_id.
+    Full clean_text is passed uncapped — episode focus comes from the outline's
+    word budgets, not from truncating the author's material.
     """
+    texts = texts or {}
     primitives = []
     for source in sources:
         sid = str(source.get("id", "")).replace("source:", "")
@@ -38,7 +48,7 @@ def build_source_primitives(sources: list[dict], insights: dict[str, dict]) -> l
             "title": source.get("title", "Untitled"),
             "url": url,
             "domain": domain,
-            "key_insights": source_insights.get("key_insights") or None,
+            "article_text": texts.get(sid) or None,
             "core_tensions": source_insights.get("core_tensions") or None,
             "counterpoints": source_insights.get("counterpoints") or None,
         })
@@ -89,6 +99,7 @@ def build_briefing_packet(
     segment_count_override: Optional[int] = None,
     length_override: Optional[int] = None,
     user_kb: Optional[UserKB] = None,
+    texts: Optional[dict[str, str]] = None,
 ) -> dict:
     """
     Build a complete briefing packet dict.
@@ -135,7 +146,7 @@ def build_briefing_packet(
             "outro_budget_max": round(outro_w * 1.2),
         },
         "editorial_direction": editorial_direction or "Follow the most interesting thread in the material.",
-        "source_primitives": build_source_primitives(sources, insights),
+        "source_primitives": build_source_primitives(sources, insights, texts),
         "vibe_options": VIBE_DEFINITIONS,
     }
 

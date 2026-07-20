@@ -28,24 +28,33 @@ class TestBuildSourcePrimitives:
 
     def test_basic_source(self):
         sources = [{"id": "abc", "title": "Test Article", "url": "https://example.com/post"}]
-        insights = {"abc": {"key_insights": "insight1", "core_tensions": "tension1"}}
-        result = build_source_primitives(sources, insights)
+        insights = {"abc": {"core_tensions": "tension1", "counterpoints": "counter1"}}
+        result = build_source_primitives(sources, insights, texts={"abc": "the full article body"})
         assert len(result) == 1
         assert result[0]["title"] == "Test Article"
-        assert result[0]["key_insights"] == "insight1"
+        assert result[0]["article_text"] == "the full article body"
+        assert result[0]["core_tensions"] == "tension1"
         assert result[0]["domain"] == "example.com"
 
     def test_source_id_prefix_stripped(self):
         sources = [{"id": "source:xyz", "title": "T"}]
-        insights = {"xyz": {"key_insights": "K"}}
-        result = build_source_primitives(sources, insights)
-        assert result[0]["key_insights"] == "K"
+        insights = {"xyz": {"core_tensions": "K"}}
+        result = build_source_primitives(sources, insights, texts={"xyz": "body"})
+        assert result[0]["core_tensions"] == "K"
+        assert result[0]["article_text"] == "body"
 
     def test_no_insights(self):
         sources = [{"id": "abc", "title": "T"}]
         result = build_source_primitives(sources, {})
-        assert result[0]["key_insights"] is None
+        assert result[0]["article_text"] is None
         assert result[0]["core_tensions"] is None
+
+    def test_text_not_capped(self):
+        # full clean_text policy — no truncation in the packet
+        big = "word " * 40000
+        sources = [{"id": "a", "title": "T"}]
+        result = build_source_primitives(sources, {}, texts={"a": big})
+        assert result[0]["article_text"] == big
 
     def test_no_url(self):
         sources = [{"id": "abc", "title": "T"}]
@@ -68,10 +77,10 @@ class TestBuildSourcePrimitives:
             {"id": "a", "title": "A"},
             {"id": "b", "title": "B"},
         ]
-        insights = {"a": {"key_insights": "KA"}, "b": {"core_tensions": "TB"}}
+        insights = {"a": {"counterpoints": "KA"}, "b": {"core_tensions": "TB"}}
         result = build_source_primitives(sources, insights)
         assert len(result) == 2
-        assert result[0]["key_insights"] == "KA"
+        assert result[0]["counterpoints"] == "KA"
         assert result[1]["core_tensions"] == "TB"
 
 

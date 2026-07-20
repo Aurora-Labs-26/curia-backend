@@ -898,7 +898,22 @@ async def process_episode(episode_id: str) -> None:
         )
         source_ids = [str(s.get("id", "")) for s in sources]
 
-        # 2. Build briefing packet (KB injects listener_context + length override)
+        # 2. Build briefing packet (KB injects listener_context + length override).
+        #    Article text is the primary material (ablation results v1: the
+        #    primitives-only packet lost 0.25 to plain clean_text). One batched
+        #    fetch here keeps every source-selection path text-complete.
+        texts: dict[str, str] = {}
+        if source_ids:
+            bare = [sid.replace("source:", "") for sid in source_ids]
+            text_rows = await db_query(
+                "SELECT id::text AS id, clean_text, full_text FROM source WHERE id = ANY($ids::uuid[])",
+                {"ids": bare},
+            )
+            from core.scraper.prettify import prettify
+            for row in (text_rows or []):
+                text = row.get("clean_text") or prettify(row.get("full_text") or "")
+                if text:
+                    texts[row["id"]] = text
         packet = build_briefing_packet(
             format_name=profile.format_name,
             sources=sources,
@@ -906,6 +921,7 @@ async def process_episode(episode_id: str) -> None:
             editorial_direction=editorial_direction,
             user_kb=user_kb,
             length_override=length_override,
+            texts=texts,
         )
         briefing = briefing_packet_to_str(packet)
 
