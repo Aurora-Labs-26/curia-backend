@@ -2,6 +2,59 @@
 
 Each entry: **date · who made the change · what changed and why.**
 
+---
+
+## 2026-07-20 · Arihant + Claude (claude-fable-5)
+
+### Docs
+- **`ablation results v1.md`** — transformation ablation study: 8 prod sources ×
+  9 briefing arms × position-swapped pairwise LLM judging (64 transcripts, 56
+  comparisons, ~$13). Headline: the current primitives-only briefing lost to
+  plain clean_text 0.25 (zero wins) — the revamp's briefing-switch thesis
+  confirmed experimentally. Best arm: clean_text + core_tensions + counterpoints
+  (0.62, never lost). key_insights and summary measured inert in the briefing.
+  Adopted: switch briefing to arm F; remove key_insights (ingest 5→4 calls);
+  summary demoted to blurb-only.
+
+## 2026-07-19 · Arihant + Claude (claude-fable-5)
+
+### Refactor
+Removed the `human_stakes` and `examples` transformations — ingest drops from 7 to
+5 LLM calls per source (~29% cheaper). Rationale ("companion selection research
+v1.md" + revamp v1): `examples` was rarely useful and often hallucinated with no
+consumer in the new architecture; `human_stakes` only seasoned a briefing that is
+moving to clean_text, where the transcript LLM derives stakes itself. Kept:
+summary, metadata, key_insights, core_tensions, counterpoints (tensions/counterpoints
+pending the stance-card rework). Old `source_insight` rows for the removed types
+remain harmlessly; the outline prompt no longer references the dead primitives.
+- **`core/prompts/transformations.py`** — signatures, module wiring, TRANSFORMATION_NAMES, TIER_2
+- **`core/prompts/__init__.py`** — re-exports + docstring
+- **`prompts/extract_examples.txt`**, **`prompts/extract_human_stakes.txt`** — deleted
+- **`config/models.yaml`** — two transformation bindings removed
+- **`studio/briefing_builder.py`**, **`intelligence/selector.py`**, **`intelligence/idea_generator.py`** — field lists pruned
+- **`core/prompts/outline.py`** + **`prompts/outline.txt`** — prompt guidance no longer cites dead primitives
+- **`api/routes/eval.py`** — transform list + UI cards down to 5
+- **`studio/run_episode_gen.py`** — sample briefing updated
+- **`tests/test_briefing.py`**, **`tests/test_llm_config.py`** — assertions updated; suite 877 passing, baseline unchanged
+
+## 2026-07-16 · Arihant + Claude (claude-fable-5)
+
+### Docs
+- **`companion selection research v1.md`** — deep-research synthesis (30 sources,
+  124 claims, 11 triple-verified) on companion-document selection to replace the
+  removed clustering: MMR/DPP/submodular limits (DPPs can't encode positive
+  complementarity), complementary-rec transfer via LLM-labeled relation taxonomy +
+  distillation, weakest-link narrative coherence, setwise LLM prompting economics,
+  NotebookLM/PodAgent product evidence. Concludes with 3 ranked architectures;
+  recommended: bucket-aware candidates → LLM pair-relation typing (cached in a
+  future `source_relation` table) → role-coverage set assembly.
+
+### Config
+- BGM bank: `intro/` + `outro/` vibe clips uploaded to
+  `s3://curia-audio/assets/bgm_bank/` (restores intro/outro sound lost in the
+  vibe-mix port — the old jingles now play as ducked beds under the spoken
+  intro/outro). Zero code change; workers rolling-restarted to re-sync.
+
 > Companion doc: **`CHANGETHOUGHT.md`** holds the design rationale, AWS-migration plan,
 > frontend↔backend contract, and decision log. This file stays the per-file ledger.
 

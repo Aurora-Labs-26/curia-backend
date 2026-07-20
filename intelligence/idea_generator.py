@@ -309,14 +309,10 @@ def format_group(group_id: str, label: str, sources: list[dict]) -> str:
         insights = s.get("insights", {})
         if insights.get("key_insights"):
             lines.append(f"Key insights: {insights['key_insights']}")
-        if insights.get("human_stakes"):
-            lines.append(f"Human stakes: {insights['human_stakes']}")
         if insights.get("core_tensions"):
             lines.append(f"Core tensions: {insights['core_tensions']}")
         if insights.get("counterpoints"):
             lines.append(f"Counterpoints: {insights['counterpoints']}")
-        if insights.get("examples"):
-            lines.append(f"Examples: {insights['examples']}")
         lines.append("")
     return "\n".join(lines)
 

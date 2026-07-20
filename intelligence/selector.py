@@ -137,7 +137,7 @@ def format_source_insights(sources: list[dict], insights: dict[str, dict]) -> st
         source_insights = insights.get(sid, {})
 
         lines.append(f"Source {i} — {title}")
-        for field in ["key_insights", "human_stakes", "core_tensions", "counterpoints", "examples"]:
+        for field in ["key_insights", "core_tensions", "counterpoints"]:
             if source_insights.get(field):
                 lines.append(f"{field}: {source_insights[field]}")
         lines.append("")

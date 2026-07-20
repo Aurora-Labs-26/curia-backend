@@ -14,7 +14,7 @@ from typing import Optional
 from core.kb import UserKB
 from studio.formats import get_format, format_config_to_dict, WORDS_PER_MINUTE, INTRO_WORDS, OUTRO_WORDS, VIBE_DEFINITIONS
 
-PRIMITIVE_FIELDS = ["key_insights", "human_stakes", "core_tensions", "counterpoints", "examples"]
+PRIMITIVE_FIELDS = ["key_insights", "core_tensions", "counterpoints"]
 
 
 def build_source_primitives(sources: list[dict], insights: dict[str, dict]) -> list[dict]:
@@ -39,10 +39,8 @@ def build_source_primitives(sources: list[dict], insights: dict[str, dict]) -> l
             "url": url,
             "domain": domain,
             "key_insights": source_insights.get("key_insights") or None,
-            "human_stakes": source_insights.get("human_stakes") or None,
             "core_tensions": source_insights.get("core_tensions") or None,
             "counterpoints": source_insights.get("counterpoints") or None,
-            "examples": source_insights.get("examples") or None,
         })
     return primitives
 

@@ -12,7 +12,7 @@ Why this exists:
         transformations.key_insights.load("prompts/optimized/key_insights_v1.json")
 
 Layout:
-  transformations.py    5 ingest extractions (key_insights ... examples)
+  transformations.py    5 ingest extractions (summary, metadata, key_insights, core_tensions, counterpoints)
   idea_evaluation.py    batch + per-group fallback for show idea generation
   outline.py            episode outline generation (Haiku)
   transcript.py         episode transcript generation (Sonnet)
@@ -27,10 +27,8 @@ from .transformations import (
     ExtractSummary,
     ExtractMetadata,
     ExtractKeyInsights,
-    ExtractHumanStakes,
     ExtractCoreTensions,
     ExtractCounterpoints,
-    ExtractExamples,
     Transformations,
     transformations,
     TRANSFORMATION_NAMES,
@@ -51,10 +49,8 @@ __all__ = [
     "ExtractSummary",
     "ExtractMetadata",
     "ExtractKeyInsights",
-    "ExtractHumanStakes",
     "ExtractCoreTensions",
     "ExtractCounterpoints",
-    "ExtractExamples",
     "Transformations",
     "transformations",
     "TRANSFORMATION_NAMES",

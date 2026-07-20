@@ -28,7 +28,7 @@ class TestBuildSourcePrimitives:
 
     def test_basic_source(self):
         sources = [{"id": "abc", "title": "Test Article", "url": "https://example.com/post"}]
-        insights = {"abc": {"key_insights": "insight1", "human_stakes": "stake1"}}
+        insights = {"abc": {"key_insights": "insight1", "core_tensions": "tension1"}}
         result = build_source_primitives(sources, insights)
         assert len(result) == 1
         assert result[0]["title"] == "Test Article"
@@ -45,7 +45,7 @@ class TestBuildSourcePrimitives:
         sources = [{"id": "abc", "title": "T"}]
         result = build_source_primitives(sources, {})
         assert result[0]["key_insights"] is None
-        assert result[0]["human_stakes"] is None
+        assert result[0]["core_tensions"] is None
 
     def test_no_url(self):
         sources = [{"id": "abc", "title": "T"}]

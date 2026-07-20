@@ -1,16 +1,18 @@
 """
 core/prompts/transformations.py
-DSPy modules for the 7 ingest-time transformations.
+DSPy modules for the 5 ingest-time transformations.
 
 Each transformation extracts a specific kind of primitive from an article:
   - summary        (Tier 1 — always present, plain-text 2-4 sentence summary)
   - metadata       (Tier 1 — always present, structured JSON: author, type, tone, etc.
                     Topical categorization lives in source.topics — see core/taxonomy/)
   - key_insights   (Tier 1 — always present)
-  - human_stakes   (Tier 2 — null if not applicable)
   - core_tensions  (Tier 2 — null if not applicable)
   - counterpoints  (Tier 2 — null if not applicable)
-  - examples       (Tier 2 — null if not applicable)
+
+Removed 2026-07-16 (see "companion selection research v1.md" + CHANGELOG):
+  - human_stakes — derivable from clean_text by the transcript LLM; never load-bearing
+  - examples     — rarely useful, often hallucinated (revamp v1 verdict); unconsumed
 
 Each is a separate DSPy Signature so it can be optimized independently
 (MIPRO/GEPA target one Signature at a time). The `Transformations` Module
@@ -114,25 +116,6 @@ Requirements:
     )
 
 
-class ExtractHumanStakes(dspy.Signature):
-    """You are extracting material for a single-host audio podcast.
-
-From the article below, extract what is actually at stake for real people — the concrete human
-consequence of the idea being true or false.
-
-Requirements:
-- One to two plain sentences
-- Name the actual people or group affected, not "society" or "everyone"
-- State what specifically changes or is lost — not "this matters" but what happens
-- Plain text only, no markdown, no headers, no bold
-- If the piece is a personal essay or reflection with no real-world stakes, return the single word: null"""
-
-    article: str = dspy.InputField()
-    stakes: str = dspy.OutputField(
-        desc='1-2 plain sentences naming who is affected and what changes — or the literal word "null"'
-    )
-
-
 class ExtractCoreTensions(dspy.Signature):
     """You are extracting material for a single-host audio podcast.
 
@@ -169,36 +152,16 @@ Requirements:
     )
 
 
-class ExtractExamples(dspy.Signature):
-    """You are extracting material for a single-host audio podcast.
-
-From the article below, extract either the single most concrete specific example OR the most useful
-mental model or framework the piece introduces — whichever is more present and more useful for a listener.
-
-Requirements:
-- One item only — example or mental model, whichever is stronger
-- If an example: a named person, place, number, event, or mechanism in one speakable sentence
-- If a mental model: name it in a short phrase, then one sentence explaining how it works
-- Plain text only, no markdown, no headers, no bold
-- If neither exists in the article, return the single word: null"""
-
-    article: str = dspy.InputField()
-    example: str = dspy.OutputField(
-        desc='One concrete example or one mental model, OR the literal word "null"'
-    )
-
-
 # ---------------------------------------------------------------------------
 # Module — runs all five transformations
 # ---------------------------------------------------------------------------
 
 
 class Transformations(dspy.Module):
-    """Runs all 7 ingest transformations on an article and returns them as a dict.
+    """Runs all 5 ingest transformations on an article and returns them as a dict.
 
     Backward-compatible interface — returns dict keyed by insight_type with raw string values,
-    matching the shape the rest of the codebase expects. Two of the seven (`summary` and
-    `metadata`) are Tier 1 additions that were not in the original 5; they are always extracted.
+    matching the shape the rest of the codebase expects.
     `metadata` value is a JSON string — callers who need fields parse it.
     """
 
@@ -209,20 +172,16 @@ class Transformations(dspy.Module):
         self.metadata = dspy.Predict(with_prompt(ExtractMetadata, "extract_metadata"))
         self.key_insights = dspy.Predict(with_prompt(ExtractKeyInsights, "extract_key_insights"))
         # Tier 2 (may be "null")
-        self.human_stakes = dspy.Predict(with_prompt(ExtractHumanStakes, "extract_human_stakes"))
         self.core_tensions = dspy.Predict(with_prompt(ExtractCoreTensions, "extract_core_tensions"))
         self.counterpoints = dspy.Predict(with_prompt(ExtractCounterpoints, "extract_counterpoints"))
-        self.examples = dspy.Predict(with_prompt(ExtractExamples, "extract_examples"))
 
     def forward(self, article: str) -> dict[str, str]:
         return {
             "summary":       self.summary(article=article).summary.strip(),
             "metadata":      self.metadata(article=article).metadata_json.strip(),
             "key_insights":  self.key_insights(article=article).insights.strip(),
-            "human_stakes":  self.human_stakes(article=article).stakes.strip(),
             "core_tensions": self.core_tensions(article=article).tension.strip(),
             "counterpoints": self.counterpoints(article=article).counterpoint.strip(),
-            "examples":      self.examples(article=article).example.strip(),
         }
 
     def run_one(self, article: str, transformation_name: str) -> str:
@@ -235,10 +194,8 @@ class Transformations(dspy.Module):
             "summary":       lambda: self.summary(article=article).summary,
             "metadata":      lambda: self.metadata(article=article).metadata_json,
             "key_insights":  lambda: self.key_insights(article=article).insights,
-            "human_stakes":  lambda: self.human_stakes(article=article).stakes,
             "core_tensions": lambda: self.core_tensions(article=article).tension,
             "counterpoints": lambda: self.counterpoints(article=article).counterpoint,
-            "examples":      lambda: self.examples(article=article).example,
         }
         if transformation_name not in runner:
             raise ValueError(
@@ -264,11 +221,9 @@ TRANSFORMATION_NAMES = (
     "metadata",
     "key_insights",
     # Tier 2
-    "human_stakes",
     "core_tensions",
     "counterpoints",
-    "examples",
 )
 
 TIER_1 = ("summary", "metadata", "key_insights")
-TIER_2 = ("human_stakes", "core_tensions", "counterpoints", "examples")
+TIER_2 = ("core_tensions", "counterpoints")

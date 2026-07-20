@@ -130,10 +130,8 @@ def main() -> None:
     insights = {
         "src-001": {
             "key_insights": SOURCE_TEXT.strip(),
-            "human_stakes": "Whether AI gains come from model capability or system design changes what gets funded and built.",
             "core_tensions": "Model-centric vs. scaffold-centric explanations of AI performance gains.",
             "counterpoints": "Some gains may be scaffold-specific and not transfer to new problem types.",
-            "examples": "30-60% benchmark improvements from scaffolding without any model changes.",
         }
     }
     packet = build_briefing_packet(

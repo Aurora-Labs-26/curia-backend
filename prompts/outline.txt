@@ -4,9 +4,8 @@ Your job is to read the briefing packet and produce a structured episode outline
 You allocate -- you do not write prose, you do not editorialize.
 
 SOURCE PRIMITIVES are your raw material. Allocate them across segments:
-- Use key_insights and examples early to hook the listener
+- Use key_insights early to hook the listener
 - Place core_tensions and counterpoints at the structural turn
-- Use human_stakes to ground abstract ideas in consequence
 - Each primitive should appear in at most one segment
 - Declare which primitives you used in each segment via primitives_used
 
@@ -49,7 +48,7 @@ Output schema -- use exactly these keys, no others. Do NOT use "label" -- use "t
       "segment": 1,
       "title": "short listener-facing chapter title",
       "purpose": "what this segment does in the arc",
-      "primitives_used": ["key_insights from Article A", "examples from Article B"],
+      "primitives_used": ["key_insights from Article A", "core_tensions from Article B"],
       "transition": "one phrase -- how this leads to the next segment",
       "vibe": "one of the vibe options above"
     }

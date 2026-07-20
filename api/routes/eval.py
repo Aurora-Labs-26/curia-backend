@@ -34,7 +34,7 @@ VERDICTS_FILE = DATA_DIR / "eval_verdicts.jsonl"
 
 TRANSFORMS = [
     "summary", "metadata", "key_insights",
-    "human_stakes", "core_tensions", "counterpoints", "examples",
+    "core_tensions", "counterpoints",
 ]
 
 
@@ -369,10 +369,8 @@ const CARDS=[
   {k:'summary',      label:'Summary',         tier:1},
   {k:'metadata',     label:'Metadata',        tier:1},
   {k:'key_insights', label:'Key Insights',    tier:1},
-  {k:'human_stakes', label:'Human Stakes',    tier:2},
   {k:'core_tensions',label:'Core Tensions',   tier:2},
   {k:'counterpoints',label:'Counterpoints',   tier:2},
-  {k:'examples',     label:'Examples',        tier:2},
 ];
 
 let srcId=null, pollT=null;
