@@ -1,0 +1,8 @@
+"""brief/prompts — daily-brief prompt templates (judge prompts parked with eval)."""
+from brief.prompts.score_curate import SYSTEM_SCORE_CURATE_PROMPT, USER_SCORE_CURATE_PROMPT
+from brief.prompts.article_segment_style_guide import ARTICLE_SEGMENT_STYLE_GUIDE
+from brief.prompts.article_transcript_lead import SYSTEM_ARTICLE_TRANSCRIPT_LEAD_PROMPT
+from brief.prompts.article_transcript_standard import SYSTEM_ARTICLE_TRANSCRIPT_STANDARD_PROMPT
+from brief.prompts.article_transcript_local import SYSTEM_ARTICLE_TRANSCRIPT_LOCAL_PROMPT
+from brief.prompts.article_segment_user import USER_ARTICLE_SEGMENT_PROMPT, USER_ARTICLE_SEGMENT_REGEN_BLOCK
+from brief.prompts.intro_outro import SYSTEM_INTRO_OUTRO_PROMPT, USER_INTRO_OUTRO_PROMPT
