@@ -204,6 +204,49 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
             except Exception as e:
                 logger.warning(f"  ✗ {insight_type}: {e}")
 
+        # 2a-bis. Stance card post-processing (see core/tension/):
+        #   - derive legacy core_tensions/counterpoints insight rows so every
+        #     existing consumer (briefing arm F, group formatting, eval UI)
+        #     keeps working unchanged
+        #   - snap the canonical tension into the registry + link with polarity
+        # Never fails the ingest.
+        try:
+            stance_raw = insight_contents.get("stance")
+            if stance_raw:
+                import re as _re
+                card = json.loads(_re.sub(r"^```(?:json)?|```$", "", stance_raw.strip(), flags=_re.M).strip())
+                derived = {
+                    "core_tensions": (card.get("domain_phrasing") or "").strip() or None,
+                    "counterpoints": (card.get("counterpoint") or "").strip() or None,
+                }
+                for itype, content in derived.items():
+                    if content and content.lower() == "none":
+                        content = None
+                    insight_contents[itype] = content
+                    await db_execute(
+                        """
+                        INSERT INTO source_insight (source_id, insight_type, content)
+                        VALUES ($sid::uuid, $itype, $content)
+                        """,
+                        {"sid": source_id, "itype": itype, "content": content},
+                    )
+                canonical = (card.get("canonical_tension") or "").strip()
+                if canonical and canonical.lower() != "none":
+                    from core.embeddings import get_embedding
+                    from core.tension import link_source, upsert_tension
+                    emb = await get_embedding(canonical)
+                    if emb:
+                        tid = await upsert_tension(canonical, emb)
+                        if tid:
+                            await link_source(
+                                source_id, tid,
+                                card.get("polarity") or "neutral",
+                                card.get("confidence") or "medium",
+                            )
+                            logger.info(f"  ✓ tension linked ({canonical[:50]})")
+        except Exception as e:
+            logger.warning(f"  ✗ stance post-processing: {e}")
+
         # 2b. Topics — deterministic pins + LLM judge (see "topics v1.md").
         #     Never fails the ingest; NULL topics = classify again on a future run.
         topics_env = None

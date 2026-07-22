@@ -12,7 +12,7 @@ Why this exists:
         transformations.core_tensions.load("prompts/optimized/core_tensions_v1.json")
 
 Layout:
-  transformations.py    4 ingest extractions (summary, metadata, core_tensions, counterpoints)
+  transformations.py    3 ingest extractions (summary, metadata, stance)
   idea_evaluation.py    batch + per-group fallback for show idea generation
   outline.py            episode outline generation (Haiku)
   transcript.py         episode transcript generation (Sonnet)
@@ -26,8 +26,7 @@ from core import dspy_setup  # noqa: F401
 from .transformations import (
     ExtractSummary,
     ExtractMetadata,
-    ExtractCoreTensions,
-    ExtractCounterpoints,
+    ExtractStanceCard,
     Transformations,
     transformations,
     TRANSFORMATION_NAMES,
@@ -47,8 +46,7 @@ __all__ = [
     # transformations
     "ExtractSummary",
     "ExtractMetadata",
-    "ExtractCoreTensions",
-    "ExtractCounterpoints",
+    "ExtractStanceCard",
     "Transformations",
     "transformations",
     "TRANSFORMATION_NAMES",

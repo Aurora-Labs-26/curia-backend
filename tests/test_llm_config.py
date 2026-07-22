@@ -32,8 +32,7 @@ def test_required_task_bindings_exist():
     required = {
         "transformation.summary",
         "transformation.metadata",
-        "transformation.core_tensions",
-        "transformation.counterpoints",
+        "transformation.stance",
         "idea_evaluation.batch",
         "idea_evaluation.single",
         "outline",

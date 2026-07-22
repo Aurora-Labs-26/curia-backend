@@ -7,6 +7,37 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-07-22 · Arihant + Claude (claude-fable-5)
 
 ### Feature
+**Connect** — multi-source episodes via the tension graph (replaces the removed
+clustering; design: "companion selection research v1.md", validated by
+"stance card samples v1.md" — 86% clean domain-free extraction, 4% leak rate).
+- **`core/prompts/transformations.py`** — `stance` card absorbs core_tensions +
+  counterpoints (ingest 4 → 3 transformation calls): canonical domain-free
+  tension + polarity + confidence + domain phrasing + steelmanned counter in
+  one extraction
+- **`core/ingest.py`** — stance post-processing: derives legacy
+  core_tensions/counterpoints insight rows (briefing arm F unchanged), embeds
+  the canonical tension, snap-or-creates the registry row, links with polarity
+- **`core/tension/`** (new) — `registry.py` (snap threshold 0.85, exact
+  tension_id matching thereafter) + `connect.py` (cast: antagonist = same
+  tension/opposite polarity; wildcard = same tension/different bucket; depth =
+  same bucket; ≤4; abstains without contrast or wildcard; ONE LLM call
+  validates the cast + writes the episode angle, with template fallback)
+- **`alembic/versions/0034_tension_registry.py`** — `tension` (dual embedding
+  columns per the 0010 scheme, HNSW), `source_tension` (polarity, confidence),
+  `episode.selection_plan` JSONB
+- **`api/routes/sources.py`** — `POST /sources/{id}/connect` (rides the
+  existing show_idea → generate_episode pipeline; 409 on abstain) + precomputed
+  `connectable` flag on source lists; **`api/schemas.py`** — SourceSummary.connectable
+- **`config/models.yaml`** — `transformation.stance`, `connect.angle` bindings
+- **`tests/test_tension_connect.py`** (new, 15) — registry snap/create, role
+  classification, assembly priority, abstention, cap, validate+angle fallbacks
+- Suite: 889 passing, known-baseline failures unchanged. Backfill deliberately
+  NOT run (per decision) — the graph populates from new ingests; run a backfill
+  script later to connect the existing corpus. Migration 0034 pending prod.
+
+## 2026-07-22 · Arihant + Claude (claude-fable-5)
+
+### Feature
 Briefing switch (ablation arm F): the packet now carries each source's **full
 clean_text as `article_text`** (uncapped — deliberate policy decision; the
 ablation measured at 14k chars) plus core_tensions + counterpoints only. One

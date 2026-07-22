@@ -53,6 +53,7 @@ class SourceSummary(BaseModel):
     covered_in: int = 0
     author: Optional[str] = None
     og_image: Optional[str] = None
+    connectable: bool = False
 
 
 class SourceDetail(SourceSummary):

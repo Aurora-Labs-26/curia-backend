@@ -91,6 +91,74 @@ async def create_source(
     )
 
 
+@router.post("/sources/{source_id}/connect", response_model=CreateJobResponse, status_code=202)
+async def connect_source(
+    source_id: uuid.UUID, user_id: str = Depends(current_user_id)
+) -> CreateJobResponse:
+    """
+    Connect: build a multi-source episode around this seed via the tension graph
+    (antagonist / wildcard / depth cast — see core/tension/connect.py). Selection
+    is SQL + one LLM call (cast validation + episode angle); the episode then
+    rides the existing show_idea → generate_episode pipeline unchanged.
+
+    409 when no viable cast exists — the client should fall back to offering a
+    standalone episode. (The sources list carries a precomputed `connectable`
+    flag so this path is normally never hit from the UI.)
+    """
+    from core.tension import find_cast, validate_and_angle
+
+    seed = await db_fetchrow(
+        "SELECT id, title, status FROM source WHERE id = $id::uuid AND user_id = $uid",
+        {"id": str(source_id), "uid": user_id},
+    )
+    if not seed:
+        raise HTTPException(404, "Source not found")
+    if seed["status"] != "ready":
+        raise HTTPException(409, "Source is not ready yet")
+
+    result = await find_cast(str(source_id), user_id)
+    if result["abstain"]:
+        raise HTTPException(409, f"Connect unavailable: {result['abstain']}")
+
+    cast, angle = await validate_and_angle(str(source_id), result["cast"])
+    all_ids = [str(source_id)] + [e["source_id"] for e in cast]
+
+    idea_id = str(uuid.uuid4())
+    await db_execute(
+        """
+        INSERT INTO show_idea (id, user_id, angle, idea_type, format, source_ids, generated)
+        VALUES ($id::uuid, $user_id, $angle, 'connect', $format, $source_ids::uuid[], false)
+        """,
+        {"id": idea_id, "user_id": user_id, "angle": angle,
+         "format": "narrative_drift", "source_ids": all_ids},
+    )
+    episode_id = str(uuid.uuid4())
+    selection_plan = {
+        "seed": str(source_id),
+        "angle": angle,
+        "cast": [{"source_id": e["source_id"], "role": e["role"],
+                  "tension": e.get("tension") or None} for e in cast],
+    }
+    await db_execute(
+        """
+        INSERT INTO episode
+            (id, user_id, show_name, show_idea_id, editorial_direction, status, selection_plan)
+        VALUES
+            ($id::uuid, $user_id, $show, $idea_id::uuid, $direction, 'queued', $plan::jsonb)
+        """,
+        {"id": episode_id, "user_id": user_id, "show": "narrative_drift",
+         "idea_id": idea_id, "direction": angle, "plan": selection_plan},
+    )
+    job_id = await enqueue(
+        type="generate_episode",
+        payload={"episode_id": episode_id, "user_id": user_id},
+        user_id=user_id,
+        lane="interactive",
+    )
+    logger.info(f"[connect] episode {episode_id} from seed {source_id} + {len(cast)} companions")
+    return CreateJobResponse(id=uuid.UUID(episode_id), status="queued", job_id=job_id)
+
+
 @router.get("/sources", response_model=list[SourceSummary])
 async def list_sources(
     user_id: str = Depends(current_user_id),
@@ -101,6 +169,19 @@ async def list_sources(
         rows = await db_query(
             """
             SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author, s.og_image,
+                   EXISTS (
+                       SELECT 1 FROM source_tension seed_st
+                       JOIN source_tension other ON other.tension_id = seed_st.tension_id
+                                                 AND other.source_id != seed_st.source_id
+                       JOIN source o ON o.id = other.source_id
+                       WHERE seed_st.source_id = s.id
+                         AND o.user_id = s.user_id AND o.status = 'ready'
+                         AND (
+                              (seed_st.polarity, other.polarity) IN (('side_a','side_b'), ('side_b','side_a'))
+                           OR (seed_st.polarity = 'neutral' AND other.polarity IN ('side_a','side_b'))
+                           OR (o.topics->'tags'->0->>'tier1') IS DISTINCT FROM (s.topics->'tags'->0->>'tier1')
+                         )
+                   ) AS connectable,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id AND s.status = $status AND s.hidden = false
@@ -112,6 +193,19 @@ async def list_sources(
         rows = await db_query(
             """
             SELECT s.id, s.title, s.url, s.status, s.created_at, s.error, s.author, s.og_image,
+                   EXISTS (
+                       SELECT 1 FROM source_tension seed_st
+                       JOIN source_tension other ON other.tension_id = seed_st.tension_id
+                                                 AND other.source_id != seed_st.source_id
+                       JOIN source o ON o.id = other.source_id
+                       WHERE seed_st.source_id = s.id
+                         AND o.user_id = s.user_id AND o.status = 'ready'
+                         AND (
+                              (seed_st.polarity, other.polarity) IN (('side_a','side_b'), ('side_b','side_a'))
+                           OR (seed_st.polarity = 'neutral' AND other.polarity IN ('side_a','side_b'))
+                           OR (o.topics->'tags'->0->>'tier1') IS DISTINCT FROM (s.topics->'tags'->0->>'tier1')
+                         )
+                   ) AS connectable,
                    (SELECT COUNT(*) FROM episode e WHERE s.id = ANY(e.source_ids) AND e.user_id = s.user_id AND e.status = 'ready') AS covered_in
             FROM source s
             WHERE s.user_id = $user_id AND s.hidden = false

@@ -1,14 +1,17 @@
 """
 core/prompts/transformations.py
-DSPy modules for the 4 ingest-time transformations.
+DSPy modules for the 3 ingest-time transformations.
 
 Each transformation extracts a specific kind of primitive from an article:
   - summary        (Tier 1 — always present, plain-text 2-4 sentence summary; UI blurb +
                     selection prompts only — measured inert in the briefing)
   - metadata       (Tier 1 — always present, structured JSON: author, type, tone, etc.
                     Topical categorization lives in source.topics — see core/taxonomy/)
-  - core_tensions  (Tier 2 — null if not applicable)
-  - counterpoints  (Tier 2 — null if not applicable)
+  - stance         (Tier 2 — JSON stance card: canonical domain-free tension +
+                    polarity + confidence + domain phrasing + counterpoint.
+                    Ingest derives legacy core_tensions/counterpoints insight
+                    rows from it and links the tension registry — see
+                    core/ingest.py + core/tension/)
 
 Removed (see "ablation results v1.md" + CHANGELOG):
   - human_stakes — derivable from clean_text by the transcript LLM; never load-bearing
@@ -18,7 +21,7 @@ Removed (see "ablation results v1.md" + CHANGELOG):
 
 Each is a separate DSPy Signature so it can be optimized independently
 (MIPRO/GEPA target one Signature at a time). The `Transformations` Module
-runs all four and returns them as a dict for backward compatibility with
+runs all three and returns them as a dict for backward compatibility with
 the existing ingest pipeline.
 
 Article text is capped at 50_000 chars at the call site (matches existing
@@ -100,49 +103,50 @@ Output ONLY a single valid JSON object. No prose, no markdown, no code fences:
 
 
 
-class ExtractCoreTensions(dspy.Signature):
-    """You are extracting material for a single-host audio podcast.
+class ExtractStanceCard(dspy.Signature):
+    """Extract the article's STANCE CARD for a cross-domain matching system
+(validated on 50 prod sources — see "stance card samples v1.md").
 
-From the article below, extract the central tension or contradiction AND the most important question
-it leaves unresolved. These two things together create the structural turn and the closing of an episode.
+A TENSION is the contested question this article participates in — the
+disagreement that would exist even if this article were never written. It is
+NOT the topic and NOT the author's claim.
 
-Requirements:
-- One tension: "[Force A] vs [Force B]" followed by one sentence explaining the conflict
-- One unresolved question: a direct question the article raises but does not answer
-- Plain text only, no markdown, no headers, no bold
-- If neither a real tension nor an unresolved question exists, return the single word: null"""
+Rules for canonical_tension:
+- Format "X vs Y" plus at most one clarifying clause
+- MUST be domain-free: no names of fields, products, companies, technologies,
+  sports, industries, or people. "automation of entry-level work vs the
+  pipeline that creates mastery" — never "AI coding tools vs junior developers"
+- Test: could this exact phrasing describe an article in a completely
+  different field? If not, abstract further.
+- If the article genuinely has no contested question (pure how-to, plain news
+  report, product announcement with no argument), use tension "none"
 
-    article: str = dspy.InputField()
-    tension: str = dspy.OutputField(
-        desc='"Force A vs Force B" + one sentence + one question, OR the literal word "null"'
-    )
+Other fields:
+- domain_phrasing: the same tension in the article's own domain terms,
+  "[Force A] vs [Force B]" plus one sentence — this feeds the episode briefing
+- polarity: which side the AUTHOR lands on — "side_a" (first side of your
+  X vs Y), "side_b", or "neutral" (explores without taking a side)
+- confidence: "high" | "medium" | "low" — how clearly the article carries it
+- counterpoint: the strongest steelmanned argument AGAINST the article's main
+  claim (1-2 sentences), whether or not the article raises it; "none" if no
+  honest counterpoint exists
 
+Output ONLY JSON, no prose, no code fences:
+{"canonical_tension": "...", "domain_phrasing": "...",
+ "polarity": "side_a|side_b|neutral", "confidence": "high|medium|low",
+ "counterpoint": "..."}"""
 
-class ExtractCounterpoints(dspy.Signature):
-    """You are extracting material for a single-host audio podcast.
-
-From the article below, extract the strongest counterpoint to the article's main claim — the best
-argument against what the article is saying, whether the article raises it or not.
-
-Requirements:
-- One counterpoint only, steelmanned as strongly as possible
-- One to two plain sentences
-- No markdown, no headers, no bold
-- If no meaningful counterpoint can be honestly constructed, return the single word: null"""
-
-    article: str = dspy.InputField()
-    counterpoint: str = dspy.OutputField(
-        desc='One steelmanned counterpoint in 1-2 sentences, OR the literal word "null"'
-    )
+    article: str = dspy.InputField(desc="Full article text (capped at 50k chars by caller)")
+    card_json: str = dspy.OutputField(desc="JSON stance card")
 
 
 # ---------------------------------------------------------------------------
-# Module — runs all four transformations
+# Module — runs all three transformations
 # ---------------------------------------------------------------------------
 
 
 class Transformations(dspy.Module):
-    """Runs all 4 ingest transformations on an article and returns them as a dict.
+    """Runs all 3 ingest transformations on an article and returns them as a dict.
 
     Backward-compatible interface — returns dict keyed by insight_type with raw string values,
     matching the shape the rest of the codebase expects.
@@ -154,16 +158,14 @@ class Transformations(dspy.Module):
         # Tier 1 (always present)
         self.summary = dspy.Predict(with_prompt(ExtractSummary, "extract_summary"))
         self.metadata = dspy.Predict(with_prompt(ExtractMetadata, "extract_metadata"))
-        # Tier 2 (may be "null")
-        self.core_tensions = dspy.Predict(with_prompt(ExtractCoreTensions, "extract_core_tensions"))
-        self.counterpoints = dspy.Predict(with_prompt(ExtractCounterpoints, "extract_counterpoints"))
+        # Tier 2 (may be "null"-bearing JSON)
+        self.stance = dspy.Predict(with_prompt(ExtractStanceCard, "extract_stance"))
 
     def forward(self, article: str) -> dict[str, str]:
         return {
             "summary":       self.summary(article=article).summary.strip(),
             "metadata":      self.metadata(article=article).metadata_json.strip(),
-            "core_tensions": self.core_tensions(article=article).tension.strip(),
-            "counterpoints": self.counterpoints(article=article).counterpoint.strip(),
+            "stance":        self.stance(article=article).card_json.strip(),
         }
 
     def run_one(self, article: str, transformation_name: str) -> str:
@@ -175,8 +177,7 @@ class Transformations(dspy.Module):
         runner = {
             "summary":       lambda: self.summary(article=article).summary,
             "metadata":      lambda: self.metadata(article=article).metadata_json,
-            "core_tensions": lambda: self.core_tensions(article=article).tension,
-            "counterpoints": lambda: self.counterpoints(article=article).counterpoint,
+            "stance":        lambda: self.stance(article=article).card_json,
         }
         if transformation_name not in runner:
             raise ValueError(
@@ -201,9 +202,8 @@ TRANSFORMATION_NAMES = (
     "summary",
     "metadata",
     # Tier 2
-    "core_tensions",
-    "counterpoints",
+    "stance",
 )
 
 TIER_1 = ("summary", "metadata")
-TIER_2 = ("core_tensions", "counterpoints")
+TIER_2 = ("stance",)
