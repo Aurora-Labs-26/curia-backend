@@ -6,6 +6,15 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-07-22 · Arihant + Claude (claude-fable-5)
 
+### Docs
+- **`dailybrief analysis v1.md`** — deep analysis of `feat/dailyBrief_v3`
+  (Sourajit's daily-brief-harness: Google-News → curated cached segments →
+  faithfulness-gated brief scripts + a 5-judge eval harness with gold-set
+  calibration). Full function map, code critique (0 tests, hardcoded models,
+  CORS/auth issues, sync 54s judge calls in request path), overlap matrix vs
+  curia systems, and 3 integration options — recommended: staged assimilation
+  (config+DB first, worker/TTS later).
+
 ### Config
 Tension graph populated + calibrated on prod: stance backfill (271 sources →
 240 links, 31 honest "none", 0 failures) + topics backfill (290 sources, the
