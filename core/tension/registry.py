@@ -16,9 +16,13 @@ from loguru import logger
 from core.db.connection import db_execute, db_fetchrow
 
 # Cosine similarity above which a new canonical tension is considered the same
-# question as an existing registry row. Conservative: a bad snap pollutes the
-# graph; a missed snap just splits a tension (mergeable later).
-SNAP_THRESHOLD = 0.85
+# question as an existing registry row. Calibrated 2026-07-22 on the backfilled
+# prod registry: at 0.85 the graph fragmented completely (0 intra-user shared
+# tensions); measured same-question pairs ("military escalation vs diplomatic
+# restraint" ~ "…vs diplomatic de-escalation") cluster at 0.70-0.84 with
+# text-embedding-3-small on short canonical phrases. 0.72 captures them; a
+# missed snap just splits a tension (mergeable later), a bad snap pollutes.
+SNAP_THRESHOLD = 0.72
 
 VALID_POLARITIES = {"side_a", "side_b", "neutral"}
 

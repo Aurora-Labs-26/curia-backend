@@ -6,6 +6,19 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-07-22 · Arihant + Claude (claude-fable-5)
 
+### Config
+Tension graph populated + calibrated on prod: stance backfill (271 sources →
+240 links, 31 honest "none", 0 failures) + topics backfill (290 sources, the
+pre-deploy corpus — wildcard/bucket logic was blind without it). SNAP_THRESHOLD
+recalibrated 0.85 → 0.72 after the initial registry fragmented completely
+(0 intra-user shared tensions; measured same-question pairs cluster 0.70-0.84);
+9 fragment groups merged (12 rows). Result: Connect live with 5 connectable
+seeds incl. a genuine antagonist pair (pro/anti algorithmic curation) found in
+the corpus. Product note: antagonists are structurally scarce in bookmark
+corpora (people save what they agree with) — wildcards are the workhorse role,
+and the 0.62-0.72 "related tension" band is the designed next expansion tier.
+- **`core/tension/registry.py`** — SNAP_THRESHOLD 0.72 with calibration notes
+
 ### Feature
 **Connect** — multi-source episodes via the tension graph (replaces the removed
 clustering; design: "companion selection research v1.md", validated by
