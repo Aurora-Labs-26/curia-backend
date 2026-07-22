@@ -1,6 +1,6 @@
 """
 tests/test_ingest_pipeline.py
-Tests for core/ingest.py — embed_chunks, embed_primitive, process_source, get_or_create_source.
+Tests for core/ingest.py — embed_chunks, process_source, get_or_create_source.
 All DB and external calls mocked.
 """
 
@@ -60,80 +60,6 @@ class TestEmbedChunks:
 
 
 # ---------------------------------------------------------------------------
-# embed_primitive
-# ---------------------------------------------------------------------------
-
-
-class TestEmbedPrimitive:
-    async def test_no_insights_skips(self):
-        mock_query = AsyncMock(return_value=[])
-        mock_embed = AsyncMock()
-        with patch("core.ingest.db_query", mock_query), \
-             patch("core.embeddings.get_embedding", mock_embed), \
-             patch("core.embeddings.get_embedding_column", return_value="embedding"):
-            await ingest.embed_primitive("sid-1")
-        mock_embed.assert_not_awaited()
-
-    async def test_null_content_filtered(self):
-        rows = [
-            {"insight_type": "core_tensions", "content": None},
-            {"insight_type": "counterpoints", "content": ""},
-            {"insight_type": "key_insights", "content": "null"},
-        ]
-        mock_query = AsyncMock(return_value=rows)
-        mock_embed = AsyncMock()
-        with patch("core.ingest.db_query", mock_query), \
-             patch("core.embeddings.get_embedding", mock_embed), \
-             patch("core.embeddings.get_embedding_column", return_value="embedding"):
-            await ingest.embed_primitive("sid-2")
-        mock_embed.assert_not_awaited()  # all filtered out
-
-    async def test_primary_insights_preferred(self):
-        rows = [
-            {"insight_type": "core_tensions", "content": "tensions content"},
-            {"insight_type": "key_insights", "content": "insights content"},
-        ]
-        mock_query = AsyncMock(return_value=rows)
-        mock_embed = AsyncMock(return_value=[0.1])
-        mock_exec = AsyncMock()
-        with patch("core.ingest.db_query", mock_query), \
-             patch("core.embeddings.get_embedding", mock_embed), \
-             patch("core.embeddings.get_embedding_column", return_value="embedding"), \
-             patch("core.ingest.db_execute", mock_exec):
-            await ingest.embed_primitive("sid-3")
-        # Should use primary (core_tensions) only, not fallback
-        call_text = mock_embed.call_args[0][0]
-        assert "tensions content" in call_text
-
-    async def test_fallback_when_no_primary(self):
-        rows = [
-            {"insight_type": "key_insights", "content": "insights only"},
-        ]
-        mock_query = AsyncMock(return_value=rows)
-        mock_embed = AsyncMock(return_value=[0.1])
-        mock_exec = AsyncMock()
-        with patch("core.ingest.db_query", mock_query), \
-             patch("core.embeddings.get_embedding", mock_embed), \
-             patch("core.embeddings.get_embedding_column", return_value="embedding"), \
-             patch("core.ingest.db_execute", mock_exec):
-            await ingest.embed_primitive("sid-4")
-        call_text = mock_embed.call_args[0][0]
-        assert "insights only" in call_text
-
-    async def test_embedding_none_skips_insert(self):
-        rows = [{"insight_type": "core_tensions", "content": "real"}]
-        mock_query = AsyncMock(return_value=rows)
-        mock_embed = AsyncMock(return_value=None)
-        mock_exec = AsyncMock()
-        with patch("core.ingest.db_query", mock_query), \
-             patch("core.embeddings.get_embedding", mock_embed), \
-             patch("core.embeddings.get_embedding_column", return_value="embedding"), \
-             patch("core.ingest.db_execute", mock_exec):
-            await ingest.embed_primitive("sid-5")
-        mock_exec.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
 # process_source
 # ---------------------------------------------------------------------------
 
@@ -149,14 +75,12 @@ class TestProcessSource:
         mock_scrape = AsyncMock()
         mock_set_status = AsyncMock()
         mock_embed = AsyncMock()
-        mock_primitive = AsyncMock()
         with patch("core.ingest.db_fetchrow", new=AsyncMock(return_value=row)), \
              patch("core.ingest.scrape_url", mock_scrape), \
              patch("core.ingest._set_status", mock_set_status), \
              patch("core.ingest.db_execute", new=AsyncMock()), \
              patch("core.ingest.run_transformation", return_value="result"), \
              patch("core.ingest.embed_chunks", mock_embed), \
-             patch("core.ingest.embed_primitive", mock_primitive), \
              patch("core.ingest.TRANSFORMATION_NAMES", ["summary"]):
             await ingest.process_source("sid-1")
         mock_scrape.assert_not_awaited()  # skipped
@@ -169,7 +93,6 @@ class TestProcessSource:
              patch("core.ingest.db_execute", mock_exec), \
              patch("core.ingest.run_transformation", return_value="null"), \
              patch("core.ingest.embed_chunks", new=AsyncMock()), \
-             patch("core.ingest.embed_primitive", new=AsyncMock()), \
              patch("core.ingest.TRANSFORMATION_NAMES", ["summary"]):
             await ingest.process_source("sid-2")
         # The "null" string should be converted to None in the DB insert.

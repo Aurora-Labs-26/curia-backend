@@ -4,6 +4,40 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-22 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Briefing switch (ablation arm F): the packet now carries each source's **full
+clean_text as `article_text`** (uncapped — deliberate policy decision; the
+ablation measured at 14k chars) plus core_tensions + counterpoints only. One
+batched text fetch in the generator keeps every source-selection path complete;
+legacy rows prettified on the fly. Outline prompts rewritten to hook from the
+article's own claims.
+- **`studio/briefing_builder.py`** — `article_text` in primitives; PRIMITIVE_FIELDS → tensions+counterpoints; `texts` param
+- **`studio/generator.py`** — batched clean_text/full_text fetch before packet build
+- **`core/prompts/outline.py`** + **`prompts/outline.txt`** — article-text-first guidance
+
+### Refactor
+`key_insights` transformation removed (ingest 5 → 4 transformation calls; 8 → 5
+total LLM calls per source across this week's changes). Ablation: inert alone
+(0.56), zero marginal value on top of tensions+counterpoints. Episode
+eligibility re-gated on `summary`.
+- **`core/prompts/transformations.py`**, **`core/prompts/__init__.py`**, **`prompts/extract_key_insights.txt`** (deleted), **`config/models.yaml`**
+- **`intelligence/idea_generator.py`** — `has_complete_insights` gates on summary; group formatting uses summary
+- **`intelligence/selector.py`**, **`api/routes/eval.py`**, **`studio/run_episode_gen.py`** — field lists pruned
+
+### Refactor
+Clustering removed entirely. `cluster_sources` now yields one standalone
+candidate per source — the cosine/greedy-clique machinery (0.61 threshold,
+max-size 5, `source_similarity` cache) optimized "which docs are similar",
+the wrong objective per "companion selection research v1.md". Its replacement
+is the Connect tension-graph selector. `embed_primitive` (its only feeder)
+removed from ingest — one less embedding call per source. Tables untouched.
+- **`intelligence/idea_generator.py`** — singleton clusters; clique code deleted
+- **`core/ingest.py`** — `embed_primitive` call + function removed
+- **`tests/test_embed_primitive.py`** deleted; **`tests/test_ingest_pipeline.py`**, **`tests/test_briefing.py`**, **`tests/test_llm_config.py`** updated
+- Suite: 867 passing, known-baseline failures unchanged
+
 ## 2026-07-20 · Arihant + Claude (claude-fable-5)
 
 ### Docs

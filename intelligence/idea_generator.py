@@ -26,10 +26,6 @@ from core.prompts.idea_evaluation import (
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
 
-SIMILARITY_THRESHOLD = 0.61   # min cosine score on primitive embeddings to form a clique
-MAX_CLUSTER_SIZE = 5          # cap cluster size to keep episodes focused
-
-
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
@@ -106,161 +102,17 @@ async def load_archive(state: IdeaGenState) -> IdeaGenState:
 # ---------------------------------------------------------------------------
 
 async def cluster_sources(state: IdeaGenState) -> IdeaGenState:
+    """Every source is a standalone episode candidate.
+
+    The cosine/greedy-clique clustering that used to live here was removed
+    2026-07-20 — it optimized "which docs are similar", which is the wrong
+    objective for multi-source episodes (see "companion selection research
+    v1.md"). Its replacement is the Connect tension-graph selector; until that
+    ships, ideas are single-source only.
+    """
     sources = state["sources"]
-    logger.info(f"[cluster_sources] Clustering {len(sources)} sources")
-
-    if len(sources) < 2:
-        # Nothing to cluster — treat each as standalone
-        clusters = [[s["id"]] for s in sources]
-        return {**state, "clusters": clusters}
-
-    # Fetch primitive embeddings (core_tensions + counterpoints) per source
-    from core.embeddings import get_embedding_column
-    emb_col = get_embedding_column()
-    source_embeddings: dict[str, list[float]] = {}
-    bare_ids = [str(source["id"]).replace("source:", "") for source in sources]
-    sid_to_original = {str(source["id"]).replace("source:", ""): str(source["id"]) for source in sources}
-    rows = await db_query(
-        f"SELECT source_id, {emb_col} FROM source_primitive_embedding WHERE source_id = ANY($ids::uuid[])",
-        {"ids": bare_ids},
-    )
-    for row in (rows or []):
-        emb = row.get(emb_col)
-        if emb is not None:
-            bare = str(row["source_id"])
-            orig_sid = sid_to_original.get(bare, bare)
-            source_embeddings[orig_sid] = list(emb) if hasattr(emb, "__iter__") else emb
-
-    no_embedding = [s["id"] for s in sources if s["id"] not in source_embeddings]
-    logger.info(f"[cluster_sources] Got primitive embeddings for {len(source_embeddings)} sources")
-    if no_embedding:
-        id_to_title = {s["id"]: s.get("title", "?") for s in sources}
-        for sid in no_embedding:
-            logger.debug(f"[cluster_sources] NO_EMBEDDING: {id_to_title.get(sid, sid)[:80]}")
-
-    # Cosine similarity
-    def cosine(a, b):
-        dot = sum(x * y for x, y in zip(a, b))
-        mag_a = sum(x ** 2 for x in a) ** 0.5
-        mag_b = sum(x ** 2 for x in b) ** 0.5
-        if mag_a == 0 or mag_b == 0:
-            return 0.0
-        return dot / (mag_a * mag_b)
-
-    ids = list(source_embeddings.keys())
-
-    # Load cached scores from DB
-    bare_ids_for_cache = [sid.replace("source:", "") for sid in ids]
-    cached_rows = await db_query(
-        """
-        SELECT source_a::text, source_b::text, score
-        FROM source_similarity
-        WHERE source_a = ANY($ids::uuid[]) AND source_b = ANY($ids::uuid[])
-        """,
-        {"ids": bare_ids_for_cache},
-    )
-    scores = {}
-    for row in (cached_rows or []):
-        a = str(row["source_a"])
-        b = str(row["source_b"])
-        # map bare uuid back to original sid key
-        a_key = sid_to_original.get(a, a)
-        b_key = sid_to_original.get(b, b)
-        scores[(a_key, b_key)] = row["score"]
-        scores[(b_key, a_key)] = row["score"]
-
-    # Compute missing pairs and cache them
-    new_scores: list[dict] = []
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            if (ids[i], ids[j]) not in scores:
-                s = cosine(source_embeddings[ids[i]], source_embeddings[ids[j]])
-                scores[(ids[i], ids[j])] = s
-                scores[(ids[j], ids[i])] = s
-                bare_i = ids[i].replace("source:", "")
-                bare_j = ids[j].replace("source:", "")
-                new_scores.append({"a": bare_i, "b": bare_j, "score": s})
-
-    # Bulk-insert new scores
-    for ns in new_scores:
-        try:
-            await db_execute(
-                """
-                INSERT INTO source_similarity (source_a, source_b, score)
-                VALUES ($a::uuid, $b::uuid, $score)
-                ON CONFLICT DO NOTHING
-                """,
-                {"a": ns["a"], "b": ns["b"], "score": ns["score"]},
-            )
-        except Exception as e:
-            logger.warning(f"[cluster_sources] cache write failed: {e}")
-
-    logger.info(f"[cluster_sources] {len(new_scores)} new pairs computed, {len(scores)//2 - len(new_scores)} from cache")
-
-    # Log all above-threshold pairs so you can see what's connecting
-    id_to_title = {s["id"]: s.get("title", "?") for s in sources}
-    above = sorted(
-        [(a, b, sc) for (a, b), sc in scores.items() if a < b and sc >= SIMILARITY_THRESHOLD],
-        key=lambda x: -x[2],
-    )
-    if above:
-        logger.debug(f"[cluster_sources] {len(above)} pairs above threshold ({SIMILARITY_THRESHOLD}):")
-        for a, b, sc in above:
-            logger.debug(f"  {sc:.3f}  '{id_to_title.get(a, a)[:50]}'  ↔  '{id_to_title.get(b, b)[:50]}'")
-    else:
-        logger.debug(f"[cluster_sources] No pairs above threshold ({SIMILARITY_THRESHOLD}) — all sources will be standalone")
-
-    # Log below-threshold pairs at trace level (high volume — only useful for deep debugging)
-    below = sorted(
-        [(a, b, sc) for (a, b), sc in scores.items() if a < b and sc < SIMILARITY_THRESHOLD],
-        key=lambda x: -x[2],
-    )
-    for a, b, sc in below:
-        logger.trace(f"  {sc:.3f}  BELOW '{id_to_title.get(a, a)[:50]}'  ↔  '{id_to_title.get(b, b)[:50]}'")
-
-    def is_clique(members):
-        for i in range(len(members)):
-            for j in range(i + 1, len(members)):
-                if scores.get((members[i], members[j]), scores.get((members[j], members[i]), 0.0)) < SIMILARITY_THRESHOLD:
-                    return False
-        return True
-
-    # Build maximal cliques — start from each qualifying pair, expand greedily
-    raw_cliques = []
-    pairs = [(a, b) for (a, b), sc in scores.items() if a < b and sc >= SIMILARITY_THRESHOLD]
-    for a, b in pairs:
-        clique = [a, b]
-        for sid in ids:
-            if sid in clique or len(clique) >= MAX_CLUSTER_SIZE:
-                continue
-            if is_clique(clique + [sid]):
-                clique.append(sid)
-        raw_cliques.append(tuple(sorted(clique)))
-
-    # Deduplicate and keep only maximal cliques (remove subsets)
-    raw_cliques = list(set(raw_cliques))
-    raw_cliques.sort(key=lambda c: -len(c))
-    maximal = []
-    for c in raw_cliques:
-        if not any(set(c).issubset(set(m)) and c != m for m in maximal):
-            maximal.append(c)
-
-    clusters = [list(c) for c in maximal]
-
-    # Sources with no primitive embedding or not in any clique — standalone
-    in_clique = set(sid for c in maximal for sid in c)
-    for source in sources:
-        sid = source["id"]
-        if sid not in in_clique:
-            clusters.append([sid])
-
-    # Log final cluster membership
-    for i, cluster in enumerate(clusters):
-        members = ", ".join(f"'{id_to_title.get(sid, sid)[:40]}'" for sid in cluster)
-        kind = "cluster" if len(cluster) > 1 else "standalone"
-        logger.info(f"[cluster_sources] [{kind}] {members}")
-
-    logger.info(f"[cluster_sources] {len(clusters)} clusters formed ({len([c for c in clusters if len(c) > 1])} multi-source, {len([c for c in clusters if len(c) == 1])} standalone)")
+    clusters = [[s["id"]] for s in sources]
+    logger.info(f"[cluster_sources] clustering removed — {len(clusters)} standalone candidates")
     return {**state, "clusters": clusters}
 
 

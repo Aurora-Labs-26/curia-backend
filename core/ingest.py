@@ -6,7 +6,6 @@ Public functions:
     ingest_url(url, user_id)            CLI-friendly: creates row + processes it.
     process_source(source_id)           Worker-friendly: assumes row exists, processes it.
     embed_chunks(source_id, text)       Internal: chunked text embeddings.
-    embed_primitive(source_id)          Internal: single primitive embedding for clustering.
 
 Status transitions:
     queued → scraping → transforming → embedding → ready  (happy path)
@@ -103,52 +102,6 @@ async def embed_chunks(source_id: str, full_text: str) -> None:
     logger.info(f"Embedding complete for source {source_id}")
 
 
-async def embed_primitive(source_id: str) -> None:
-    """
-    Embed source insights as a single primitive vector for clustering.
-    Prefers core_tensions + counterpoints; falls back to all available
-    insights so technical/factual content still gets clustered.
-    """
-    from .embeddings import get_embedding, get_embedding_column
-
-    col = get_embedding_column()
-    rows = await db_query(
-        """
-        SELECT insight_type, content
-        FROM source_insight
-        WHERE source_id = $sid::uuid
-        """,
-        {"sid": source_id},
-    )
-    primary = []
-    fallback = []
-    for row in (rows or []):
-        c = (row.get("content") or "").strip()
-        if not c or c.lower() == "null":
-            continue
-        if row["insight_type"] in ("core_tensions", "counterpoints"):
-            primary.append(c)
-        fallback.append(c)
-    parts = primary or fallback
-    if not parts:
-        logger.info(f"  primitive_embed skipped (no usable insights) for {source_id}")
-        return
-    combined = "\n".join(parts)
-    vector = await get_embedding(combined)
-    if not vector:
-        logger.warning(f"  primitive_embed: embedding returned None for {source_id}")
-        return
-    await db_execute(
-        f"""
-        INSERT INTO source_primitive_embedding (source_id, {col})
-        VALUES ($sid::uuid, $vec)
-        ON CONFLICT (source_id) DO UPDATE SET {col} = EXCLUDED.{col}
-        """,
-        {"sid": source_id, "vec": vector},
-    )
-    logger.info(f"  primitive_embed: stored for {source_id} (column={col})")
-
-
 # ---------------------------------------------------------------------------
 # Main pipeline (worker entry point)
 # ---------------------------------------------------------------------------
@@ -157,7 +110,7 @@ async def embed_primitive(source_id: str) -> None:
 async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
     """
     Process a source row that already exists in the DB.
-    Reads url + user_id from the row, runs scrape → transform → embed → primitive.
+    Reads url + user_id from the row, runs scrape → transform → embed.
     Status moves through 'scraping' → 'transforming' → 'embedding' → 'ready'.
 
     On exception: the error column is always recorded, but status is only set to
@@ -280,10 +233,9 @@ async def process_source(source_id: str, is_final_attempt: bool = True) -> None:
         except Exception as e:
             logger.warning(f"  ✗ topics: {e}")
 
-        # 3. Embed chunks + primitive
+        # 3. Embed chunks
         await _set_status(source_id, "embedding")
         await embed_chunks(source_id, text_for_llm)
-        await embed_primitive(source_id)
 
         # 4. Done
         await _set_status(source_id, "ready")
