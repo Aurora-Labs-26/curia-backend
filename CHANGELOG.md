@@ -6,6 +6,15 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-07-23 · Arihant + Claude (claude-fable-5)
 
+### Bug Fix
+- **`brief/store.py`** — first live generate_brief failed with "the JSON object
+  must be str... not dict": the ported reads json.loads'd jsonb columns, but
+  core/db's codec already auto-decodes them. New tolerant `_jsonb()` helper
+  applied at all five read sites (writes were safe — the encoder passes
+  pre-dumped strings through)
+- **`tests/test_brief_store.py`** — regression tests: `_jsonb` passthrough for
+  dict/list/str/None, `get_cached_segment` with codec-decoded transcript_json
+
 ### Config
 All TTS moved to Cartesia on the latest model generation (episodes + daily brief).
 - **`config/models.yaml`** — `cartesia-sonic` alias bumped `sonic-2` → `sonic-3.5`

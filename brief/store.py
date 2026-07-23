@@ -76,6 +76,14 @@ def _pg_deleted_count(command_tag: str) -> int:
 # ---------------------------------------------------------------------------
 
 
+
+def _jsonb(v):
+    """Tolerant jsonb read: core/db's codec auto-decodes jsonb to dict/list,
+    but be safe against str (e.g. double-encoded legacy rows) and None."""
+    if v is None or isinstance(v, (dict, list)):
+        return v
+    return json.loads(v)
+
 async def list_system_topics() -> List[Dict[str, Any]]:
     pool = await harness_db.get_pool()
     rows = await pool.fetch(
@@ -341,11 +349,8 @@ async def get_cached_segment(article_id: str, segment_type: str, is_local: bool)
     if not row:
         return None
     result = dict(row)
-    # asyncpg returns jsonb columns as raw JSON text, not auto-decoded — parse
-    # here so every caller gets a dict, not a str it has to json.loads itself.
-    result["transcript_json"] = json.loads(result["transcript_json"])
-    if result["faithfulness_detail"] is not None:
-        result["faithfulness_detail"] = json.loads(result["faithfulness_detail"])
+    result["transcript_json"] = _jsonb(result["transcript_json"])
+    result["faithfulness_detail"] = _jsonb(result["faithfulness_detail"])
     return result
 
 
@@ -532,8 +537,7 @@ async def get_latest_manifest(user_id: str, brief_date: str):
     )
     if not row:
         return None
-    seg = row["segments"]
-    return _json.loads(seg) if isinstance(seg, str) else seg
+    return _jsonb(row["segments"])
 
 
 async def get_daily_brief_for_date(user_id: str, brief_date: str):
@@ -582,7 +586,7 @@ async def get_daily_brief_detail(brief_id: str) -> Optional[Dict[str, Any]]:
         # not just its title/mp3_url. NULL only if cache_id was never
         # resolved (shouldn't happen in practice — see the ERD note on
         # daily_brief_articles.cache_id).
-        entry["transcript_json"] = json.loads(entry["transcript_json"]) if entry["transcript_json"] else None
+        entry["transcript_json"] = _jsonb(entry["transcript_json"])
         parsed_articles.append(entry)
     return {"brief": dict(brief), "articles": parsed_articles}
 
@@ -630,8 +634,8 @@ async def list_transcript_records() -> List[Dict[str, Any]]:
     results = []
     for r in rows:
         entry = dict(r)
-        entry["topics_used"] = json.loads(entry["topics_used"])
-        entry["segments"] = json.loads(entry["segments"])
+        entry["topics_used"] = _jsonb(entry["topics_used"])
+        entry["segments"] = _jsonb(entry["segments"])
         entry["is_open_coded"] = bool(entry["note"] and entry["note"].strip())
         results.append(entry)
     return results

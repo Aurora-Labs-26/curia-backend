@@ -58,3 +58,23 @@ class TestIdentityContract:
             )
         sql = pool.fetchrow.call_args[0][0]
         assert "faithfulness_severity" in sql and "NULL" in sql
+
+
+class TestJsonbTolerance:
+    """core/db's jsonb codec auto-decodes to dict/list — the ported reads must
+    NOT json.loads again (prod failure: 'the JSON object must be str... not dict')."""
+
+    def test_jsonb_passthrough_dict_list_str_none(self):
+        assert store._jsonb({"a": 1}) == {"a": 1}
+        assert store._jsonb([1, 2]) == [1, 2]
+        assert store._jsonb('{"a": 1}') == {"a": 1}
+        assert store._jsonb(None) is None
+
+    async def test_get_cached_segment_accepts_decoded_jsonb(self):
+        row = {"id": "c1", "transcript_json": {"segments": [{"text": "hi"}]},
+               "mp3_url": None, "duration_s": 30, "faithfulness_passed": None,
+               "faithfulness_score": None, "faithfulness_detail": None}
+        pool = MagicMock(); pool.fetchrow = AsyncMock(return_value=row)
+        with patch.object(store.harness_db, "get_pool", AsyncMock(return_value=pool)):
+            out = await store.get_cached_segment("a1", "standard", False)
+        assert out["transcript_json"] == {"segments": [{"text": "hi"}]}
