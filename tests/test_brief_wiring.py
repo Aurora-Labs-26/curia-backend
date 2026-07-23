@@ -236,3 +236,54 @@ class TestManifestStoreHelpers:
         with patch.object(store.harness_db, "get_pool", AsyncMock(return_value=pool)):
             m = await store.get_latest_manifest("u1", "2026-07-23")
         assert m == [{"text": "hi"}]
+
+
+# ---------------------------------------------------------------------------
+# Weather — every degradation path returns ("", "") and never raises
+# ---------------------------------------------------------------------------
+
+
+class TestWeather:
+    async def test_no_key_short_circuits_without_http(self):
+        from brief import weather
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": ""}), \
+             patch("brief.weather.httpx.AsyncClient") as client:
+            assert await weather.get_weather_and_local_time("Mumbai") == ("", "")
+        client.assert_not_called()
+
+    async def test_no_location_short_circuits(self):
+        from brief import weather
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}):
+            assert await weather.get_weather_and_local_time("") == ("", "")
+
+    def _client(self, resp=None, exc=None):
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.get = AsyncMock(return_value=resp, side_effect=exc)
+        return client
+
+    async def test_happy_path_formats_condition_and_temp(self):
+        from brief import weather
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "current": {"condition": {"text": "Sunny"}, "temp_c": 31.0},
+            "location": {"localtime": "2026-07-23 09:00"}}
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}), \
+             patch("brief.weather.httpx.AsyncClient", return_value=self._client(resp)):
+            out = await weather.get_weather_and_local_time("Mumbai")
+        assert out == ("Sunny, 31.0°C", "2026-07-23 09:00")
+
+    async def test_non_200_returns_empty(self):
+        from brief import weather
+        resp = MagicMock(status_code=403, text="quota")
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}), \
+             patch("brief.weather.httpx.AsyncClient", return_value=self._client(resp)):
+            assert await weather.get_weather_and_local_time("Mumbai") == ("", "")
+
+    async def test_network_exception_swallowed(self):
+        from brief import weather
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}), \
+             patch("brief.weather.httpx.AsyncClient",
+                   return_value=self._client(exc=RuntimeError("dns"))):
+            assert await weather.get_weather_and_local_time("Mumbai") == ("", "")

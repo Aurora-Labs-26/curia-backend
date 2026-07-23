@@ -6,6 +6,24 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-07-23 · Arihant + Claude (claude-fable-5)
 
+### Test
+GAN-style hardening of the brief package: generator round wrote 46 new tests,
+then a discriminator round injected 18 targeted source mutants (wrong lead
+index, truncation off-by-one, inverted cache gate, dropped failure-marking,
+flipped created-flag, weather accepting errors, audio gate inverted, …) and
+verified every one is killed by at least one test. 2 initial survivors
+exposed real assertion gaps (regen-path status, mutation pattern) — hardened.
+- **`tests/test_brief_runner.py`** — new: 23 assembly-logic tests for
+  `generate_brief_for_user` + `_regenerate_bookends_for_brief` via a fully
+  wired mock Rig (manifest order, lead/standard/local typing, rank counters,
+  cache hit/miss economics, selection truncation, local-query construction,
+  failure marking, ready-brief short-circuit). Runner coverage 11% → 97%
+- **`tests/test_brief_store.py`** — pure-helper edge sweep (normalize_url,
+  durations, _to_time/_to_date, simhash, display-name precedence) +
+  get_or_create_daily_brief created-flag contract + user-topics split
+- **`tests/test_brief_wiring.py`** — weather degradation matrix (no key, no
+  location, non-200, network exception → always ("","")). Weather 24% → 100%
+
 ### Bug Fix
 - **`brief/audio.py`** — audio pass always skipped ("not ready"): it read
   `detail["status"]` but `get_daily_brief_detail` returns a nested
