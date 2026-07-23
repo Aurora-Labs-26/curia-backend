@@ -169,7 +169,7 @@ class TestRenderBriefAudio:
     async def test_not_ready_skips_everything(self):
         from brief import audio
         with patch.object(audio.store, "get_daily_brief_detail",
-                          AsyncMock(return_value={"status": "generating"})), \
+                          AsyncMock(return_value={"brief": {"status": "generating"}, "articles": []})), \
              patch("core.llm_config.resolve") as resolve:
             assert await audio.render_brief_audio("b-1") is None
         resolve.tts.assert_not_called()
@@ -177,7 +177,8 @@ class TestRenderBriefAudio:
     async def test_empty_manifest_returns_none(self):
         from brief import audio
         with patch.object(audio.store, "get_daily_brief_detail", AsyncMock(
-                return_value={"status": "ready", "user_id": "u1", "date": "2026-07-23"})), \
+                return_value={"brief": {"status": "ready", "user_id": "u1",
+                                        "date": "2026-07-23"}, "articles": []})), \
              patch.object(audio.store, "get_latest_manifest", AsyncMock(return_value=[])):
             assert await audio.render_brief_audio("b-1") is None
 
@@ -188,7 +189,8 @@ class TestRenderBriefAudio:
         set_url = AsyncMock()
         upload = AsyncMock()
         with patch.object(audio.store, "get_daily_brief_detail", AsyncMock(
-                return_value={"status": "ready", "user_id": "u1", "date": "2026-07-23"})), \
+                return_value={"brief": {"status": "ready", "user_id": "u1",
+                                        "date": "2026-07-23"}, "articles": []})), \
              patch.object(audio.store, "get_latest_manifest",
                           AsyncMock(return_value=_manifest())), \
              patch.object(audio.store, "set_daily_brief_audio", set_url), \
@@ -208,7 +210,8 @@ class TestRenderBriefAudio:
         adapter.synthesize_async = AsyncMock(side_effect=RuntimeError("tts 500"))
         set_url = AsyncMock()
         with patch.object(audio.store, "get_daily_brief_detail", AsyncMock(
-                return_value={"status": "ready", "user_id": "u1", "date": "2026-07-23"})), \
+                return_value={"brief": {"status": "ready", "user_id": "u1",
+                                        "date": "2026-07-23"}, "articles": []})), \
              patch.object(audio.store, "get_latest_manifest",
                           AsyncMock(return_value=_manifest())), \
              patch.object(audio.store, "set_daily_brief_audio", set_url), \

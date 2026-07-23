@@ -41,10 +41,11 @@ def _stitch(paths: list[str], out_path: str) -> float:
 async def render_brief_audio(brief_id: str) -> str | None:
     """Synthesize + stitch + upload. Returns the S3 key, or None on failure."""
     detail = await store.get_daily_brief_detail(brief_id)
-    if not detail or detail.get("status") != "ready":
+    row = (detail or {}).get("brief") or {}   # detail = {"brief": {...}, "articles": [...]}
+    if row.get("status") != "ready":
         logger.info(f"[brief.audio] brief {brief_id} not ready — skipping audio")
         return None
-    manifest = await store.get_latest_manifest(detail["user_id"], str(detail["date"])) or []
+    manifest = await store.get_latest_manifest(row["user_id"], str(row["date"])) or []
     texts = [s.get("text", "").strip() for s in manifest if s.get("text", "").strip()]
     if not texts:
         logger.warning(f"[brief.audio] brief {brief_id} has no segment text")

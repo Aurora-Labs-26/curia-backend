@@ -7,6 +7,12 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-07-23 · Arihant + Claude (claude-fable-5)
 
 ### Bug Fix
+- **`brief/audio.py`** — audio pass always skipped ("not ready"): it read
+  `detail["status"]` but `get_daily_brief_detail` returns a nested
+  `{"brief": {...}, "articles": [...]}` shape; now reads the brief row.
+  Test doubles corrected to the real shape (`tests/test_brief_wiring.py`)
+
+### Bug Fix
 - **`brief/store.py`** — first live generate_brief failed with "the JSON object
   must be str... not dict": the ported reads json.loads'd jsonb columns, but
   core/db's codec already auto-decodes them. New tolerant `_jsonb()` helper
