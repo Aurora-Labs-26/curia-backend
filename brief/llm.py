@@ -25,7 +25,7 @@ from loguru import logger
 
 # Steps that are live in the integrated brief pipeline. The harness's judge
 # steps are intentionally absent (parked as future analytics).
-BRIEF_STEPS = ("score_curate", "segment", "bookends")
+BRIEF_STEPS = ("score_curate", "segment", "bookends", "judge")
 
 
 def _resolve_lm(task: str):

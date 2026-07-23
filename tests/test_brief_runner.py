@@ -70,6 +70,7 @@ class Rig:
             self._put[article_id] = {"transcript_json": transcript_json,
                                      "mp3_url": mp3_url, "duration_s": duration_s}
         self.cache.put_cached_segment = AsyncMock(side_effect=_put_cached)
+        self.cache.set_cached_segment_faithfulness = AsyncMock()
         self.cache.add_daily_brief_article = AsyncMock()
         self.cache.set_daily_brief_urls = AsyncMock()
         self.cache.save_transcript_record = AsyncMock()

@@ -31,7 +31,7 @@ from brief import parked as automated_judging
 from brief import store as cache_service
 from brief import parked as eval_checks_service
 from brief import parked as eval_logging_service
-from brief import parked as faithfulness_regen_service
+from brief import faithfulness as faithfulness_regen_service
 from brief import weather as weather_service
 from brief.news import news_service as ns, GLOBAL_GEO
 from brief.pipeline import (
@@ -394,6 +394,14 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
                 mp3_url=mp3_url,
                 duration_s=duration_s,
             )
+            # Memoize AFTER put (put nulls the memo columns) so the shared
+            # cache row carries the shipped attempt's verdict.
+            fv = seg_result.get("faithfulness")
+            if fv and fv.get("severity") not in (None, "unknown"):
+                await cache_service.set_cached_segment_faithfulness(
+                    str(r["article_id"]), r["segment_type"], r["is_local"],
+                    fv["severity"], {"claims": fv["claims"]},
+                )
             await eval_logging_service.log_segment_transcript(
                 run_id,
                 article_id=r["article_id"],

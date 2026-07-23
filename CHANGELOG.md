@@ -6,6 +6,25 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-07-23 · Arihant + Claude (claude-fable-5)
 
+### Feature
+Inline faithfulness gate for daily-brief segments — the parked harness judge,
+un-parked and slimmed. Per cache-miss segment: generate → judge (source-
+comparison, no web tool) → if critical/moderate, regenerate once with the
+flagged claims threaded via prior_text/prior_feedback → judge again → ship
+attempt 2 regardless (the brief never blocks). Judge failures fail open.
+- **`brief/faithfulness.py`** — new: judge prompt (critical/moderate/stylistic
+  taxonomy, headline-only mode when content_fetched=False), `judge_segment`,
+  `generate_verified_segment` (2-attempt cap), verdict attached to the result
+- **`brief/user_brief_runner.py`** — swapped parked stub for the real gate;
+  memoizes the shipped verdict onto the cache row AFTER put (put nulls memo
+  columns); "unknown" verdicts never memoized
+- **`brief/preopt_runner.py`** — cache-filling segments now judged the same way
+- **`config/models.yaml`** / **`brief/llm.py`** — new `brief.judge` binding
+  (haiku-4-5) + "judge" registered in BRIEF_STEPS
+- **`tests/test_brief_faithfulness.py`** — 14 tests incl. the double-flag
+  ship-attempt-2 contract and fail-open; 7 injected mutants all killed
+  (retry-never-fires, verdict-whitewash, crash-propagation, memo-on-unknown, …)
+
 ### Test
 GAN-style hardening of the brief package: generator round wrote 46 new tests,
 then a discriminator round injected 18 targeted source mutants (wrong lead

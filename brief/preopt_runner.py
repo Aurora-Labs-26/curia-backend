@@ -74,12 +74,13 @@ async def _cache_one_segment(
         }
 
     async with _SEGMENT_SEMAPHORE:
-        result = await pipeline_manager.run_article_segment_step(
+        from brief import faithfulness
+        result = await faithfulness.generate_verified_segment(
             ArticleSegmentRequest(
                 title=title, source=source, full_text=full_text, segment_type=segment_type,
                 content_fetched=content_fetched,
             ),
-            api_key=api_key,
+            api_key=api_key, segment_type=segment_type, is_local=False,
         )
 
     duration_s = cache_service.estimate_duration_s(result["word_count"])
@@ -92,6 +93,11 @@ async def _cache_one_segment(
         mp3_url=mp3_url,
         duration_s=duration_s,
     )
+    fv = result.get("faithfulness")
+    if fv and fv.get("severity") not in (None, "unknown"):
+        await cache_service.set_cached_segment_faithfulness(
+            str(article_id), segment_type, False, fv["severity"], {"claims": fv["claims"]},
+        )
     await eval_logging_service.log_segment_transcript(
         run_id,
         article_id=article_id,

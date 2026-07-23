@@ -382,6 +382,7 @@ bindings:
     brief.score_curate:      sonnet-4-6
     brief.segment:           haiku-4-5
     brief.bookends:          haiku-4-5
+    brief.judge:             haiku-4-5
 
     idea_evaluation.batch:   haiku-4-5
     idea_evaluation.single:  haiku-4-5
