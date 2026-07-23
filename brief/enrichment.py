@@ -92,7 +92,7 @@ async def warm_html_parser() -> None:
     await asyncio.to_thread(_warm_html_parser)
 
 
-def _decode_and_fetch_text(google_url: str) -> Optional[str]:
+def _decode_and_fetch_text(google_url: str) -> "Tuple[Optional[str], Optional[str]]":
     """Synchronous, blocking: decode a Google News redirect URL to the real
     publisher URL, fetch it, and extract the article body text. Runs inside a
     worker thread (see _try_one) — never called directly from async code.
@@ -108,34 +108,49 @@ def _decode_and_fetch_text(google_url: str) -> Optional[str]:
 
         decoded = gnewsdecoder(google_url, interval=DECODE_INTERVAL_SECONDS)
         if not decoded.get("status"):
-            return None
+            return None, None
         real_url = decoded.get("decoded_url")
         if not real_url:
-            return None
+            return None, None
 
         resp = requests.get(real_url, headers=_HEADERS, timeout=PER_ARTICLE_TIMEOUT_SECONDS)
         if resp.status_code != 200:
-            return None
+            return real_url, None
 
         extracted = trafilatura.extract(
             resp.text, include_comments=False, include_tables=False, favor_precision=True,
         )
         if not extracted or len(extracted) < MIN_USABLE_TEXT_CHARS:
-            return None
-        return extracted
+            return real_url, None
+        return real_url, extracted
     except Exception:
-        return None
+        return None, None
 
 
 async def _try_one(url: str, semaphore: asyncio.Semaphore) -> Optional[str]:
     async with semaphore:
+        real_url = None
         try:
-            return await asyncio.wait_for(
+            real_url, text = await asyncio.wait_for(
                 asyncio.to_thread(_decode_and_fetch_text, url),
                 timeout=PER_ARTICLE_TIMEOUT_SECONDS + 2.0,
             )
+            if text:
+                return text
         except Exception:
-            return None
+            pass
+        # Port addition: rescue via the host scraper cascade (trafilatura →
+        # jina → firecrawl) when the fast requests path failed but we do have
+        # the decoded publisher URL. Adds the fallbacks the harness lacked.
+        if real_url:
+            try:
+                from core.scraper.cascade import scrape
+                content, *_ = await asyncio.wait_for(scrape(real_url), timeout=20.0)
+                if content and len(content) >= MIN_USABLE_TEXT_CHARS:
+                    return content
+            except Exception:
+                pass
+        return None
 
 
 async def _try_one_tagged(url: str, semaphore: asyncio.Semaphore) -> Tuple[str, Optional[str]]:

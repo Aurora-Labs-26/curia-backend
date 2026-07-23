@@ -283,52 +283,62 @@ MAX_BOOST            = 0.60
 DEFAULT_KEEP_FRACTION = 0.5
 
 # ---------------------------------------------------------------------------
-# MODEL SINGLETON
+# EMBEDDINGS — ported from MiniLM/sentence-transformers (torch) onto the host
+# embedding stack (core/embeddings — the same provider that embeds sources).
+# Port note: CLUSTER_SIM_THRESHOLD (0.72) and MULTI_TOPIC_THRESHOLD were
+# calibrated on MiniLM cosine distributions; OpenAI embeddings run "hotter"
+# (higher baseline similarity), so cluster sizes must be sanity-checked on the
+# first live Pre-Opt run and the thresholds re-tuned if over-clustering shows.
 # ---------------------------------------------------------------------------
-_model = None
-_topic_embeddings: Optional[Dict[str, Any]] = None   # {topic: (n_subs, 384)}
+import numpy as np
+
+_topic_embeddings = None   # {topic: (n_subs, dim) ndarray}
+_EMBED_CONCURRENCY = 8
 
 
-def _get_model():
-    global _model, _topic_embeddings
-    if _model is not None:
-        return _model
-    import torch
-    from sentence_transformers import SentenceTransformer
-    # Belt-and-suspenders alongside the OMP/MKL/OPENBLAS env vars set in
-    # app/main.py (those must be set before torch is ever imported anywhere
-    # in the process to reliably take effect; this covers torch's own
-    # intra-op thread pool directly, in case something already imported it
-    # first). See app/main.py's top-of-file comment for the full explanation
-    # — CPU-quota-limited containers thrash badly when torch spawns more
-    # threads than the container is actually entitled to run concurrently.
-    torch.set_num_threads(1)
-    logger.info("Loading all-MiniLM-L6-v2 ...")
-    _model = SentenceTransformer("all-MiniLM-L6-v2")
-    _topic_embeddings = {
-        topic: _model.encode(subs)
-        for topic, subs in TOPIC_ANCHORS.items()
-    }
-    logger.info(
-        "Model loaded — %d topics (%d sub-anchors total).",
-        len(_topic_embeddings),
-        sum(len(v) for v in _topic_embeddings.values()),
-    )
-    return _model
+async def _embed_texts(texts):
+    """Embed a batch via core.embeddings (bounded concurrency). Failed
+    embeddings become zero vectors — cosine 0 against everything, so the
+    article simply never clusters or topic-matches (safe degradation)."""
+    from core.embeddings import get_embedding
+    sem = asyncio.Semaphore(_EMBED_CONCURRENCY)
+
+    async def one(t):
+        async with sem:
+            return await get_embedding(t or " ")
+
+    vecs = await asyncio.gather(*(one(t) for t in texts))
+    dim = next((len(v) for v in vecs if v), 1536)
+    return np.array([v if v else [0.0] * dim for v in vecs], dtype=float)
+
+
+def _cos(a, b):
+    """Cosine-similarity matrix, numpy-only (sklearn dependency dropped)."""
+    a = np.atleast_2d(np.asarray(a, dtype=float))
+    b = np.atleast_2d(np.asarray(b, dtype=float))
+    an = a / (np.linalg.norm(a, axis=1, keepdims=True) + 1e-12)
+    bn = b / (np.linalg.norm(b, axis=1, keepdims=True) + 1e-12)
+    return an @ bn.T
+
+
+async def _get_topic_embeddings():
+    """Anchor embeddings, computed once per process via the host provider."""
+    global _topic_embeddings
+    if _topic_embeddings is None:
+        logger.info("Embedding topic anchors via core.embeddings ...")
+        _topic_embeddings = {
+            topic: await _embed_texts(subs)
+            for topic, subs in TOPIC_ANCHORS.items()
+        }
+    return _topic_embeddings
 
 
 async def warm_model() -> None:
-    """Eagerly loads the model + topic anchor embeddings at app startup (see
-    app/main.py) instead of lazily on the first request. _get_model() does 7
-    model.encode() calls (one per topic anchor) which, even after the thread-
-    count fix above, is still a one-time cost worth paying at boot rather
-    than inside a user's first Pre-Opt request — every second here is a
-    second not spent inside that request's gateway-timeout budget, for
-    embeddings that never change across the process's lifetime anyway."""
-    await asyncio.to_thread(_get_model)
+    """Kept name for callers; now warms the anchor embeddings."""
+    await _get_topic_embeddings()
 
 
-def _recluster_after_enrichment(ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+async def _recluster_after_enrichment(ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Second, lightweight clustering pass over the already-deduped non-local
     entries, run only after enrichment has replaced some entries' description
     with real scraped article text. The first clustering pass (in
@@ -343,16 +353,13 @@ def _recluster_after_enrichment(ranked: List[Dict[str, Any]]) -> List[Dict[str, 
     clusters for no benefit. Local entries never go through enrichment, so
     they're passed through untouched here too.
     """
-    from sklearn.metrics.pairwise import cosine_similarity
-
     non_local_idx = [i for i, e in enumerate(ranked) if not e["is_local"]]
     if len(non_local_idx) < 2:
         return ranked
 
-    model = _get_model()
     texts = [f"{ranked[i]['title']} {ranked[i]['description']}".strip() for i in non_local_idx]
-    embeddings = model.encode(texts)
-    sim_matrix = cosine_similarity(embeddings)
+    embeddings = await _embed_texts(texts)
+    sim_matrix = _cos(embeddings, embeddings)
 
     assigned = [False] * len(non_local_idx)
     survivors: List[Dict[str, Any]] = []
@@ -415,9 +422,7 @@ async def rank_articles(
     Optionally refines scores using real scraped article text before the cut
     is computed — see enrichment_service.ENRICHMENT_ENABLED to turn that off.
     """
-    from sklearn.metrics.pairwise import cosine_similarity
-
-    model = _get_model()
+    anchors = await _get_topic_embeddings()
 
     main_articles:  List[Dict[str, Any]] = []
     local_articles: List[Dict[str, Any]] = []
@@ -454,7 +459,7 @@ async def rank_articles(
     # used only by the optional enrichment step below (cluster-borrowing).
     cluster_member_urls: Dict[int, List[str]] = {}
 
-    def _embed_cluster_score(pool, is_local, topic_scorer):
+    async def _embed_cluster_score(pool, is_local, topic_scorer):
         """Shared embed -> per-article TS -> greedy same-story clustering
         pass, used for both pools (called once each below) — they never
         cluster against each other, only within their own pool.
@@ -470,7 +475,7 @@ async def rank_articles(
             f"{art.get('title', '')} {art.get('description', '')}".strip()
             for art in pool
         ]
-        embeddings = model.encode(texts)
+        embeddings = await _embed_texts(texts)
 
         ts_list: List[float] = []
         boost_list: List[float] = []
@@ -481,7 +486,7 @@ async def rank_articles(
 
         # Greedy clustering: pull in every unassigned neighbour above threshold
         # in a single pass per seed; keep the highest-TS member as representative.
-        sim_matrix = cosine_similarity(embeddings)
+        sim_matrix = _cos(embeddings, embeddings)
         assigned = [False] * len(pool)
 
         for seed in range(len(pool)):
@@ -491,6 +496,11 @@ async def rank_articles(
                 j for j in range(len(pool))
                 if not assigned[j] and sim_matrix[seed, j] > CLUSTER_SIM_THRESHOLD
             ]
+            # Port robustness: a zero-vector embedding (failed embed fallback)
+            # has self-similarity 0, which would leave the seed out of its own
+            # cluster and crash the rep selection. The seed always belongs.
+            if seed not in members:
+                members.insert(0, seed)
             for j in members:
                 assigned[j] = True
 
@@ -527,8 +537,8 @@ async def rank_articles(
 
     def _main_topic_scorer(emb):
         topic_scores = [
-            float(cosine_similarity([emb], anchor_emb)[0].max())
-            for topic_name, anchor_emb in (_topic_embeddings or {}).items()
+            float(_cos(emb, anchor_emb).max())
+            for topic_name, anchor_emb in anchors.items()
             if topic_name in interests
         ]
         ts = max(topic_scores) if topic_scores else 0.5
@@ -545,8 +555,8 @@ async def rank_articles(
     # blocking call, not real async I/O) — offloaded to a worker thread so it
     # doesn't freeze the event loop and serialize every other concurrently-
     # running rank_articles() call (e.g. Pre-Opt's 7 topics).
-    await asyncio.to_thread(_embed_cluster_score, main_articles, False, _main_topic_scorer)
-    await asyncio.to_thread(_embed_cluster_score, local_articles, True, _local_topic_scorer)
+    await _embed_cluster_score(main_articles, False, _main_topic_scorer)
+    await _embed_cluster_score(local_articles, True, _local_topic_scorer)
 
     # Optional accuracy refinement — see enrichment_service.py for the on/off
     # switch and full explanation. Runs BEFORE the cut below so a better score
@@ -563,7 +573,7 @@ async def rank_articles(
             # _recluster_after_enrichment is synchronous/CPU-bound (another
             # direct model.encode() call) — offloaded to a worker thread for
             # the same reason as the _embed_cluster_score calls above.
-            ranked = await asyncio.to_thread(_recluster_after_enrichment, ranked)
+            ranked = await _recluster_after_enrichment(ranked)
         except Exception as e:
             logger.warning(f"Article enrichment step failed, continuing without it: {e}")
 
