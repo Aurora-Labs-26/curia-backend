@@ -4,7 +4,33 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
-## 2026-07-22 · Arihant + Claude (claude-fable-5)
+## 2026-07-23 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Daily-brief integration, wiring layer (Tasks 4–5 of the harness port): worker
+lanes, API routes, and real TTS audio — replacing the harness's sync-HTTP
+orchestration and `placeholder://` mp3 stubs.
+- **`worker/handlers/brief.py`** — new handlers `preopt_brief` (background lane,
+  optional `topic_id`) and `generate_brief` (interactive lane; runs
+  `generate_brief_for_user` then a best-effort audio pass that never fails the job)
+- **`worker/handlers/__init__.py`** — registered both handlers in `HANDLERS`
+- **`api/routes/brief.py`** — new router: GET `/brief/topics`, PUT
+  `/brief/preferences`, POST `/brief/generate` (409 without prefs, 202 + job id),
+  GET `/brief/today`, POST `/brief/preopt`
+- **`api/main.py`** — registered the brief router
+- **`brief/audio.py`** — `render_brief_audio(brief_id)`: manifest texts →
+  `resolve.tts()` per segment → pydub stitch with 600 ms pauses → S3 upload at
+  `audio/brief/{id}.mp3` → `set_daily_brief_audio`; skips non-ready briefs,
+  failures return None without touching the DB
+- **`brief/store.py`** — port additions `set_daily_brief_audio` (stitched-url-only
+  UPDATE) and `get_latest_manifest` (ordered segment texts incl. intro/outro from
+  `transcript_records`, the only place bookend text is persisted)
+
+### Test
+- **`tests/test_brief_wiring.py`** — 21 new tests: handler registry + payload
+  routing, audio-failure isolation, route auth/validation/enqueue-lane contracts,
+  audio happy path + never-un-ready guarantee, store helper SQL contracts
+- **`tests/test_imports.py`** — worker HANDLERS set now includes the two brief types
 
 ### Docs
 - **`dailybrief analysis v1.md`** — deep analysis of `feat/dailyBrief_v3`

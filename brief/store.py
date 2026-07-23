@@ -508,6 +508,45 @@ async def add_daily_brief_article(
     return str(row["id"])
 
 
+async def set_daily_brief_audio(brief_id: str, stitched_mp3_url: str) -> None:
+    """Port addition: store the real stitched-audio S3 key (brief/audio.py)."""
+    pool = await harness_db.get_pool()
+    await pool.execute(
+        "UPDATE harness.daily_briefs SET stitched_mp3_url = $2 WHERE id = $1",
+        brief_id, stitched_mp3_url,
+    )
+
+
+async def get_latest_manifest(user_id: str, brief_date: str):
+    """Port addition: the ordered segment manifest (incl. intro/outro texts)
+    persisted by save_transcript_record for this user's brief_date."""
+    import json as _json
+    pool = await harness_db.get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT segments FROM harness.transcript_records
+        WHERE user_id = $1 AND title LIKE '%' || $2 || '%'
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        user_id, brief_date,
+    )
+    if not row:
+        return None
+    seg = row["segments"]
+    return _json.loads(seg) if isinstance(seg, str) else seg
+
+
+async def get_daily_brief_for_date(user_id: str, brief_date: str):
+    """Read-only lookup (port addition for GET /brief/today)."""
+    pool = await harness_db.get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, user_id, date, status, stitched_mp3_url, created_at "
+        "FROM harness.daily_briefs WHERE user_id = $1 AND date = $2",
+        user_id, _to_date(brief_date),
+    )
+    return {**dict(row), "id": str(row["id"])} if row else None
+
+
 async def get_daily_brief_detail(brief_id: str) -> Optional[Dict[str, Any]]:
     pool = await harness_db.get_pool()
     brief = await pool.fetchrow(
