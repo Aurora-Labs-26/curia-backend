@@ -370,7 +370,7 @@ class TTSAdapter:
                 url,
                 headers={
                     "X-API-Key": api_key,
-                    "Cartesia-Version": "2024-06-10",
+                    "Cartesia-Version": "2026-03-01",
                     "Content-Type": "application/json",
                 },
                 json=body,
@@ -591,7 +591,7 @@ class TTSAdapter:
                     url,
                     headers={
                         "X-API-Key": api_key,
-                        "Cartesia-Version": "2024-06-10",
+                        "Cartesia-Version": "2026-03-01",
                         "Content-Type": "application/json",
                     },
                     json=body,

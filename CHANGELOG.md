@@ -6,6 +6,19 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-07-23 · Arihant + Claude (claude-fable-5)
 
+### Config
+All TTS moved to Cartesia on the latest model generation (episodes + daily brief).
+- **`config/models.yaml`** — `cartesia-sonic` alias bumped `sonic-2` → `sonic-3.5`
+  (current generation, July 2026); speaker bindings kenji/arjun/emeka switched
+  smallest-lightning → cartesia-sonic with three distinct library voices
+  (Theo / Ronald / Lauren); previous smallest bindings kept as comments
+- **`core/llm_config/adapters/tts.py`** — `Cartesia-Version` header bumped
+  `2024-06-10` → `2026-03-01` (required by the sonic-3.x API) in both sync and
+  async paths
+- **`tests/test_tts_cartesia.py`** — asserts sonic-3.5, the new version header,
+  and that all three speakers are Cartesia-bound with distinct voice ids; verified
+  live against the API (all three voices synthesize)
+
 ### Feature
 Daily-brief integration, wiring layer (Tasks 4–5 of the harness port): worker
 lanes, API routes, and real TTS audio — replacing the harness's sync-HTTP

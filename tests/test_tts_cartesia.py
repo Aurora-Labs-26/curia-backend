@@ -39,11 +39,21 @@ def test_config_registers_cartesia():
     assert cfg.providers["cartesia"].type == "cartesia"
     assert cfg.providers["cartesia"].api_key_env == "CARTESIA_API_KEY"
     assert cfg.models["cartesia-sonic"].kind == "tts"
-    assert cfg.models["cartesia-sonic"].model_id == "sonic-2"
+    assert cfg.models["cartesia-sonic"].model_id == "sonic-3.5"
 
 
 def test_output_format_is_wav(adapter):
     assert adapter.output_format == "wav"
+
+
+def test_all_speakers_bound_to_cartesia():
+    cfg = reload_config()
+    voice_ids = set()
+    for name in ("kenji", "arjun", "emeka"):
+        sp = cfg.bindings.speaker[name]
+        assert sp.model == "cartesia-sonic", f"{name} not on cartesia"
+        voice_ids.add(sp.voice_id)
+    assert len(voice_ids) == 3, "speakers must have distinct voices"
 
 
 def test_sync_request_shape(adapter):
@@ -64,8 +74,9 @@ def test_sync_request_shape(adapter):
 
     assert captured["url"].endswith("/tts/bytes")
     assert captured["headers"]["X-API-Key"] == "ca_key"
+    assert captured["headers"]["Cartesia-Version"] == "2026-03-01"
     body = captured["json"]
-    assert body["model_id"] == "sonic-2"
+    assert body["model_id"] == "sonic-3.5"
     assert body["voice"] == {"mode": "id", "id": VOICE}
     assert body["output_format"]["container"] == "wav"
     assert body["output_format"]["sample_rate"] == 22050
