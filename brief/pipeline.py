@@ -254,6 +254,7 @@ class PipelineManager:
             if result:
                 s["full_text"] = result["text"]
                 s["content_fetched"] = True
+                s["resolved_url"] = result.get("resolved_url")
                 s["used_alternate_source"] = result["url"] != s.get("url")
                 if s["used_alternate_source"] and result.get("source"):
                     s["source"] = result["source"]

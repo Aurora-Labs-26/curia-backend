@@ -174,6 +174,10 @@ async def _run_preopt_for_topic(topic: Dict[str, Any], api_key: Optional[str]) -
         )
         enriched = fetch_content_result["selections"]  # same order/length as non_local_selections
         await eval_logging_service.update_fetched_article_content(run_id, enriched)
+        for sel in enriched:
+            if sel.get("resolved_url") and sel.get("_article_id"):
+                await cache_service.set_article_resolved_url(
+                    str(sel["_article_id"]), sel["resolved_url"])
 
         results: List[Dict[str, Any]] = []
         for i, sel in enumerate(enriched):

@@ -33,7 +33,7 @@ from brief.llm import call_llm
 
 MAX_ATTEMPTS = 2
 TRIGGER_SEVERITIES = {"critical", "moderate"}
-_SEVERITY_RANK = {"critical": 3, "moderate": 2, "stylistic": 1, "none": 0}
+_SEVERITY_RANK = {"critical": 4, "moderate": 3, "unverifiable": 2, "stylistic": 1, "none": 0}
 
 SYSTEM_FAITHFULNESS_JUDGE_PROMPT = """You are a rigorous fact-checker. You will be given a spoken news-segment script and the source article text it was written from. Check every factual claim in the segment against the source, using exactly three severity levels:
 
@@ -41,12 +41,15 @@ SYSTEM_FAITHFULNESS_JUDGE_PROMPT = """You are a rigorous fact-checker. You will 
 2. "moderate" — an unsupported inference or editorializing claim that goes beyond what the source actually says, but isn't a fabrication (a reasonable-sounding extrapolation, a claim of significance the source doesn't make, unwarranted causal language).
 3. "stylistic" — conversational framing, connective tissue, or paraphrase that carries no independent factual claim. Never list these.
 
-If the source text is marked as UNAVAILABLE, the segment was written from only the headline — then flag as "critical" any specific detail (number, quote, named entity, date) that could not have come from the headline alone.
+If the source text is marked as UNAVAILABLE, the segment was written from only the headline. In that mode use different rules:
+- A claim that is a reasonable paraphrase or restatement of the headline is NOT a claim — never list it.
+- A specific detail (number, quote, named entity, date) that goes beyond the headline but is plausible is "unverifiable" — there is no source to check it against.
+- Reserve "critical" for details that directly CONTRADICT the headline.
 
 Respond with ONLY a JSON object:
-{"claims": [{"text": "<the claim>", "severity": "critical|moderate", "explanation": "<why>"}]}
+{"claims": [{"text": "<the claim>", "severity": "critical|moderate|unverifiable", "explanation": "<why>"}]}
 
-Only list "critical" or "moderate" claims. If there are none, return {"claims": []}."""
+Only list "critical", "moderate", or "unverifiable" claims. If there are none, return {"claims": []}."""
 
 USER_FAITHFULNESS_JUDGE_PROMPT = """SEGMENT SCRIPT:
 {segment_text}
@@ -110,6 +113,12 @@ async def generate_verified_segment(
     verdict = await judge_segment(
         seg_result["text"], req.title, req.full_text, source_available=req.content_fetched
     )
+
+    # Headline-only generation: judge once, never retry — with no source text
+    # to be faithful to, a rewrite can't cure the flag (observed live: both
+    # retries re-flagged). The honest verdict is still memoized.
+    if not req.content_fetched:
+        return {**seg_result, "faithfulness": verdict}
 
     if verdict["severity"] in TRIGGER_SEVERITIES:
         logger.info(

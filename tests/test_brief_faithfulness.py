@@ -167,3 +167,40 @@ class TestConfig:
         assert "judge" in BRIEF_STEPS
         cfg = reload_config()
         assert cfg.bindings.task["brief.judge"].model is not None
+
+
+class TestHeadlineOnlyMode:
+    def _pm(self, gens):
+        pm = AsyncMock()
+        pm.run_article_segment_step = AsyncMock(side_effect=gens)
+        return pm
+
+    async def test_headline_only_judges_once_never_retries(self):
+        pm = self._pm([_seg("headline segment")])
+        judge = AsyncMock(return_value={"severity": "critical", "claims": CRITICAL["claims"]})
+        with patch("brief.pipeline.pipeline_manager", pm), \
+             patch.object(faithfulness, "judge_segment", judge):
+            out = await faithfulness.generate_verified_segment(_req(content_fetched=False))
+        assert pm.run_article_segment_step.await_count == 1     # no retry without source
+        assert judge.await_count == 1
+        assert out["faithfulness"]["severity"] == "critical"    # verdict still honest
+
+    async def test_unverifiable_never_triggers_retry_with_source(self):
+        pm = self._pm([_seg()])
+        judge = AsyncMock(return_value={"severity": "unverifiable",
+                                        "claims": [{"text": "x", "severity": "unverifiable",
+                                                    "explanation": ""}]})
+        with patch("brief.pipeline.pipeline_manager", pm), \
+             patch.object(faithfulness, "judge_segment", judge):
+            out = await faithfulness.generate_verified_segment(_req())
+        assert pm.run_article_segment_step.await_count == 1
+        assert out["faithfulness"]["severity"] == "unverifiable"
+
+    async def test_unverifiable_ranks_below_moderate(self):
+        claims = [{"text": "a", "severity": "unverifiable", "explanation": ""},
+                  {"text": "b", "severity": "moderate", "explanation": ""}]
+        assert faithfulness._worst_severity(claims) == "moderate"
+
+    def test_prompt_teaches_unverifiable_for_headline_only(self):
+        assert "unverifiable" in faithfulness.SYSTEM_FAITHFULNESS_JUDGE_PROMPT
+        assert "CONTRADICT" in faithfulness.SYSTEM_FAITHFULNESS_JUDGE_PROMPT

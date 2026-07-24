@@ -7,6 +7,33 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-07-23 · Arihant + Claude (claude-fable-5)
 
 ### Feature
+Publisher-URL resolution hardening + headline-only judge calibration — the two
+fixes the first live faithfulness data pointed at (3/5 critical flags, all
+traceable to failed enrichment putting the judge in its strictest posture).
+- **`brief/enrichment.py`** — per-stage failure logging (decode_failed /
+  fetch_blocked / extract_empty); NEW last-resort cascade on the Google News
+  URL itself when the decode fails (Jina/Firecrawl render the JS redirect —
+  previously a decode outage sent everything headline-only); `_try_one` now
+  returns (text, resolved_publisher_url)
+- **`brief/pipeline.py`** — resolved_url threaded onto fetched selections
+- **`brief/store.py`** — `set_article_resolved_url` (identity `url` untouched);
+  brief detail now selects `resolved_url` (real publisher links in the API)
+- **`brief/user_brief_runner.py`** / **`brief/preopt_runner.py`** — persist the
+  resolved URL after enrichment in both generation paths
+- **`alembic/versions/0036_article_resolved_url.py`** — adds the column
+- **`brief/faithfulness.py`** — headline-only segments: judge once, never retry
+  (a rewrite can't cure a flag with no source text — observed live); new
+  "unverifiable" severity for plausible-but-uncheckable details beyond the
+  headline, ranked below moderate, never triggers regeneration; "critical"
+  in headline-only mode reserved for contradictions
+
+### Test
+- **`tests/test_brief_enrichment.py`** — new: 13 tests over the 4-hop rescue
+  chain, resolved_url threading, store SQL contract, migration chain
+- **`tests/test_brief_faithfulness.py`** — headline-only no-retry contract,
+  unverifiable ranking + prompt; 6 injected mutants all killed
+
+### Feature
 Inline faithfulness gate for daily-brief segments — the parked harness judge,
 un-parked and slimmed. Per cache-miss segment: generate → judge (source-
 comparison, no web tool) → if critical/moderate, regenerate once with the

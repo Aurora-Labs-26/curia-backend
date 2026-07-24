@@ -107,27 +107,32 @@ def _decode_and_fetch_text(google_url: str) -> "Tuple[Optional[str], Optional[st
         from googlenewsdecoder import gnewsdecoder
 
         decoded = gnewsdecoder(google_url, interval=DECODE_INTERVAL_SECONDS)
-        if not decoded.get("status"):
+        if not decoded.get("status") or not decoded.get("decoded_url"):
+            logger.info(f"[enrich] decode_failed url={google_url[:60]}")
             return None, None
         real_url = decoded.get("decoded_url")
-        if not real_url:
-            return None, None
 
         resp = requests.get(real_url, headers=_HEADERS, timeout=PER_ARTICLE_TIMEOUT_SECONDS)
         if resp.status_code != 200:
+            logger.info(f"[enrich] fetch_blocked status={resp.status_code} url={real_url[:60]}")
             return real_url, None
 
         extracted = trafilatura.extract(
             resp.text, include_comments=False, include_tables=False, favor_precision=True,
         )
         if not extracted or len(extracted) < MIN_USABLE_TEXT_CHARS:
+            logger.info(f"[enrich] extract_empty url={real_url[:60]}")
             return real_url, None
         return real_url, extracted
-    except Exception:
+    except Exception as e:
+        logger.info(f"[enrich] decode_or_fetch_error {type(e).__name__} url={google_url[:60]}")
         return None, None
 
 
-async def _try_one(url: str, semaphore: asyncio.Semaphore) -> Optional[str]:
+async def _try_one(url: str, semaphore: asyncio.Semaphore) -> Optional[Tuple[str, Optional[str]]]:
+    """Returns (text, resolved_publisher_url) on success — resolved url is
+    None when text came from rendering the Google redirect directly — or
+    None when every path failed."""
     async with semaphore:
         real_url = None
         try:
@@ -136,26 +141,39 @@ async def _try_one(url: str, semaphore: asyncio.Semaphore) -> Optional[str]:
                 timeout=PER_ARTICLE_TIMEOUT_SECONDS + 2.0,
             )
             if text:
-                return text
+                return text, real_url
         except Exception:
             pass
-        # Port addition: rescue via the host scraper cascade (trafilatura →
-        # jina → firecrawl) when the fast requests path failed but we do have
-        # the decoded publisher URL. Adds the fallbacks the harness lacked.
+        # Rescue via the host scraper cascade (trafilatura → jina → firecrawl)
+        # when the fast requests path failed but the decode gave us the
+        # publisher URL.
         if real_url:
             try:
                 from core.scraper.cascade import scrape
                 content, *_ = await asyncio.wait_for(scrape(real_url), timeout=20.0)
                 if content and len(content) >= MIN_USABLE_TEXT_CHARS:
-                    return content
+                    logger.info(f"[enrich] rescued_via_cascade url={real_url[:60]}")
+                    return content, real_url
+            except Exception:
+                pass
+        # Last resort when even the DECODE failed: point the cascade at the
+        # Google News URL itself — Jina/Firecrawl render JS and ride the
+        # redirect to the publisher, which the fast requests path cannot.
+        else:
+            try:
+                from core.scraper.cascade import scrape
+                content, *_ = await asyncio.wait_for(scrape(url), timeout=25.0)
+                if content and len(content) >= MIN_USABLE_TEXT_CHARS:
+                    logger.info(f"[enrich] rescued_google_url url={url[:60]}")
+                    return content, None
             except Exception:
                 pass
         return None
 
 
-async def _try_one_tagged(url: str, semaphore: asyncio.Semaphore) -> Tuple[str, Optional[str]]:
-    text = await _try_one(url, semaphore)
-    return url, text
+async def _try_one_tagged(url: str, semaphore: asyncio.Semaphore) -> Tuple[str, Optional[Tuple[str, Optional[str]]]]:
+    hit = await _try_one(url, semaphore)
+    return url, hit
 
 
 async def _race_urls(urls: List[str], semaphore: asyncio.Semaphore) -> Optional[Tuple[str, str]]:
@@ -170,9 +188,9 @@ async def _race_urls(urls: List[str], semaphore: asyncio.Semaphore) -> Optional[
     tasks = [asyncio.create_task(_try_one_tagged(u, semaphore)) for u in urls]
     try:
         for coro in asyncio.as_completed(tasks):
-            url, text = await coro
-            if text:
-                return text, url
+            url, hit = await coro
+            if hit:
+                return hit[0], url
     finally:
         for t in tasks:
             if not t.done():
@@ -312,9 +330,11 @@ async def fetch_full_texts(selections: List[Dict[str, Any]]) -> List[Optional[Di
     async def _one(sel: Dict[str, Any]) -> Optional[Dict[str, str]]:
         primary_url = sel.get("url") or ""
         if primary_url:
-            text = await _try_one(primary_url, semaphore)
-            if text:
-                return {"text": _cap_words(text), "url": primary_url, "source": sel.get("source", "")}
+            hit = await _try_one(primary_url, semaphore)
+            if hit:
+                text, resolved = hit
+                return {"text": _cap_words(text), "url": primary_url,
+                        "source": sel.get("source", ""), "resolved_url": resolved}
 
         alternates = sel.get("cluster_alternates") or []
         alt_urls = [a.get("url") for a in alternates if a.get("url")]
@@ -328,6 +348,7 @@ async def fetch_full_texts(selections: List[Dict[str, Any]]) -> List[Optional[Di
         used_source = next(
             (a.get("source", "") for a in alternates if a.get("url") == used_url), ""
         )
-        return {"text": _cap_words(text), "url": used_url, "source": used_source}
+        return {"text": _cap_words(text), "url": used_url, "source": used_source,
+                "resolved_url": None}
 
     return await asyncio.gather(*[_one(sel) for sel in selections])

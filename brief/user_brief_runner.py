@@ -308,6 +308,9 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
                 r["full_text"] = enriched_sel.get("full_text", "")
                 r["source"] = enriched_sel.get("source", r["selection"].get("source", ""))
                 r["content_fetched"] = enriched_sel.get("content_fetched", False)
+                if enriched_sel.get("resolved_url"):
+                    await cache_service.set_article_resolved_url(
+                        str(r["article_id"]), enriched_sel["resolved_url"])
 
         # url -> raw fetched published_date, for threading into faithfulness
         # judging below (see faithfulness_regen_service.py). `pool` still has

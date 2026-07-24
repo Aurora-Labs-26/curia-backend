@@ -513,6 +513,16 @@ async def add_daily_brief_article(
     return str(row["id"])
 
 
+async def set_article_resolved_url(article_id: str, resolved_url: str) -> None:
+    """Records the decoded publisher URL next to the Google News token
+    (0036); url stays the dedup/identity key."""
+    pool = await harness_db.get_pool()
+    await pool.execute(
+        "UPDATE harness.articles SET resolved_url = $2 WHERE id = $1",
+        article_id, resolved_url,
+    )
+
+
 async def set_daily_brief_audio(brief_id: str, stitched_mp3_url: str) -> None:
     """Port addition: store the real stitched-audio S3 key (brief/audio.py)."""
     pool = await harness_db.get_pool()
@@ -566,7 +576,7 @@ async def get_daily_brief_detail(brief_id: str) -> Optional[Dict[str, Any]]:
     articles = await pool.fetch(
         """
         SELECT dba.id, dba.article_id, dba.cache_id, dba.segment_type, dba.rank, dba.cache_hit, dba.reason,
-               a.title, a.url,
+               a.title, a.url, a.resolved_url,
                c.transcript_json, c.mp3_url, c.duration_s
         FROM harness.daily_brief_articles dba
         JOIN harness.articles a ON a.id = dba.article_id
