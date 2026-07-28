@@ -11,7 +11,7 @@ surface and admin/dashboard endpoints do not exist here).
   POST /brief/generate          enqueue today's brief (interactive lane) — 202 + job id
   GET  /brief/today             today's brief manifest (status + segments + audio when ready)
   GET  /brief/today/audio       presigned URL for the stitched MP3
-  POST /brief/{id}/progress     playback progress (resume)
+  PUT  /brief/{id}/progress     playback progress (resume) — matches PUT /episodes/{id}/progress
   POST /brief/preopt            trigger the batch Pre-Opt (background lane)
 """
 
@@ -143,7 +143,7 @@ async def get_today_audio(user_id: str = Depends(current_user_id)) -> JSONRespon
     return JSONResponse({"url": url})
 
 
-@router.post("/{brief_id}/progress", status_code=204)
+@router.put("/{brief_id}/progress", status_code=204)
 async def set_progress(
     brief_id: uuid.UUID, body: BriefProgress, user_id: str = Depends(current_user_id)
 ) -> None:
