@@ -5,6 +5,7 @@ Curia app (Firebase auth via current_user_id; the harness's CORS-*/Basic-Auth
 surface and admin/dashboard endpoints do not exist here).
 
   GET  /brief/topics            the 7 system Beats (for the prefs UI)
+  GET  /brief/preferences       current saved prefs, to pre-fill the edit sheet
   PUT  /brief/preferences       upsert prefs: display name, beats, custom topics,
                                 delivery time + timezone; city derived from the
                                 request IP unless explicitly overridden
@@ -56,6 +57,26 @@ class BriefProgress(BaseModel):
 async def list_beats(user_id: str = Depends(current_user_id)) -> list[dict]:
     topics = await store.list_system_topics()
     return [{"id": str(t["id"]), "name": t["name"]} for t in topics]
+
+
+@router.get("/preferences")
+async def get_preferences(user_id: str = Depends(current_user_id)) -> dict:
+    """Current saved prefs, for the profile screen's edit sheet to pre-fill
+    before the user changes anything. Nothing else returns this whole shape
+    together — GET /brief/today's response varies by brief state and never
+    includes custom_topics/timezone/location_name at all."""
+    user = await store.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "Brief preferences not set")
+    topics = await store.get_user_topics(user_id)
+    return {
+        "display_name": user["display_name"],
+        "beats": [t["name"] for t in topics["chosen"]],
+        "custom_topics": [t["name"] for t in topics["custom"]],
+        "scheduled_time": str(user["scheduled_time"]),
+        "timezone": user["timezone"],
+        "location_name": user["location_name"],
+    }
 
 
 @router.put("/preferences")

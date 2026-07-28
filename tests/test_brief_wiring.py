@@ -93,6 +93,33 @@ def _client():
 
 
 class TestBriefRoutes:
+    def test_get_preferences_returns_saved_prefs(self):
+        with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={
+                "display_name": "Arihant", "location_name": "Mumbai, India",
+                "scheduled_time": "09:00:00", "timezone": "Asia/Kolkata",
+            })
+            store.get_user_topics = AsyncMock(return_value={
+                "chosen": [{"name": "Tech"}, {"name": "Business"}],
+                "custom": [{"name": "chess"}],
+            })
+            r = _client().get("/brief/preferences")
+        assert r.status_code == 200
+        assert r.json() == {
+            "display_name": "Arihant",
+            "beats": ["Tech", "Business"],
+            "custom_topics": ["chess"],
+            "scheduled_time": "09:00:00",
+            "timezone": "Asia/Kolkata",
+            "location_name": "Mumbai, India",
+        }
+
+    def test_get_preferences_404_when_never_set(self):
+        with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value=None)
+            r = _client().get("/brief/preferences")
+        assert r.status_code == 404
+
     def test_preferences_upserts_user_with_topics(self):
         """An explicit location_name (the prefs UI's "wrong city?" correction)
         is used as-is — no IP lookup."""
