@@ -102,10 +102,21 @@ async def generate_brief(user_id: str = Depends(current_user_id)) -> CreateJobRe
 
 @router.get("/today")
 async def get_today(user_id: str = Depends(current_user_id)) -> dict:
+    """A daily_briefs row only exists once generation actually starts (see
+    get_or_create_daily_brief) — before the user's scheduled time, "prefs set,
+    not due yet" and "prefs never set" are otherwise indistinguishable from
+    this table alone. The client needs to tell them apart (show a pending
+    card with the user's chosen beats vs. show nothing), so this checks
+    harness.users directly rather than 404ing the same way for both."""
     today = date.today().isoformat()
     pool_brief = await store.get_daily_brief_for_date(user_id, today)
     if not pool_brief:
-        raise HTTPException(404, "No brief for today — POST /brief/generate first")
+        user = await store.get_user(user_id)
+        if not user:
+            raise HTTPException(404, "Brief preferences not set — PUT /brief/preferences first")
+        topics = await store.get_user_topics(user_id)
+        beats = [t["name"] for t in topics["chosen"]] + [t["name"] for t in topics["custom"]]
+        return {"status": "pending", "beats": beats, "scheduled_time": str(user["scheduled_time"])}
     detail = await store.get_daily_brief_detail(pool_brief["id"])
     if not detail:
         return dict(pool_brief)

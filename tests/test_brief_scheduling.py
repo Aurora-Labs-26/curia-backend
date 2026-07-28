@@ -37,6 +37,11 @@ class TestListDueUsersForGeneration:
         sql = pool.fetch.await_args.args[0]
         assert "u.timezone" in sql
         assert "u.scheduled_time" in sql
+        # A failed row must NOT be in the exclusion set — otherwise a failed
+        # generation would silently never retry until the next calendar day.
+        # Only an in-flight or already-succeeded row should block re-enqueue.
+        assert "'generating', 'ready'" in sql or "'ready', 'generating'" in sql
+        assert "'failed'" not in sql
 
     async def test_empty_when_nobody_due(self):
         pool = AsyncMock()

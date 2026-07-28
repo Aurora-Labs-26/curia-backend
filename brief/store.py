@@ -472,6 +472,14 @@ async def list_due_users_for_generation() -> List[Dict[str, Any]]:
     enqueuing the same user twice in one cycle (two overlapping poller runs)
     harmless too — the second call just reuses the first's row.
 
+    Only excludes 'generating' (already in flight — don't double-enqueue) and
+    'ready' (already done) rows. A 'failed' row does NOT exclude a user: the
+    exclusion used to be "any row exists at all", which meant a failed
+    generation was silently never retried until the next day — worse than
+    the double-run race this query exists to prevent. generate_brief_for_user
+    already handles a re-run against an existing non-ready row correctly (its
+    reuse short-circuit only fires on status == "ready").
+
     `now() AT TIME ZONE u.timezone` converts the instant to that zone's local
     wall-clock time — requires timezone to be a valid IANA name (validated by
     Postgres itself at query time; an invalid stored value would error here
@@ -487,6 +495,7 @@ async def list_due_users_for_generation() -> List[Dict[str, Any]]:
               SELECT 1 FROM harness.daily_briefs db
               WHERE db.user_id = u.id
                 AND db.date = (now() AT TIME ZONE u.timezone)::date
+                AND db.status IN ('generating', 'ready')
           )
         """
     )

@@ -156,11 +156,34 @@ class TestBriefRoutes:
         assert enq.await_args.kwargs["lane"] == "interactive"
         assert enq.await_args.kwargs["type"] == "generate_brief"
 
-    def test_today_404_when_no_brief(self):
+    def test_today_404_when_prefs_never_set(self):
+        """No daily_briefs row AND no harness.users row — genuinely never
+        opted in. The client uses this to decide whether to show the pinned
+        brief section at all."""
         with patch("api.routes.brief.store") as store:
             store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            store.get_user = AsyncMock(return_value=None)
             r = _client().get("/brief/today")
         assert r.status_code == 404
+
+    def test_today_pending_when_prefs_set_but_not_due(self):
+        """No daily_briefs row YET but harness.users exists — prefs are set,
+        the user's scheduled time just hasn't arrived. Distinct from the 404
+        case above: the client shows a pending card (with the chosen beats
+        as chips) instead of hiding the section entirely."""
+        with patch("api.routes.brief.store") as store:
+            store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
+            store.get_user_topics = AsyncMock(return_value={
+                "chosen": [{"name": "Tech"}, {"name": "Business"}],
+                "custom": [{"name": "chess"}],
+            })
+            r = _client().get("/brief/today")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "pending"
+        assert body["beats"] == ["Tech", "Business", "chess"]
+        assert body["scheduled_time"] == "09:00:00"
 
     def test_today_returns_detail(self):
         with patch("api.routes.brief.store") as store:
