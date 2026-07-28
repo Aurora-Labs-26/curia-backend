@@ -122,24 +122,28 @@ async def get_or_create_custom_topic(name: str) -> str:
 
 
 async def create_user(user_id: str, display_name: str, location_name: str,
-                      scheduled_time: Any = "07:00") -> str:
+                      scheduled_time: Any = "07:00", timezone: str = "UTC") -> str:
     """Upsert-by-Curia-user-id (port change: harness.users.id IS the Curia
     user id — text — so brief prefs join Curia identity directly; email
     column dropped, display_name added). Resubmitting updates
-    display_name/location/schedule but does NOT touch topic links
-    (link_user_topic is additive-only, see below)."""
+    display_name/location/schedule/timezone but does NOT touch topic links
+    (link_user_topic is additive-only, see below).
+
+    timezone is the client's IANA zone; scheduled_time is interpreted in it
+    (see 0037_brief_tz_and_progress)."""
     pool = await harness_db.get_pool()
     row = await pool.fetchrow(
         """
-        INSERT INTO harness.users (id, display_name, location_name, scheduled_time)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO harness.users (id, display_name, location_name, scheduled_time, timezone)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (id) DO UPDATE SET
             display_name = EXCLUDED.display_name,
             location_name = EXCLUDED.location_name,
-            scheduled_time = EXCLUDED.scheduled_time
+            scheduled_time = EXCLUDED.scheduled_time,
+            timezone = EXCLUDED.timezone
         RETURNING id
         """,
-        user_id, display_name, location_name, _to_time(scheduled_time),
+        user_id, display_name, location_name, _to_time(scheduled_time), timezone or "UTC",
     )
     return str(row["id"])
 
@@ -167,27 +171,44 @@ async def create_user_with_topics(
     scheduled_time: Any,
     chosen_topic_names: List[str],
     custom_topic_names: List[str],
+    timezone: str = "UTC",
 ) -> str:
-    """Generalizes scripts/seed_users.py's per-user create+link loop for the
-    harness UI's "Add User" modal (POST /api/harness/users). Unknown
+    """Generalizes scripts/seed_users.py's per-user create+link loop. Unknown
     chosen_topic_names (not matching a system topic) are silently skipped —
-    the UI only ever sends names sourced from GET /api/harness/topics, so a
+    the UI only ever sends names sourced from GET /brief/topics, so a
     mismatch shouldn't happen in practice. Empty topic lists are allowed; no
-    minimum-topics validation, matching this module's existing style."""
-    user_id = await create_user(user_id, display_name, location_name, scheduled_time)
+    minimum-topics validation, matching this module's existing style.
+
+    The topic set is REPLACED, not merged: link_user_topic alone is
+    additive-only (ON CONFLICT DO NOTHING), so without the prune below a user
+    could never deselect a beat — resaving prefs with fewer topics silently
+    kept the old ones. This is the "save preferences" entry point (PUT
+    /brief/preferences, from both first-run and the profile screen), so the
+    submitted set is the whole truth."""
+    user_id = await create_user(user_id, display_name, location_name, scheduled_time, timezone)
 
     system_topics = await list_system_topics()
     topic_id_by_name = {t["name"]: str(t["id"]) for t in system_topics}
+    keep_ids: List[str] = []
+
     for name in chosen_topic_names:
         topic_id = topic_id_by_name.get(name)
         if topic_id:
             await link_user_topic(user_id, topic_id, "chosen")
+            keep_ids.append(topic_id)
 
     for name in custom_topic_names:
         cleaned = name.strip()
         if cleaned:
             custom_topic_id = await get_or_create_custom_topic(cleaned)
             await link_user_topic(user_id, custom_topic_id, "custom")
+            keep_ids.append(custom_topic_id)
+
+    pool = await harness_db.get_pool()
+    await pool.execute(
+        "DELETE FROM harness.user_topics WHERE user_id = $1 AND NOT (topic_id = ANY($2::uuid[]))",
+        user_id, keep_ids,
+    )
 
     return user_id
 
@@ -204,7 +225,7 @@ async def list_users() -> List[Dict[str, Any]]:
 async def get_user(user_id: str) -> Optional[Dict[str, Any]]:
     pool = await harness_db.get_pool()
     row = await pool.fetchrow(
-        "SELECT id, display_name, location_name, scheduled_time, created_at FROM harness.users WHERE id = $1",
+        "SELECT id, display_name, location_name, scheduled_time, timezone, created_at FROM harness.users WHERE id = $1",
         user_id,
     )
     return dict(row) if row else None
@@ -434,6 +455,44 @@ async def list_article_cache() -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+async def list_due_users_for_generation() -> List[Dict[str, Any]]:
+    """{"user_id", "local_date"} for users whose local delivery time has
+    passed today (their local today) and who don't have a brief for that
+    local date yet. local_date must be threaded through to the
+    generate_brief job as-is (not recomputed from date.today() in the
+    handler) — the handler runs in the container's own clock/date and could
+    disagree with what this query just computed the instant it ran.
+
+    Intentionally not a tight time-window match ("is it currently exactly
+    09:00-09:15 for this user") — it's a >= comparison, so a worker outage or
+    slow poll just means the next run still catches everyone who's due,
+    without over-firing: once generate_brief_for_user runs, the row this
+    query checks for exists, and the user drops out of the result on the very
+    next poll. get_or_create_daily_brief's (user_id, date) uniqueness makes
+    enqueuing the same user twice in one cycle (two overlapping poller runs)
+    harmless too — the second call just reuses the first's row.
+
+    `now() AT TIME ZONE u.timezone` converts the instant to that zone's local
+    wall-clock time — requires timezone to be a valid IANA name (validated by
+    Postgres itself at query time; an invalid stored value would error here
+    rather than silently misfire, which is the right failure mode for a
+    scheduling bug)."""
+    pool = await harness_db.get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT u.id, (now() AT TIME ZONE u.timezone)::date AS local_date
+        FROM harness.users u
+        WHERE (now() AT TIME ZONE u.timezone)::time >= u.scheduled_time
+          AND NOT EXISTS (
+              SELECT 1 FROM harness.daily_briefs db
+              WHERE db.user_id = u.id
+                AND db.date = (now() AT TIME ZONE u.timezone)::date
+          )
+        """
+    )
+    return [{"user_id": r["id"], "local_date": r["local_date"].isoformat()} for r in rows]
+
+
 async def get_or_create_daily_brief(user_id: str, brief_date: str) -> Dict[str, Any]:
     """Idempotent insert, mirroring legacy/db_service.py's brief_set_generating
     pattern (separate table/module, not imported).
@@ -554,11 +613,30 @@ async def get_daily_brief_for_date(user_id: str, brief_date: str):
     """Read-only lookup (port addition for GET /brief/today)."""
     pool = await harness_db.get_pool()
     row = await pool.fetchrow(
-        "SELECT id, user_id, date, status, stitched_mp3_url, created_at "
+        "SELECT id, user_id, date, status, stitched_mp3_url, created_at, "
+        "       play_progress, listened, last_played_at "
         "FROM harness.daily_briefs WHERE user_id = $1 AND date = $2",
         user_id, _to_date(brief_date),
     )
     return {**dict(row), "id": str(row["id"])} if row else None
+
+
+async def set_daily_brief_progress(
+    brief_id: str, user_id: str, play_progress: Optional[float], listened: bool
+) -> bool:
+    """Playback resume for a brief — mirrors the episode progress route.
+    user_id is in the WHERE clause so a caller can only move their own brief.
+    Returns False when nothing matched (wrong owner / unknown brief)."""
+    pool = await harness_db.get_pool()
+    result = await pool.execute(
+        """
+        UPDATE harness.daily_briefs
+        SET play_progress = $3, listened = $4, last_played_at = now()
+        WHERE id = $1 AND user_id = $2
+        """,
+        brief_id, user_id, play_progress, listened,
+    )
+    return not str(result).endswith(" 0")
 
 
 async def get_daily_brief_detail(brief_id: str) -> Optional[Dict[str, Any]]:
@@ -566,7 +644,8 @@ async def get_daily_brief_detail(brief_id: str) -> Optional[Dict[str, Any]]:
     brief = await pool.fetchrow(
         """
         SELECT id, user_id, date, status, intro_mp3_url,
-               outro_mp3_url, stitched_mp3_url, created_at
+               outro_mp3_url, stitched_mp3_url, created_at,
+               play_progress, listened, last_played_at
         FROM harness.daily_briefs WHERE id = $1
         """,
         brief_id,

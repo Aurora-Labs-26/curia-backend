@@ -3,7 +3,11 @@ worker/handlers/brief.py
 Worker handlers for the daily-brief pipeline (brief/ package).
 
   preopt_brief    { "topic_id": "<uuid>"? }        background lane
-  generate_brief  { "user_id": "<id>", "date": "YYYY-MM-DD" }   interactive lane
+  generate_brief  { "user_id": "<id>", "date": "YYYY-MM-DD" }
+                  interactive lane when POST /brief/generate triggers it (a
+                  user is watching); background lane when worker/main.py's
+                  brief-dispatch cron triggers it (no one's watching yet —
+                  the brief_ready push is what tells them)
 
 Moving these into worker lanes is the fix for the harness's worst structural
 flaw (long LLM chains inside HTTP requests); queue idempotency also covers the
@@ -48,3 +52,13 @@ async def handle_generate_brief(payload: dict) -> None:
             await render_brief_audio(brief_id)
     except Exception as e:
         logger.warning(f"[handle_generate_brief] audio render skipped: {e}")
+
+    # Notify after the audio attempt (success or failure) rather than right
+    # after status flips to "ready" — a user tapping the push a few seconds
+    # earlier would sometimes hit a brief with no playable audio yet.
+    if status == "ready":
+        try:
+            from core.notifications import send_brief_ready
+            await send_brief_ready(user_id)
+        except Exception as e:
+            logger.warning(f"[handle_generate_brief] brief_ready push skipped: {e}")

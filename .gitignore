@@ -1,5 +1,6 @@
 # Environment
 .env
+*firebase-adminsdk*.json
 
 # macOS
 .DS_Store

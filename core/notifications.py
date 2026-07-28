@@ -6,7 +6,12 @@ Two daily jobs (both target IST via fixed UTC offsets):
   - send_listen_reminders()    14:30 UTC (8:00 PM IST) — unplayed episode nudge
   - send_reengagement_reminders()  05:30 UTC (11:00 AM IST) — new user with no links
 
-Both are idempotent: notification_log deduplicates sends per (user, type, date).
+Plus one event-triggered send, called directly from worker/handlers/brief.py
+once a specific user's brief finishes generating (not a batch scan — there's
+nothing to scan for, the caller already knows exactly who and when):
+  - send_brief_ready(user_id)
+
+All are idempotent: notification_log deduplicates sends per (user, type, date).
 """
 
 from __future__ import annotations
@@ -167,3 +172,31 @@ async def send_reengagement_reminders() -> None:
                 logger.warning(f"[notifications] reengagement failed user_id={user_id}: {exc}")
 
     logger.info(f"[notifications] reengagement done sent={sent} errors={errors}")
+
+
+async def send_brief_ready(user_id: str) -> None:
+    """Called directly from worker/handlers/brief.py right after a brief
+    finishes generating (see brief/audio.py's docstring — audio is an
+    enhancement, so this fires once the text manifest is ready regardless of
+    whether the audio render succeeded). Per-user, not a batch scan: the
+    caller already knows exactly who and when, unlike the two cron jobs
+    above which have to discover their targets."""
+    from core.db.connection import get_db
+
+    async with get_db() as conn:
+        row = await conn.fetchrow("SELECT fcm_token FROM users WHERE id = $1", user_id)
+        if not row or not row["fcm_token"]:
+            return
+        if not await _claim_send(conn, user_id, "brief_ready"):
+            return  # already sent today (retry/requeue) or another worker won the race
+        try:
+            await _send_fcm(
+                row["fcm_token"],
+                title="Your daily brief is ready",
+                body="Tap to listen now.",
+                data={"type": "brief_ready"},
+            )
+            logger.info(f"[notifications] brief_ready sent user_id={user_id}")
+        except Exception as exc:
+            await _release_claim(conn, user_id, "brief_ready")
+            logger.warning(f"[notifications] brief_ready failed user_id={user_id}: {exc}")

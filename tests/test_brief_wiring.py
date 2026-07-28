@@ -94,15 +94,44 @@ def _client():
 
 class TestBriefRoutes:
     def test_preferences_upserts_user_with_topics(self):
+        """An explicit location_name (the prefs UI's "wrong city?" correction)
+        is used as-is — no IP lookup."""
         with patch("api.routes.brief.store") as store:
             store.create_user_with_topics = AsyncMock()
             r = _client().put("/brief/preferences", json={
                 "display_name": "Arihant", "location_name": "Mumbai, India",
                 "beats": ["Tech & Science"], "custom_topics": ["chess"],
+                "scheduled_time": "09:00", "timezone": "Asia/Kolkata",
             })
         assert r.status_code == 204
         store.create_user_with_topics.assert_awaited_once_with(
-            "u1", "Arihant", "Mumbai, India", "07:00", ["Tech & Science"], ["chess"])
+            "u1", "Arihant", "Mumbai, India", "09:00",
+            ["Tech & Science"], ["chess"], "Asia/Kolkata")
+
+    def test_preferences_derives_city_from_ip_when_not_given(self):
+        """No location_name -> resolved from the request IP, so the client never
+        has to ask for a location permission or make the user type a city."""
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.geo.city_from_request",
+                   AsyncMock(return_value="Bengaluru")):
+            store.get_user = AsyncMock(return_value=None)
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "Arihant", "beats": ["Tech & Science"],
+            })
+        assert r.status_code == 204
+        assert store.create_user_with_topics.await_args.args[2] == "Bengaluru"
+
+    def test_preferences_failed_lookup_keeps_existing_city(self):
+        """A failed lookup must not wipe a city already resolved (or corrected
+        by the user) on an earlier save."""
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.geo.city_from_request", AsyncMock(return_value="")):
+            store.get_user = AsyncMock(return_value={"location_name": "Pune"})
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={"display_name": "Arihant"})
+        assert r.status_code == 204
+        assert store.create_user_with_topics.await_args.args[2] == "Pune"
 
     def test_preferences_rejects_too_many_beats(self):
         r = _client().put("/brief/preferences", json={
@@ -138,9 +167,29 @@ class TestBriefRoutes:
             store.get_daily_brief_for_date = AsyncMock(return_value={"id": "b-1"})
             store.get_daily_brief_detail = AsyncMock(
                 return_value={"id": "b-1", "status": "ready", "articles": []})
+            store.get_latest_manifest = AsyncMock(return_value=[])
             r = _client().get("/brief/today")
         assert r.status_code == 200
         assert r.json()["status"] == "ready"
+
+    def test_today_merges_manifest_for_chapters(self):
+        """intro/outro text lives only in the persisted manifest, but the client
+        needs the whole ordered run to build chapter offsets — so /today merges
+        it in rather than making the client stitch two calls together."""
+        manifest = [
+            {"kind": "intro", "text": "Good morning.", "duration_s": 12.0},
+            {"kind": "lead", "text": "Big story.", "duration_s": 60.0},
+            {"kind": "outro", "text": "That's the brief.", "duration_s": 8.0},
+        ]
+        with patch("api.routes.brief.store") as store:
+            store.get_daily_brief_for_date = AsyncMock(return_value={"id": "b-1"})
+            store.get_daily_brief_detail = AsyncMock(
+                return_value={"id": "b-1", "status": "ready", "articles": []})
+            store.get_latest_manifest = AsyncMock(return_value=manifest)
+            r = _client().get("/brief/today")
+        body = r.json()
+        assert [s["kind"] for s in body["segments"]] == ["intro", "lead", "outro"]
+        assert body["total_duration_s"] == 80.0
 
     def test_preopt_enqueues_background(self):
         with patch("api.routes.brief.enqueue", AsyncMock(return_value="aaaaaaaa-0000-0000-0000-000000000002")) as enq:
@@ -149,9 +198,12 @@ class TestBriefRoutes:
         assert enq.await_args.kwargs["lane"] == "background"
 
     def test_registered_on_main_app(self):
+        # app.routes holds _IncludedRouter wrappers (no .path) for every
+        # include_router'd module on this FastAPI version, so read the schema.
         from api.main import app
-        paths = {r.path for r in app.routes}
+        paths = set(app.openapi()["paths"])
         assert "/brief/generate" in paths and "/brief/today" in paths
+        assert "/brief/today/audio" in paths and "/brief/{brief_id}/progress" in paths
 
 
 # ---------------------------------------------------------------------------

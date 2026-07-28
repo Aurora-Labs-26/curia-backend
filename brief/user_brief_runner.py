@@ -248,17 +248,26 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
         # 20. Falls back to a bare location query only if the user has
         # stated no topics at all, matching Phase A's own "if the user has
         # any stated" carve-out.
-        loc_gl, loc_hl, loc_ceid = ns.resolve_local_geo(location_name)
-        all_topics = chosen_beats + custom_names
-        local_query = (
-            f'"{location_name}" (' + " OR ".join(f'"{t}"' for t in all_topics) + ")"
-            if all_topics
-            else f'"{location_name}"'
-        )
-        local_fetch_articles = await asyncio.to_thread(
-            ns.fetch_articles_for_topic, local_query, loc_gl, loc_hl, loc_ceid, LOCAL_POOL_SIZE, f"Local: {location_name}"
-        )
-        pool.extend(local_fetch_articles)
+        # No city (IP lookup failed, VPN, local dev) — skip the local fetch
+        # entirely rather than interpolating an empty location into the query,
+        # which would search for '"" (Tech OR Business)'. The brief then has no
+        # Local Pulse candidate and ships with 4 segments; Score & Curate's
+        # local slot is already optional (see ordered_selections below).
+        local_fetch_articles: List[Dict[str, Any]] = []
+        if location_name.strip():
+            loc_gl, loc_hl, loc_ceid = ns.resolve_local_geo(location_name)
+            all_topics = chosen_beats + custom_names
+            local_query = (
+                f'"{location_name}" (' + " OR ".join(f'"{t}"' for t in all_topics) + ")"
+                if all_topics
+                else f'"{location_name}"'
+            )
+            local_fetch_articles = await asyncio.to_thread(
+                ns.fetch_articles_for_topic, local_query, loc_gl, loc_hl, loc_ceid, LOCAL_POOL_SIZE, f"Local: {location_name}"
+            )
+            pool.extend(local_fetch_articles)
+        else:
+            logger.info(f"[user_brief] user={user_id} has no city — skipping Local Pulse")
         await eval_logging_service.log_fetched_articles(run_id, local_fetch_articles, source_kind="local_fetch")
 
         # --- Rank (2b) + score & curate (3) across the FULL combined pool ---

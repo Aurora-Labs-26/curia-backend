@@ -20,6 +20,7 @@ import traceback
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -209,6 +210,42 @@ async def _process_one_sqs(worker_id: str) -> bool:
     return True
 
 
+async def _run_brief_preopt_job() -> None:
+    """Warms brief/store.py's article_segment_cache for all 7 Beats. Runs
+    every 6h rather than once/day: users can set any local delivery time in
+    any timezone, so there's no single UTC hour that's safely "before
+    everyone's slot" — a few-hours-stale cache is the tradeoff instead of
+    per-timezone preopt scheduling."""
+    from brief.preopt_runner import run_preopt
+    try:
+        result = await run_preopt()
+        logger.info(f"[worker] brief preopt: {result['totals']}")
+    except Exception as e:
+        logger.error(f"[worker] brief preopt failed: {e}")
+
+
+async def _run_brief_dispatch_job() -> None:
+    """Enqueues generate_brief (background lane — no one's watching this
+    happen) for every user whose local delivery time has passed and who
+    doesn't have today's (their local today's) brief yet. See
+    store.list_due_users_for_generation for why this is safe to over-run."""
+    from brief.store import list_due_users_for_generation
+    from core.queue import enqueue
+    try:
+        due = await list_due_users_for_generation()
+        for u in due:
+            await enqueue(
+                type="generate_brief",
+                payload={"user_id": u["user_id"], "date": u["local_date"]},
+                user_id=u["user_id"],
+                lane="background",
+            )
+        if due:
+            logger.info(f"[worker] brief dispatch: enqueued {len(due)} due user(s)")
+    except Exception as e:
+        logger.error(f"[worker] brief dispatch failed: {e}")
+
+
 def _start_scheduler() -> AsyncIOScheduler:
     from core.notifications import send_listen_reminders, send_reengagement_reminders
 
@@ -217,8 +254,13 @@ def _start_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(send_listen_reminders, CronTrigger(hour=14, minute=30, timezone="UTC"))
     # 11:00 AM IST = 05:30 UTC
     scheduler.add_job(send_reengagement_reminders, CronTrigger(hour=5, minute=30, timezone="UTC"))
+    scheduler.add_job(_run_brief_preopt_job, IntervalTrigger(hours=6))
+    scheduler.add_job(_run_brief_dispatch_job, IntervalTrigger(minutes=15))
     scheduler.start()
-    logger.info("[worker] scheduler started: listen_reminder@14:30UTC reengagement@05:30UTC")
+    logger.info(
+        "[worker] scheduler started: listen_reminder@14:30UTC reengagement@05:30UTC "
+        "brief_preopt@6h brief_dispatch@15m"
+    )
     return scheduler
 
 

@@ -12,13 +12,13 @@ services:
   # ── Postgres + pgvector ────────────────────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: curia-postgres
+    container_name: curia-postgres-v3
     environment:
       POSTGRES_USER: curia
       POSTGRES_PASSWORD: curia
       POSTGRES_DB: curia
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - curia-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +32,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: curia-api
+    container_name: curia-api-v3
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       postgres:
@@ -46,20 +46,27 @@ services:
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       HUME_API_KEY: ${HUME_API_KEY:-}
       HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
+      WEATHERAPI_KEY: ${WEATHERAPI_KEY:-}
+      # Docker Desktop presents a public IP as the peer locally, so IP geo
+      # returns junk — pin a city for dev. Unset in prod (see brief/geo.py).
+      BRIEF_GEO_OVERRIDE_CITY: ${BRIEF_GEO_OVERRIDE_CITY:-Bengaluru}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      # Real path inside the mounted source tree — the whole repo is bind-mounted
+      # at /app below, so a separate file mount inside it isn't possible.
+      GOOGLE_APPLICATION_CREDENTIALS: /app/aurora-labs-73eca-firebase-adminsdk-fbsvc-0e9f5d765f.json
     volumes:
-      - ./data:/app/data
-      - ./config:/app/config
-      - ./prompts:/app/prompts
-      - ./logs:/app/logs
+      # Local dev: mount the source tree so code/migration edits apply on
+      # restart instead of needing an image rebuild.
+      - .:/app
     ports:
-      - "8000:8000"
+      - "8001:8000"
 
   # ── Worker (same image, different command) ─────────────────────────────
   worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: curia-worker
+    container_name: curia-worker-v3
     command: python -m worker.main
     depends_on:
       postgres:
@@ -74,11 +81,9 @@ services:
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       HUME_API_KEY: ${HUME_API_KEY:-}
       HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
+      WEATHERAPI_KEY: ${WEATHERAPI_KEY:-}
     volumes:
-      - ./data:/app/data
-      - ./config:/app/config
-      - ./prompts:/app/prompts
-      - ./logs:/app/logs
+      - .:/app
 
 volumes:
   curia-pgdata:
