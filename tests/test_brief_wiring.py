@@ -103,7 +103,8 @@ class TestBriefRoutes:
                 "beats": ["Tech & Science"], "custom_topics": ["chess"],
                 "scheduled_time": "09:00", "timezone": "Asia/Kolkata",
             })
-        assert r.status_code == 204
+        assert r.status_code == 200
+        assert r.json() == {"location_name": "Mumbai, India"}
         store.create_user_with_topics.assert_awaited_once_with(
             "u1", "Arihant", "Mumbai, India", "09:00",
             ["Tech & Science"], ["chess"], "Asia/Kolkata")
@@ -119,7 +120,8 @@ class TestBriefRoutes:
             r = _client().put("/brief/preferences", json={
                 "display_name": "Arihant", "beats": ["Tech & Science"],
             })
-        assert r.status_code == 204
+        assert r.status_code == 200
+        assert r.json() == {"location_name": "Bengaluru"}
         assert store.create_user_with_topics.await_args.args[2] == "Bengaluru"
 
     def test_preferences_failed_lookup_keeps_existing_city(self):
@@ -130,7 +132,8 @@ class TestBriefRoutes:
             store.get_user = AsyncMock(return_value={"location_name": "Pune"})
             store.create_user_with_topics = AsyncMock()
             r = _client().put("/brief/preferences", json={"display_name": "Arihant"})
-        assert r.status_code == 204
+        assert r.status_code == 200
+        assert r.json() == {"location_name": "Pune"}
         assert store.create_user_with_topics.await_args.args[2] == "Pune"
 
     def test_preferences_rejects_too_many_beats(self):

@@ -58,14 +58,19 @@ async def list_beats(user_id: str = Depends(current_user_id)) -> list[dict]:
     return [{"id": str(t["id"]), "name": t["name"]} for t in topics]
 
 
-@router.put("/preferences", status_code=204)
+@router.put("/preferences")
 async def put_preferences(
     prefs: BriefPreferences, request: Request, user_id: str = Depends(current_user_id)
-) -> None:
+) -> dict:
     """City comes from the request IP so the client never has to ask for a
     location permission or make the user type one; an explicit location_name
     (the "wrong city?" correction in the prefs UI) always wins. Either may be
-    empty — the brief then generates without a Local Pulse segment."""
+    empty — the brief then generates without a Local Pulse segment.
+
+    Returns the resolved city (200 with a body, not a bare 204) so the prefs
+    screen can show "Local news: <city>" with a correction affordance right
+    after the first save — there's no other endpoint that echoes
+    location_name back to the client."""
     if prefs.location_name is not None:
         location_name = prefs.location_name.strip()
     else:
@@ -84,6 +89,7 @@ async def put_preferences(
         f"[brief] prefs saved user={user_id} beats={len(prefs.beats)} "
         f"city={location_name or '(none)'} at={prefs.scheduled_time} {prefs.timezone}"
     )
+    return {"location_name": location_name}
 
 
 @router.post("/generate", response_model=CreateJobResponse, status_code=202)
