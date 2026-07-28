@@ -82,6 +82,15 @@ services:
       HUME_API_KEY: ${HUME_API_KEY:-}
       HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
       WEATHERAPI_KEY: ${WEATHERAPI_KEY:-}
+      # init_firebase() runs unconditionally at worker startup — without these,
+      # .env's stale GOOGLE_APPLICATION_CREDENTIALS value (pointing at a file
+      # that no longer exists) crashes the whole container on boot instead of
+      # falling back gracefully, since a *wrong* path fails differently than
+      # no path at all (empty/missing file -> JSON parse error, not the
+      # graceful "no credentials" warning core/firebase.py logs when the env
+      # var is truly unset).
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/aurora-labs-73eca-firebase-adminsdk-fbsvc-0e9f5d765f.json
     volumes:
       - .:/app
 
