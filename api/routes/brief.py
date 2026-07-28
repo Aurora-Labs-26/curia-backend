@@ -10,21 +10,23 @@ surface and admin/dashboard endpoints do not exist here).
                                 request IP unless explicitly overridden
   POST /brief/generate          enqueue today's brief (interactive lane) — 202 + job id
   GET  /brief/today             today's brief manifest (status + segments + audio when ready)
-  GET  /brief/today/audio       presigned URL for the stitched MP3
+  GET  /brief/today/audio       presigned URL (s3) or range-streamed file (local) — mirrors GET /episodes/{id}/audio
   PUT  /brief/{id}/progress     playback progress (resume) — matches PUT /episodes/{id}/progress
   POST /brief/preopt            trigger the batch Pre-Opt (background lane)
 """
 
+import asyncio
 import uuid
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from api.auth import current_user_id
+from api.auth import audio_user_id, current_user_id
 from api.schemas import CreateJobResponse
 from brief import geo, store
 from core.queue import enqueue
@@ -133,11 +135,30 @@ async def get_today(user_id: str = Depends(current_user_id)) -> dict:
     return detail
 
 
+def _iter_file(path: str, start: int, end: int, chunk: int = 1024 * 64):
+    with open(path, "rb") as f:
+        f.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            data = f.read(min(chunk, remaining))
+            if not data:
+                break
+            remaining -= len(data)
+            yield data
+
+
 @router.get("/today/audio")
-async def get_today_audio(user_id: str = Depends(current_user_id)) -> JSONResponse:
-    """Presigned URL for the stitched brief MP3. daily_briefs.stitched_mp3_url
-    holds an S3 key, not a playable URL — same shape as GET /episodes/{id}/audio
-    so the client's existing playback path works unchanged."""
+async def get_today_audio(request: Request, user_id: str = Depends(audio_user_id)):
+    """daily_briefs.stitched_mp3_url always holds the bare key brief/audio.py
+    passed to upload_file (e.g. "audio/brief/<id>.mp3") — it stores that key
+    literally rather than upload_file's return value, on either backend (same
+    pattern studio/generator.py uses for episodes: audio_url = r2_key, not the
+    upload call's result). So which key means depends entirely on
+    get_storage_backend(), not on the string's shape — on s3 it's presignable
+    directly; on local it's a path relative to CURIA_STORAGE_LOCAL_DIR that
+    core.storage.blob._upload_local actually wrote the bytes to. Branches the
+    same way GET /episodes/{id}/audio does (S3 presign vs. local range-
+    streamed file)."""
     today = date.today().isoformat()
     brief = await store.get_daily_brief_for_date(user_id, today)
     if not brief:
@@ -145,6 +166,49 @@ async def get_today_audio(user_id: str = Depends(current_user_id)) -> JSONRespon
     key = brief.get("stitched_mp3_url")
     if not key:
         raise HTTPException(409, "Brief audio is not ready yet")
+
+    from core.storage.blob import get_storage_backend
+
+    if get_storage_backend() != "s3":
+        import os
+        audio_path = str(Path(os.getenv("CURIA_STORAGE_LOCAL_DIR", "data/blobs")) / key)
+        if not await asyncio.to_thread(Path(audio_path).exists):
+            raise HTTPException(410, "audio file missing on disk")
+        file_size = await asyncio.to_thread(lambda: Path(audio_path).stat().st_size)
+        range_header = request.headers.get("range")
+
+        if range_header:
+            try:
+                range_val = range_header.strip().replace("bytes=", "")
+                range_start, range_end = range_val.split("-")
+                start = int(range_start)
+                end = int(range_end) if range_end else file_size - 1
+            except (ValueError, AttributeError):
+                raise HTTPException(416, "invalid Range header")
+            end = min(end, file_size - 1)
+            if start > end or start < 0:
+                raise HTTPException(416, "range not satisfiable")
+            return StreamingResponse(
+                _iter_file(audio_path, start, end),
+                status_code=206,
+                media_type="audio/mpeg",
+                headers={
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(end - start + 1),
+                    "Content-Disposition": 'inline; filename="brief.mp3"',
+                },
+            )
+        return StreamingResponse(
+            _iter_file(audio_path, 0, file_size - 1),
+            status_code=200,
+            media_type="audio/mpeg",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+                "Content-Disposition": 'inline; filename="brief.mp3"',
+            },
+        )
 
     from core.storage.blob import generate_presigned_url
 

@@ -9,11 +9,11 @@ import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from api.auth import current_user_id
+from api.auth import audio_user_id, current_user_id
 from api.schemas import (
     CreateEpisodeRequest,
     CreateJobResponse,
@@ -244,24 +244,11 @@ async def submit_episode_feedback(
     )
 
 
-async def _audio_user_id(
-    request: Request,
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    token: str | None = Query(default=None),
-) -> str:
-    """Like current_user_id but also accepts ?token= for native audio players that
-    cannot set custom headers (e.g. expo-av / ExoPlayer on Android)."""
-    from api.auth import _resolve_token
-    auth_header = authorization or (f"Bearer {token}" if token else None)
-    user = await _resolve_token(auth_header)
-    return user.id
-
-
 @router.get("/episodes/{episode_id}/audio")
 async def get_episode_audio(
     episode_id: uuid.UUID,
     request: Request,
-    user_id: str = Depends(_audio_user_id),
+    user_id: str = Depends(audio_user_id),
 ):
     row = await db_fetchrow(
         """

@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from loguru import logger
 
 from core.db.connection import db_execute, db_fetchrow
@@ -138,6 +138,21 @@ async def current_user_id(
 ) -> str:
     """Just the user_id. Use this when a route doesn't need to branch on role."""
     user = await _resolve_token(authorization)
+    return user.id
+
+
+async def audio_user_id(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    token: Optional[str] = Query(default=None),
+) -> str:
+    """Like current_user_id but also accepts ?token= — native audio players
+    (expo-av / ExoPlayer on Android, RNTP generally) can't set custom headers
+    on the URL they're handed, so the local-storage-backend audio routes
+    (GET /episodes/{id}/audio, GET /brief/today/audio) fall back to a query
+    param for that one request. Shared here rather than duplicated per route
+    now that a second route needs it."""
+    auth_header = authorization or (f"Bearer {token}" if token else None)
+    user = await _resolve_token(auth_header)
     return user.id
 
 

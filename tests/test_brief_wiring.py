@@ -229,6 +229,125 @@ class TestBriefRoutes:
         assert "/brief/today/audio" in paths and "/brief/{brief_id}/progress" in paths
 
 
+def _audio_client():
+    """GET /today/audio depends on audio_user_id (accepts ?token=), not
+    current_user_id — a separate override from _client() above."""
+    from api.auth import audio_user_id
+    from api.routes.brief import router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[audio_user_id] = lambda: "u1"
+    return TestClient(app)
+
+
+class TestBriefAudioRoute:
+    """Regression coverage for a real bug found manually: daily_briefs.
+    stitched_mp3_url always holds the bare key brief/audio.py passed to
+    upload_file (mirrors studio/generator.py's audio_url = r2_key pattern for
+    episodes) — never a file:// URI. Which it means depends on
+    get_storage_backend(), not the string's shape. The first version of this
+    route sniffed for a "file://" prefix that never actually occurs, which
+    always fell through to the s3 presign path and 500'd on local dev."""
+
+    def test_404_when_no_brief_today(self):
+        with patch("api.routes.brief.store") as store:
+            store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            r = _audio_client().get("/brief/today/audio")
+        assert r.status_code == 404
+
+    def test_409_when_audio_not_ready(self):
+        with patch("api.routes.brief.store") as store:
+            store.get_daily_brief_for_date = AsyncMock(
+                return_value={"stitched_mp3_url": None})
+            r = _audio_client().get("/brief/today/audio")
+        assert r.status_code == 409
+
+    def test_s3_backend_returns_presigned_json(self):
+        with patch("api.routes.brief.store") as store, \
+             patch("core.storage.blob.get_storage_backend", return_value="s3"), \
+             patch("core.storage.blob.generate_presigned_url", return_value="https://signed.example/x"):
+            store.get_daily_brief_for_date = AsyncMock(
+                return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
+            r = _audio_client().get("/brief/today/audio")
+        assert r.status_code == 200
+        assert r.json() == {"url": "https://signed.example/x"}
+
+    def test_s3_backend_signing_failure_is_500(self):
+        with patch("api.routes.brief.store") as store, \
+             patch("core.storage.blob.get_storage_backend", return_value="s3"), \
+             patch("core.storage.blob.generate_presigned_url", return_value=None):
+            store.get_daily_brief_for_date = AsyncMock(
+                return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
+            r = _audio_client().get("/brief/today/audio")
+        assert r.status_code == 500
+
+    def test_local_backend_streams_the_file_bytes(self, tmp_path):
+        blob_dir = tmp_path / "blobs"
+        (blob_dir / "audio" / "brief").mkdir(parents=True)
+        audio_file = blob_dir / "audio" / "brief" / "b-1.mp3"
+        audio_file.write_bytes(b"x" * 100)
+
+        with patch("api.routes.brief.store") as store, \
+             patch("core.storage.blob.get_storage_backend", return_value="local"), \
+             patch.dict("os.environ", {"CURIA_STORAGE_LOCAL_DIR": str(blob_dir)}):
+            store.get_daily_brief_for_date = AsyncMock(
+                return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
+            r = _audio_client().get("/brief/today/audio")
+        assert r.status_code == 200
+        assert r.content == b"x" * 100
+        assert r.headers["content-type"] == "audio/mpeg"
+
+    def test_local_backend_honors_range_header(self, tmp_path):
+        blob_dir = tmp_path / "blobs"
+        (blob_dir / "audio" / "brief").mkdir(parents=True)
+        (blob_dir / "audio" / "brief" / "b-1.mp3").write_bytes(b"0123456789")
+
+        with patch("api.routes.brief.store") as store, \
+             patch("core.storage.blob.get_storage_backend", return_value="local"), \
+             patch.dict("os.environ", {"CURIA_STORAGE_LOCAL_DIR": str(blob_dir)}):
+            store.get_daily_brief_for_date = AsyncMock(
+                return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
+            r = _audio_client().get("/brief/today/audio", headers={"Range": "bytes=2-4"})
+        assert r.status_code == 206
+        assert r.content == b"234"
+        assert r.headers["content-range"] == "bytes 2-4/10"
+
+    def test_local_backend_missing_file_is_410(self, tmp_path):
+        blob_dir = tmp_path / "blobs"
+        blob_dir.mkdir()
+        with patch("api.routes.brief.store") as store, \
+             patch("core.storage.blob.get_storage_backend", return_value="local"), \
+             patch.dict("os.environ", {"CURIA_STORAGE_LOCAL_DIR": str(blob_dir)}):
+            store.get_daily_brief_for_date = AsyncMock(
+                return_value={"stitched_mp3_url": "audio/brief/missing.mp3"})
+            r = _audio_client().get("/brief/today/audio")
+        assert r.status_code == 410
+
+    def test_query_param_token_authenticates_without_header(self):
+        """RNTP/expo-av can't set custom headers on the URL they're handed —
+        this is the whole reason audio_user_id (shared with the episode audio
+        route) accepts ?token= as a fallback."""
+        from api.auth import audio_user_id
+        from api.routes.brief import router
+
+        app = FastAPI()
+        app.include_router(router)
+        # No override here — exercise the real dependency with a fake
+        # Firebase failure + legacy api_token lookup, same as auth.py's
+        # documented fallback chain.
+        with patch("api.auth._resolve_token", AsyncMock(return_value=type("U", (), {"id": "u1"})())) as resolve:
+            client = TestClient(app)
+            with patch("api.routes.brief.store") as store, \
+                 patch("core.storage.blob.get_storage_backend", return_value="s3"), \
+                 patch("core.storage.blob.generate_presigned_url", return_value="https://signed.example/x"):
+                store.get_daily_brief_for_date = AsyncMock(
+                    return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
+                r = client.get("/brief/today/audio?token=ck_abc")
+        assert r.status_code == 200
+        resolve.assert_awaited_once_with("Bearer ck_abc")
+
+
 # ---------------------------------------------------------------------------
 # Audio pass
 # ---------------------------------------------------------------------------
