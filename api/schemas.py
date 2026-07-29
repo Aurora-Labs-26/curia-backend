@@ -151,6 +151,7 @@ class EpisodeSourceObject(BaseModel):
     id: UUID
     domain: str
     title: Optional[str] = None
+    author: Optional[str] = None
 
 
 class EpisodeDetail(EpisodeSummary):

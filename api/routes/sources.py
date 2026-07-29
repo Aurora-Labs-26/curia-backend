@@ -295,7 +295,7 @@ async def list_episodes_for_source(
     if all_source_uuids:
         src_rows = await db_query(
             """
-            SELECT id, url, title FROM source
+            SELECT id, url, title, author FROM source
             WHERE id = ANY($ids) AND user_id = $user_id
             """,
             {"ids": all_source_uuids, "user_id": user_id},
@@ -307,7 +307,7 @@ async def list_episodes_for_source(
             except Exception:
                 domain = s["url"]
             source_map[str(s["id"])] = EpisodeSourceObject(
-                id=s["id"], domain=domain, title=s["title"]
+                id=s["id"], domain=domain, title=s["title"], author=s["author"]
             )
 
     result = []

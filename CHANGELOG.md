@@ -4,7 +4,67 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-30 · Aditya + Claude (claude-sonnet-5)
+
+### Bug Fix
+Episode source author never reached the frontend, even though it's correctly
+extracted and stored on `source.author` at scrape time (`core/scraper/cascade.py`
+→ `core/ingest.py::process_source`). All three places that build
+`EpisodeSourceObject` for the API response queried `SELECT id, url, title FROM
+source` — never selecting `author` — and the schema itself didn't even declare
+an `author` field, so it would've been silently dropped even if selected.
+- **`api/schemas.py`** — added `author: Optional[str] = None` to `EpisodeSourceObject`
+- **`api/routes/episodes.py`** — both `source_objects` builders (list endpoint
+  and detail endpoint) now select `author` and pass it through
+- **`api/routes/sources.py`** — same fix, third occurrence of the identical pattern
+- Restarted `api` (no `--reload` in this compose setup) to pick up the change;
+  full test suite re-run clean (1061 passed, same 6 pre-existing unrelated failures)
+
+## 2026-07-29 · Aditya + Claude (claude-sonnet-5)
+
+### Bug Fix
+No voice output on either episode or brief playback — audio routes returned
+200/206 with valid-looking responses, but the served files were silent stub
+audio. Two independent regressions, both introduced by the same day's earlier
+`googlenewsdecoder` rebuild (`docker compose build api worker`), both the same
+pattern as that fix: a real runtime dependency/config that had only ever been
+patched into a *previous* container instance by hand, silently wiped by the
+rebuild.
+- **`pyproject.toml`** — `edge-tts` (the active, free TTS binding for episodes
+  per `config/models.yaml`) was never declared as a dependency; added
+  `edge-tts>=6.1`. Confirmed via direct synthesis test post-fix (15KB of real
+  audio for a short sentence, not a silent stub).
+- **`docker-compose.yml`** — `CARTESIA_API_KEY` (briefs' TTS provider) was
+  correctly set in `.env` but never whitelisted into either the `api` or
+  `worker` service's `environment:` block (only `ELEVENLABS_API_KEY` was).
+  Added `CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}` to both, matching the
+  existing pattern.
+- Rebuilt both images and recreated both containers; confirmed the key now
+  reaches the worker's env and `edge_tts` imports and synthesizes correctly.
+
 ## 2026-07-29 · Aditya + Claude (claude-opus-5)
+
+### Bug Fix
+Brief source favicons all showed news.google.com instead of the real publisher —
+root cause was `googlenewsdecoder`, the package `brief/enrichment.py` lazy-imports
+to decode a Google News redirect URL to its real publisher URL, was never declared
+as a dependency, so every decode attempt threw `ModuleNotFoundError` (silently
+caught, logged as `decode_or_fetch_error`), `resolved_url` stayed NULL for every
+article, and the frontend's `resolved_url || url` fallback correctly rendered the
+Google News link. Confirmed fixed live: `_decode_and_fetch_text` now resolves a
+real publisher URL (e.g. thehindu.com) and extracts article text.
+- **`pyproject.toml`** — added `googlenewsdecoder>=0.1.7` to `dependencies`
+- rebuilt and restarted both `api` and `worker` images so the new dependency is
+  actually installed (both share this image; only `worker` calls the decode path,
+  but `api` failed the same import check pre-rebuild)
+
+Also found, not fixed (out of scope — different pipeline stage): `brief/scoring.py:571`
+passes a bare `model` to `enrichment_service.enrich_and_rescore` that is never
+defined in `rank_articles`'s scope, raising `NameError` on every call. The
+surrounding `try/except` swallows it and logs "Article enrichment step failed,
+continuing without it" — meaning the ranking accuracy-refinement rescore step has
+never actually run since it was wired up. Needs its own investigation into what
+`model` should be before fixing.
 
 ### Refactor
 Product rename: "Daily Brief" → "Daily Roundup" in user-reaching copy only.

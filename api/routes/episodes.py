@@ -114,7 +114,7 @@ async def list_episodes(
     if all_source_uuids:
         src_rows = await db_query(
             """
-            SELECT id, url, title FROM source
+            SELECT id, url, title, author FROM source
             WHERE id = ANY($ids) AND (user_id = $user_id OR (is_seed = true AND user_id = 'seed'))
             """,
             {"ids": all_source_uuids, "user_id": user_id},
@@ -126,7 +126,7 @@ async def list_episodes(
             except Exception:
                 domain = s["url"]
             source_map[str(s["id"])] = EpisodeSourceObject(
-                id=s["id"], domain=domain, title=s["title"]
+                id=s["id"], domain=domain, title=s["title"], author=s["author"]
             )
 
     result = []
@@ -176,7 +176,7 @@ async def get_episode(
         if source_uuids:
             src_rows = await db_query(
                 """
-                SELECT id, url, title FROM source
+                SELECT id, url, title, author FROM source
                 WHERE id = ANY($ids) AND (user_id = $user_id OR (is_seed = true AND user_id = 'seed'))
                 """,
                 {"ids": source_uuids, "user_id": user_id},
@@ -188,7 +188,7 @@ async def get_episode(
                 except Exception:
                     domain = s["url"]
                 source_objects.append(EpisodeSourceObject(
-                    id=s["id"], domain=domain, title=s["title"]
+                    id=s["id"], domain=domain, title=s["title"], author=s["author"]
                 ))
     data["source_objects"] = source_objects
     return EpisodeDetail(**data)
