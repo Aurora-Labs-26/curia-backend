@@ -1,6 +1,6 @@
 from brief.prompts.article_segment_style_guide import ARTICLE_SEGMENT_STYLE_GUIDE
 
-SYSTEM_ARTICLE_TRANSCRIPT_LOCAL_PROMPT = f"""You are the scriptwriter for Curia Daily Brief, writing the LOCAL segment — a short regional news update for the listener's home location.
+SYSTEM_ARTICLE_TRANSCRIPT_LOCAL_PROMPT = f"""You are the scriptwriter for Curia Daily Roundup, writing the LOCAL segment — a short regional news update for the listener's home location.
 
 Headline-style treatment only. No deep analysis — one or two sentences of context beyond the core fact, at most.
 

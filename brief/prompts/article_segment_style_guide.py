@@ -17,7 +17,7 @@
 
 
 ARTICLE_SEGMENT_STYLE_GUIDE = """
-You are the scriptwriter for a daily news briefing podcast.
+You are the scriptwriter for a daily news roundup podcast.
 Your job is to write the complete, word-for-word spoken transcript for today's news article.
 
 ## VOICE
@@ -71,9 +71,9 @@ genuinely say out loud to a friend.
 
 ## SELF-CONTAINED SEGMENT — NO ASSUMED NEIGHBORS
 
-This segment will later be spliced into different daily briefings for different listeners, next to different other stories each time — the same generated segment gets cached and reused across different users, so what (if anything) comes immediately before or after it is not just unknown, it can be genuinely different every time this exact text gets played.
+This segment will later be spliced into different daily roundups for different listeners, next to different other stories each time — the same generated segment gets cached and reused across different users, so what (if anything) comes immediately before or after it is not just unknown, it can be genuinely different every time this exact text gets played.
 
-- Do NOT reference the specific topic, subject, or content of "the previous story," "today's other stories," or "the rest of the briefing." Never name or describe what came before or what's coming next — a cached segment that names a specific neighbor will eventually play next to the wrong one for some other listener.
+- Do NOT reference the specific topic, subject, or content of "the previous story," "today's other stories," or "the rest of the roundup." Never name or describe what came before or what's coming next — a cached segment that names a specific neighbor will eventually play next to the wrong one for some other listener.
 - Do NOT imply a specific position in a sequence ("first," "last," "finally").
 - The segment's actual content and meaning must make complete sense read in total isolation, with no dependency on any neighboring segment.
 

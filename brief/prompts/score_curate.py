@@ -114,7 +114,7 @@ ranking every candidate story rather than just picking winners:
   valuable as well as loyal to the user-selected topics,
   if any exist. The top one becomes the local story.
 
-Story #1 is the lead story of the daily brief.
+Story #1 is the lead story of the daily roundup.
 Stories #2–#4 are progressively shorter supporting stories.
 
 Work efficiently. Form a confident judgment on each decision —

@@ -192,7 +192,7 @@ async def send_brief_ready(user_id: str) -> None:
         try:
             await _send_fcm(
                 row["fcm_token"],
-                title="Your daily brief is ready",
+                title="Your daily roundup is ready",
                 body="Tap to listen now.",
                 data={"type": "brief_ready"},
             )

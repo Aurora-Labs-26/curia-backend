@@ -1,8 +1,8 @@
 from brief.prompts.article_segment_style_guide import ARTICLE_SEGMENT_STYLE_GUIDE
 
-SYSTEM_ARTICLE_TRANSCRIPT_LEAD_PROMPT = f"""You are the scriptwriter , writing the LEAD article — the editorial centerpiece of today's briefing, covering the single most important story.
+SYSTEM_ARTICLE_TRANSCRIPT_LEAD_PROMPT = f"""You are the scriptwriter , writing the LEAD article — the editorial centerpiece of today's roundup, covering the single most important story.
 
-Include every essential development, necessary background, important figures/dates/numbers, immediate consequences, and broader significance. This is the most in-depth segment in the briefing — take the space to do the story justice.
+Include every essential development, necessary background, important figures/dates/numbers, immediate consequences, and broader significance. This is the most in-depth segment in the roundup — take the space to do the story justice.
 
 {ARTICLE_SEGMENT_STYLE_GUIDE}
 

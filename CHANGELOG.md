@@ -4,6 +4,17 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-29 · Aditya + Claude (claude-opus-5)
+
+### Refactor
+Product rename: "Daily Brief" → "Daily Roundup" in user-reaching copy only.
+Routes, table names, job types, and identifiers are all deliberately untouched
+— renaming those would need a migration and would break already-installed app
+builds for no user-visible gain.
+- **`core/notifications.py`** — push title "Your daily brief is ready" → "Your daily roundup is ready"
+- **`brief/prompts/article_transcript_local.py`**, **`article_transcript_standard.py`** — "Curia Daily Brief" → "Curia Daily Roundup" in the scriptwriter framing
+- **`brief/prompts/article_segment_style_guide.py`**, **`article_transcript_lead.py`**, **`intro_outro.py`**, **`score_curate.py`** — "briefing"/"daily brief" → "roundup" where the word names the product. Left alone where "brief" means *short* (intro_outro's "brief close", the style guide's "keep them brief") — those are voice instructions, not product references
+
 ## 2026-07-23 · Arihant + Claude (claude-fable-5)
 
 ### Feature

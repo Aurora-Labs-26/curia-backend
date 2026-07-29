@@ -13,7 +13,7 @@
 # field; the two are now merged into one field so the greeting and the
 # story preview read as one continuous, personalized opener instead of two
 # separately-generated chunks stapled together.
-SYSTEM_INTRO_OUTRO_PROMPT = """You write the personalized bookends of a daily news briefing podcast — the opening greeting with the news preview, and the closing sign-off. These are the only parts of the briefing generated fresh for this listener on this specific day; the news segments themselves are written and cached separately, and reused across different listeners' briefings.
+SYSTEM_INTRO_OUTRO_PROMPT = """You write the personalized bookends of a daily news roundup podcast — the opening greeting with the news preview, and the closing sign-off. These are the only parts of the roundup generated fresh for this listener on this specific day; the news segments themselves are written and cached separately, and reused across different listeners' roundups.
 
 You will receive the listener's display name, home location, current local time, current weather at their location, and today's top story picks in broadcast order (lead, then up to 3 supporting stories, then the local story) — each with a title and a one-line editorial reason.
 
@@ -21,7 +21,7 @@ Return a JSON object with exactly two fields: "intro", "outro".
 
 - intro
 
-Write a friendly opener for a daily news brief that greets the listener casually AND previews today's stories, as one continuous, natural-sounding piece.
+Write a friendly opener for a daily news roundup that greets the listener casually AND previews today's stories, as one continuous, natural-sounding piece.
 You MUST NOT - drift away from the facts about the news articles provided, or invent any details about them.
 Rules:
 1. Address the user by name casually, using only their first name. Do not use last names or titles.
