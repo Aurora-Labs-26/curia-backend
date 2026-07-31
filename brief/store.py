@@ -495,7 +495,16 @@ async def list_due_users_for_generation() -> List[Dict[str, Any]]:
               SELECT 1 FROM harness.daily_briefs db
               WHERE db.user_id = u.id
                 AND db.date = (now() AT TIME ZONE u.timezone)::date
-                AND db.status IN ('generating', 'ready')
+                AND (
+                    db.status IN ('generating', 'ready')
+                    -- A failed brief retries only for 2h after its FIRST
+                    -- attempt (the row's created_at — get_or_create reuses
+                    -- one row per (user, date)); a permanently failing
+                    -- generation must not burn a full pipeline run every
+                    -- 15-minute poll all day. (v3.1 review v1.md §4.2)
+                    OR (db.status = 'failed'
+                        AND db.created_at < now() - interval '2 hours')
+                )
           )
         """
     )

@@ -25,7 +25,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from api.auth import audio_user_id, current_user_id
 from api.schemas import CreateJobResponse
@@ -43,6 +43,20 @@ class BriefPreferences(BaseModel):
     scheduled_time: str = Field(default="09:00", pattern=r"^\d{2}:\d{2}$")
     # IANA zone from the client (Intl.DateTimeFormat().resolvedOptions().timeZone).
     timezone: str = Field(default="UTC", min_length=1, max_length=64)
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_iana(cls, v: str) -> str:
+        """Postgres validates zone names AT QUERY TIME inside
+        list_due_users_for_generation — a single garbage row would make that
+        one query (and everyone's scheduling) throw every poll. Refuse it here.
+        (v3.1 review v1.md §4.1)"""
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(v)
+        except Exception:
+            raise ValueError(f"unknown IANA timezone {v!r}")
+        return v
     # Normally omitted — the city is derived from the request IP. Sent only when
     # the user corrects a wrong guess.
     location_name: Optional[str] = Field(default=None, max_length=120)

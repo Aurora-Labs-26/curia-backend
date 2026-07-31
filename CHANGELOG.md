@@ -4,6 +4,27 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-07-31 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Merged Aditya's `v3.1` (fast-forward, 9 commits: scheduling, delivery push,
+prefs UX, IP-geo city, playback progress, brief audio route, missing
+`googlenewsdecoder` dependency — see `v3.1 review v1.md`), then closed the
+three gaps the review flagged, TDD'd with 5 new tests (3 mutants killed):
+- **`api/routes/brief.py`** — `BriefPreferences.timezone` now validated as a
+  real IANA zone (§4.1: one garbage row made `list_due_users_for_generation`
+  throw for ALL users every poll)
+- **`worker/main.py`** — brief cron jobs gated behind `CURIA_BRIEF_JOBS`
+  (§4.3: both worker services run the scheduler; set =0 on all but one or
+  Pre-Opt runs twice and dispatch races)
+- **`brief/store.py`** — failed briefs retry only for 2h after first attempt
+  (created_at bound, §4.2: permanent failures were re-enqueuing ~96×/day)
+- **`tests/test_brief_scheduling.py`** — gap tests; Aditya's failed-retry
+  assertion refined to the bounded-window contract
+- **`uv.lock`** — regenerated for `googlenewsdecoder` + `edge-tts`
+
+---
+
 ## 2026-07-30 · Aditya + Claude (claude-sonnet-5)
 
 ### Bug Fix

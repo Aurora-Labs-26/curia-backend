@@ -254,8 +254,14 @@ def _start_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(send_listen_reminders, CronTrigger(hour=14, minute=30, timezone="UTC"))
     # 11:00 AM IST = 05:30 UTC
     scheduler.add_job(send_reengagement_reminders, CronTrigger(hour=5, minute=30, timezone="UTC"))
-    scheduler.add_job(_run_brief_preopt_job, IntervalTrigger(hours=6))
-    scheduler.add_job(_run_brief_dispatch_job, IntervalTrigger(minutes=15))
+    # Both worker services call _start_scheduler; the brief jobs must run in
+    # exactly ONE of them (Pre-Opt is Sonnet-heavy — two schedulers doubles
+    # its cost, and double-dispatch races waste full pipeline runs). Set
+    # CURIA_BRIEF_JOBS=0 on every worker service except one.
+    # (v3.1 review v1.md §4.3)
+    if os.getenv("CURIA_BRIEF_JOBS", "1") != "0":
+        scheduler.add_job(_run_brief_preopt_job, IntervalTrigger(hours=6))
+        scheduler.add_job(_run_brief_dispatch_job, IntervalTrigger(minutes=15))
     scheduler.start()
     logger.info(
         "[worker] scheduler started: listen_reminder@14:30UTC reengagement@05:30UTC "

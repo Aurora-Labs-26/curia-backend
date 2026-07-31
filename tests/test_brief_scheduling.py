@@ -41,7 +41,12 @@ class TestListDueUsersForGeneration:
         # generation would silently never retry until the next calendar day.
         # Only an in-flight or already-succeeded row should block re-enqueue.
         assert "'generating', 'ready'" in sql or "'ready', 'generating'" in sql
-        assert "'failed'" not in sql
+        # Refined at merge (v3.1 review v1.md §4.2): failed rows DO retry —
+        # the original intent of asserting 'failed' was absent here — but only
+        # within a bounded window, so 'failed' may now appear in the SQL
+        # strictly as part of a created_at-bounded exclusion (see
+        # TestFailedRetryCap), never as a blanket exclusion.
+        assert "db.status = 'failed'" in sql and "created_at" in sql
 
     async def test_empty_when_nobody_due(self):
         pool = AsyncMock()
@@ -188,3 +193,73 @@ class TestSendBriefReady:
             await send_brief_ready("u1")
         send.assert_awaited_once()
         assert send.await_args.args[0] == "tok"
+
+
+# ---------------------------------------------------------------------------
+# Merge-review gap tests (v3.1 review v1.md §4.1–4.3)
+# ---------------------------------------------------------------------------
+
+
+class TestTimezoneValidation:
+    """§4.1: one garbage timezone row makes list_due_users_for_generation throw
+    for ALL users (single query) — so the API edge must refuse invalid IANA
+    names before they reach the table."""
+
+    def test_put_preferences_rejects_garbage_timezone(self):
+        from tests.test_brief_wiring import _client
+        r = _client().put("/brief/preferences", json={
+            "display_name": "A", "timezone": "Bengaluru/Wrong"})
+        assert r.status_code == 422
+
+    def test_put_preferences_accepts_valid_iana(self):
+        from unittest.mock import MagicMock
+        from tests.test_brief_wiring import _client
+        with patch("api.routes.brief.store") as st, \
+             patch("api.routes.brief.geo") as g:
+            st.create_user_with_topics = AsyncMock()
+            st.get_user = AsyncMock(return_value=None)
+            g.city_from_request = AsyncMock(return_value="Mumbai")
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "timezone": "Asia/Kolkata"})
+        assert r.status_code == 200
+        assert st.create_user_with_topics.await_args.args[-1] == "Asia/Kolkata"
+
+
+class TestSchedulerGating:
+    """§4.3: both worker services run _start_scheduler — the brief jobs must be
+    gateable to exactly one service or Pre-Opt (Sonnet-heavy) runs twice."""
+
+    def _jobs_added(self, env):
+        import worker.main as wm
+        sched = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+        with patch.object(wm, "AsyncIOScheduler", return_value=sched), \
+             patch.dict("os.environ", env, clear=False):
+            wm._start_scheduler()
+        return [str(c.args[0].__name__ if hasattr(c.args[0], "__name__") else c.args[0])
+                for c in sched.add_job.call_args_list]
+
+    def test_brief_jobs_on_by_default(self):
+        jobs = self._jobs_added({"CURIA_BRIEF_JOBS": ""})
+        assert any("brief_preopt" in j for j in jobs)
+        assert any("brief_dispatch" in j for j in jobs)
+
+    def test_brief_jobs_disabled_by_flag(self):
+        jobs = self._jobs_added({"CURIA_BRIEF_JOBS": "0"})
+        assert not any("brief" in j for j in jobs)
+        assert len(jobs) == 2      # the two notification crons stay
+
+
+class TestFailedRetryCap:
+    """§4.2: a permanently failing brief must not re-enqueue every 15 minutes
+    all day — failed rows stop retrying 2h after the first attempt."""
+
+    async def test_query_bounds_failed_retries_by_created_at(self):
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(return_value=[])
+        with patch.object(store, "harness_db") as db:
+            db.get_pool = AsyncMock(return_value=pool)
+            await store.list_due_users_for_generation()
+        sql = pool.fetch.await_args.args[0]
+        assert "failed" in sql, "failed rows must appear in the exclusion logic"
+        assert "created_at" in sql and "interval" in sql, \
+            "failed-row exclusion must be time-bounded, not permanent or unbounded"
