@@ -101,7 +101,7 @@ Follow this order exactly:
    Use the speaker name from the speaker block and format_config.display_name from the briefing.
    Natural, not formal. Said once.
 
-3. THE PILE. Reference what the listener has been saving. Host has been through it.
+3. THE STASH. Reference what the listener has been saving. Host has been through it.
    Tease the shape of the argument without naming the topic yet — a cycle, a pattern, a tension.
 
 4. THE SOURCE. Name what the listener saved.

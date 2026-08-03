@@ -23,6 +23,7 @@ dependencies = [
     "psycopg2-binary>=2.9",          # sync driver alembic + sqlalchemy use; asyncpg covers app-side
     # Misc
     "python-dotenv>=1.0",
+    "tzdata>=2024.1",                 # full IANA tz db incl. deprecated aliases (e.g. Asia/Calcutta) — image's system tzdata lacks these
     "loguru>=0.7",
     "pydub>=0.25",
     "audioop-lts>=0.2; python_version >= '3.13'",   # Python 3.13 dropped stdlib audioop; pydub needs it

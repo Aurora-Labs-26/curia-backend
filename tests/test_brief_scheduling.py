@@ -56,6 +56,36 @@ class TestListDueUsersForGeneration:
             assert await store.list_due_users_for_generation() == []
 
 
+class TestIsUserDueNow:
+    """GET /brief/today's single-user version of the same due check, used to
+    trigger generation eagerly instead of waiting up to 15 minutes for the
+    next dispatch poll."""
+
+    async def test_true_when_scheduled_time_passed(self):
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(return_value={"due": True})
+        with patch.object(store, "harness_db") as db:
+            db.get_pool = AsyncMock(return_value=pool)
+            assert await store.is_user_due_now("u1") is True
+        sql = pool.fetchrow.await_args.args[0]
+        assert "u.timezone" in sql
+        assert "u.scheduled_time" in sql
+
+    async def test_false_when_not_due_yet(self):
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(return_value={"due": False})
+        with patch.object(store, "harness_db") as db:
+            db.get_pool = AsyncMock(return_value=pool)
+            assert await store.is_user_due_now("u1") is False
+
+    async def test_false_when_user_not_found(self):
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(return_value=None)
+        with patch.object(store, "harness_db") as db:
+            db.get_pool = AsyncMock(return_value=pool)
+            assert await store.is_user_due_now("ghost") is False
+
+
 class TestBriefDispatchJob:
     async def test_enqueues_background_lane_per_due_user(self):
         from worker.main import _run_brief_dispatch_job

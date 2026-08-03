@@ -157,9 +157,27 @@ async def get_today(user_id: str = Depends(current_user_id)) -> dict:
         user = await store.get_user(user_id)
         if not user:
             raise HTTPException(404, "Brief preferences not set — PUT /brief/preferences first")
-        topics = await store.get_user_topics(user_id)
-        beats = [t["name"] for t in topics["chosen"]] + [t["name"] for t in topics["custom"]]
-        return {"status": "pending", "beats": beats, "scheduled_time": str(user["scheduled_time"])}
+        # Delivery time already passed today (e.g. signed up mid-afternoon,
+        # default 9am slot is already behind) — don't make the user wait up
+        # to 15 minutes for the next dispatch poll. Trigger generation right
+        # here instead of showing a stale "Ready at 9:00 AM" for a time
+        # that's already gone. get_or_create_daily_brief's (user_id, date)
+        # uniqueness means this only fires once — the next call finds the
+        # row this created and takes the normal path below.
+        if await store.is_user_due_now(user_id):
+            brief = await store.get_or_create_daily_brief(user_id, today)
+            if brief["created"]:
+                await enqueue(
+                    type="generate_brief",
+                    payload={"user_id": user_id, "date": today},
+                    user_id=user_id,
+                    lane="interactive",
+                )
+            pool_brief = brief
+        else:
+            topics = await store.get_user_topics(user_id)
+            beats = [t["name"] for t in topics["chosen"]] + [t["name"] for t in topics["custom"]]
+            return {"status": "pending", "beats": beats, "scheduled_time": str(user["scheduled_time"])}
     detail = await store.get_daily_brief_detail(pool_brief["id"])
     if not detail:
         return dict(pool_brief)

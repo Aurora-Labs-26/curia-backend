@@ -204,6 +204,7 @@ class TestBriefRoutes:
         with patch("api.routes.brief.store") as store:
             store.get_daily_brief_for_date = AsyncMock(return_value=None)
             store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
+            store.is_user_due_now = AsyncMock(return_value=False)
             store.get_user_topics = AsyncMock(return_value={
                 "chosen": [{"name": "Tech"}, {"name": "Business"}],
                 "custom": [{"name": "chess"}],
@@ -214,6 +215,46 @@ class TestBriefRoutes:
         assert body["status"] == "pending"
         assert body["beats"] == ["Tech", "Business", "chess"]
         assert body["scheduled_time"] == "09:00:00"
+
+    def test_today_triggers_generation_eagerly_when_already_due(self):
+        """No daily_briefs row yet AND the scheduled time has already passed
+        (e.g. a new user signs up mid-afternoon, default 9am slot is behind) —
+        don't make them wait up to 15 minutes for the next dispatch poll.
+        Create the row and enqueue interactive-lane generation right here."""
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.enqueue", AsyncMock()) as enq:
+            store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
+            store.is_user_due_now = AsyncMock(return_value=True)
+            store.get_or_create_daily_brief = AsyncMock(
+                return_value={"id": "b-1", "status": "generating", "created": True})
+            store.get_daily_brief_detail = AsyncMock(
+                return_value={"id": "b-1", "status": "generating", "articles": []})
+            store.get_latest_manifest = AsyncMock(return_value=[])
+            r = _client().get("/brief/today")
+        assert r.status_code == 200
+        assert r.json()["status"] == "generating"
+        enq.assert_awaited_once()
+        assert enq.await_args.kwargs["lane"] == "interactive"
+        assert enq.await_args.kwargs["type"] == "generate_brief"
+
+    def test_today_due_but_row_exists_does_not_reenqueue(self):
+        """created=False (a concurrent request already inserted the row, or
+        the dispatch poller beat this call to it) must not enqueue a second
+        job — get_or_create_daily_brief's uniqueness is the dedup point."""
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.enqueue", AsyncMock()) as enq:
+            store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
+            store.is_user_due_now = AsyncMock(return_value=True)
+            store.get_or_create_daily_brief = AsyncMock(
+                return_value={"id": "b-1", "status": "generating", "created": False})
+            store.get_daily_brief_detail = AsyncMock(
+                return_value={"id": "b-1", "status": "generating", "articles": []})
+            store.get_latest_manifest = AsyncMock(return_value=[])
+            r = _client().get("/brief/today")
+        assert r.status_code == 200
+        enq.assert_not_awaited()
 
     def test_today_returns_detail(self):
         with patch("api.routes.brief.store") as store:

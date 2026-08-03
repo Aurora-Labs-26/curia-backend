@@ -4,6 +4,63 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-03 · Aditya + Claude (claude-sonnet-5)
+
+### Bug Fix
+`GET /brief/today` always returned `status: "pending"` + the raw
+`scheduled_time` whenever no `daily_briefs` row existed yet — even when that
+delivery time had already passed for today (e.g. a brand-new signup at 4pm,
+default 9am slot already behind). The widget showed a stale "Ready at 9:00
+AM" and the user then had to wait up to 15 minutes for the next dispatch
+poll to actually pick them up. Every brand-new user hits exactly this branch
+on day one, since they have zero `daily_briefs` rows.
+- **`brief/store.py`** — added `is_user_due_now(user_id)`, the same
+  timezone-aware condition as `list_due_users_for_generation`'s WHERE
+  clause, scoped to one user.
+- **`api/routes/brief.py`** — `get_today` now checks `is_user_due_now` in the
+  "no row yet" branch; if due, creates the `daily_briefs` row and enqueues
+  `generate_brief` (interactive lane) right there instead of returning
+  `"pending"`. `get_or_create_daily_brief`'s `(user_id, date)` uniqueness
+  means this only enqueues once — a concurrent or later call finds the row
+  already created and skips straight to it. Response naturally becomes
+  `status: "generating"`, which the client already renders as "Putting
+  together today's stories…" — no frontend change needed.
+- **`tests/test_brief_wiring.py`** — updated the existing "not due" pending
+  test to stub `is_user_due_now=False` explicitly (it was auto-mocking
+  truthy and would otherwise always take the new eager-trigger branch);
+  added coverage for the eager-trigger-and-enqueue case and the
+  no-double-enqueue-when-row-already-exists case.
+- **`tests/test_brief_scheduling.py`** — added `TestIsUserDueNow` covering
+  true/false/user-not-found.
+
+## 2026-08-03 · Aditya + Claude (claude-sonnet-5)
+
+### Config
+App copy renamed "Pile" → "Stash" earlier; generated show audio still said
+"Pile" since the intro-section instruction that drives host dialogue was
+untouched. Audited every prompt/template file in the repo for literal
+"pile" — only these two instruct the LLM to reference it by name; the
+remaining hits (`core/ingest.py`, `studio/formats.py`, `api/routes/sources.py`,
+`worker/handlers/ingest.py`, `alembic/versions/0020_source_hidden.py`) are
+internal code comments, never sent to the model.
+- **`prompts/transcript.txt`** — `THE PILE` → `THE STASH` section label
+- **`prompts/transcript_merge.txt`** — same rename
+
+## 2026-08-03 · Aditya + Claude (claude-sonnet-5)
+
+### Bug Fix
+`POST /brief/preferences` rejected `timezone: "Asia/Calcutta"` (`unknown IANA
+timezone`) even though it's a real, if deprecated, IANA alias for
+`Asia/Kolkata` — some Android devices still return it from
+`Intl.DateTimeFormat().resolvedOptions().timeZone`. Root cause: the image had
+no explicit `tzdata` package; `/usr/share/zoneinfo` only existed as an
+incidental transitive apt dependency, whose data lacked the IANA "backward"
+compatibility links (deprecated aliases). Canonical zones (`Asia/Kolkata`,
+`UTC`, etc.) resolved fine, only legacy aliases failed.
+- **`pyproject.toml`** — added `tzdata>=2024.1` as an explicit dependency,
+  which ships the full official IANA tz database including backward-compat
+  aliases; Python's `zoneinfo` prefers this pip package over system data.
+
 ## 2026-07-31 · Arihant + Claude (claude-fable-5)
 
 ### Feature

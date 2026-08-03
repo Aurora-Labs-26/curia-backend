@@ -511,6 +511,23 @@ async def list_due_users_for_generation() -> List[Dict[str, Any]]:
     return [{"user_id": r["id"], "local_date": r["local_date"].isoformat()} for r in rows]
 
 
+async def is_user_due_now(user_id: str) -> bool:
+    """Same condition as list_due_users_for_generation's WHERE clause, scoped
+    to one user — lets GET /brief/today tell "waiting for a future delivery
+    time" apart from "delivery time already passed, dispatch just hasn't
+    polled yet" so it can trigger generation eagerly instead of making the
+    user wait up to 15 minutes for the next poll."""
+    pool = await harness_db.get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT (now() AT TIME ZONE u.timezone)::time >= u.scheduled_time AS due
+        FROM harness.users u WHERE u.id = $1
+        """,
+        user_id,
+    )
+    return bool(row and row["due"])
+
+
 async def get_or_create_daily_brief(user_id: str, brief_date: str) -> Dict[str, Any]:
     """Idempotent insert, mirroring legacy/db_service.py's brief_set_generating
     pattern (separate table/module, not imported).

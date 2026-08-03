@@ -100,7 +100,7 @@ Follow this order exactly:
    Use the speaker names and format_config.display_name from the briefing.
    Natural, not formal. Said once.
 
-3. THE PILE. Reference what the listener has been saving. Both hosts have been through it.
+3. THE STASH. Reference what the listener has been saving. Both hosts have been through it.
    Tease the shape of the argument without naming the topic yet.
    They may see it differently — that difference is what the episode explores.
 
