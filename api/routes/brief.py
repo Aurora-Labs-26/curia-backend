@@ -18,7 +18,7 @@ surface and admin/dashboard endpoints do not exist here).
 
 import asyncio
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone as _utc_tz
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +33,21 @@ from brief import geo, store
 from core.queue import enqueue
 
 router = APIRouter(prefix="/brief")
+
+
+def _user_local_date(user: dict, now_utc: Optional[datetime] = None) -> str:
+    """The user's own calendar date. Briefs are keyed by user-local date
+    everywhere else (the dispatcher's local_date, transcript records), so
+    routes must look up / create / enqueue by the same key — date.today() is
+    the container's UTC date and goes off-by-one for users east of UTC
+    between their midnight and UTC midnight. Falls back to UTC on a bad or
+    missing timezone (pre-0037 rows default to 'UTC' anyway)."""
+    from zoneinfo import ZoneInfo
+    now = now_utc or datetime.now(_utc_tz.utc)
+    try:
+        return now.astimezone(ZoneInfo(str(user.get("timezone") or "UTC"))).date().isoformat()
+    except Exception:
+        return now.date().isoformat()
 
 
 class BriefPreferences(BaseModel):
@@ -132,7 +147,7 @@ async def generate_brief(user_id: str = Depends(current_user_id)) -> CreateJobRe
     user = await store.get_user(user_id)
     if not user:
         raise HTTPException(409, "Set brief preferences first (PUT /brief/preferences)")
-    today = date.today().isoformat()
+    today = _user_local_date(user)
     job_id = await enqueue(
         type="generate_brief",
         payload={"user_id": user_id, "date": today},
@@ -151,12 +166,12 @@ async def get_today(user_id: str = Depends(current_user_id)) -> dict:
     this table alone. The client needs to tell them apart (show a pending
     card with the user's chosen beats vs. show nothing), so this checks
     harness.users directly rather than 404ing the same way for both."""
-    today = date.today().isoformat()
+    user = await store.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "Brief preferences not set — PUT /brief/preferences first")
+    today = _user_local_date(user)
     pool_brief = await store.get_daily_brief_for_date(user_id, today)
     if not pool_brief:
-        user = await store.get_user(user_id)
-        if not user:
-            raise HTTPException(404, "Brief preferences not set — PUT /brief/preferences first")
         # Delivery time already passed today (e.g. signed up mid-afternoon,
         # default 9am slot is already behind) — don't make the user wait up
         # to 15 minutes for the next dispatch poll. Trigger generation right
@@ -218,7 +233,8 @@ async def get_today_audio(request: Request, user_id: str = Depends(audio_user_id
     core.storage.blob._upload_local actually wrote the bytes to. Branches the
     same way GET /episodes/{id}/audio does (S3 presign vs. local range-
     streamed file)."""
-    today = date.today().isoformat()
+    user = await store.get_user(user_id)
+    today = _user_local_date(user) if user else date.today().isoformat()
     brief = await store.get_daily_brief_for_date(user_id, today)
     if not brief:
         raise HTTPException(404, "No brief for today")

@@ -191,6 +191,7 @@ class TestBriefRoutes:
         opted in. The client uses this to decide whether to show the pinned
         brief section at all."""
         with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(return_value=None)
             store.get_user = AsyncMock(return_value=None)
             r = _client().get("/brief/today")
@@ -202,6 +203,7 @@ class TestBriefRoutes:
         case above: the client shows a pending card (with the chosen beats
         as chips) instead of hiding the section entirely."""
         with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(return_value=None)
             store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
             store.is_user_due_now = AsyncMock(return_value=False)
@@ -223,6 +225,7 @@ class TestBriefRoutes:
         Create the row and enqueue interactive-lane generation right here."""
         with patch("api.routes.brief.store") as store, \
              patch("api.routes.brief.enqueue", AsyncMock()) as enq:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(return_value=None)
             store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
             store.is_user_due_now = AsyncMock(return_value=True)
@@ -244,6 +247,7 @@ class TestBriefRoutes:
         job — get_or_create_daily_brief's uniqueness is the dedup point."""
         with patch("api.routes.brief.store") as store, \
              patch("api.routes.brief.enqueue", AsyncMock()) as enq:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(return_value=None)
             store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
             store.is_user_due_now = AsyncMock(return_value=True)
@@ -258,6 +262,7 @@ class TestBriefRoutes:
 
     def test_today_returns_detail(self):
         with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(return_value={"id": "b-1"})
             store.get_daily_brief_detail = AsyncMock(
                 return_value={"id": "b-1", "status": "ready", "articles": []})
@@ -276,6 +281,7 @@ class TestBriefRoutes:
             {"kind": "outro", "text": "That's the brief.", "duration_s": 8.0},
         ]
         with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(return_value={"id": "b-1"})
             store.get_daily_brief_detail = AsyncMock(
                 return_value={"id": "b-1", "status": "ready", "articles": []})
@@ -323,12 +329,14 @@ class TestBriefAudioRoute:
 
     def test_404_when_no_brief_today(self):
         with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(return_value=None)
             r = _audio_client().get("/brief/today/audio")
         assert r.status_code == 404
 
     def test_409_when_audio_not_ready(self):
         with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(
                 return_value={"stitched_mp3_url": None})
             r = _audio_client().get("/brief/today/audio")
@@ -338,6 +346,7 @@ class TestBriefAudioRoute:
         with patch("api.routes.brief.store") as store, \
              patch("core.storage.blob.get_storage_backend", return_value="s3"), \
              patch("core.storage.blob.generate_presigned_url", return_value="https://signed.example/x"):
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(
                 return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
             r = _audio_client().get("/brief/today/audio")
@@ -348,6 +357,7 @@ class TestBriefAudioRoute:
         with patch("api.routes.brief.store") as store, \
              patch("core.storage.blob.get_storage_backend", return_value="s3"), \
              patch("core.storage.blob.generate_presigned_url", return_value=None):
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(
                 return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
             r = _audio_client().get("/brief/today/audio")
@@ -362,6 +372,7 @@ class TestBriefAudioRoute:
         with patch("api.routes.brief.store") as store, \
              patch("core.storage.blob.get_storage_backend", return_value="local"), \
              patch.dict("os.environ", {"CURIA_STORAGE_LOCAL_DIR": str(blob_dir)}):
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(
                 return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
             r = _audio_client().get("/brief/today/audio")
@@ -377,6 +388,7 @@ class TestBriefAudioRoute:
         with patch("api.routes.brief.store") as store, \
              patch("core.storage.blob.get_storage_backend", return_value="local"), \
              patch.dict("os.environ", {"CURIA_STORAGE_LOCAL_DIR": str(blob_dir)}):
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(
                 return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
             r = _audio_client().get("/brief/today/audio", headers={"Range": "bytes=2-4"})
@@ -390,6 +402,7 @@ class TestBriefAudioRoute:
         with patch("api.routes.brief.store") as store, \
              patch("core.storage.blob.get_storage_backend", return_value="local"), \
              patch.dict("os.environ", {"CURIA_STORAGE_LOCAL_DIR": str(blob_dir)}):
+            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
             store.get_daily_brief_for_date = AsyncMock(
                 return_value={"stitched_mp3_url": "audio/brief/missing.mp3"})
             r = _audio_client().get("/brief/today/audio")
@@ -412,6 +425,7 @@ class TestBriefAudioRoute:
             with patch("api.routes.brief.store") as store, \
                  patch("core.storage.blob.get_storage_backend", return_value="s3"), \
                  patch("core.storage.blob.generate_presigned_url", return_value="https://signed.example/x"):
+                store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
                 store.get_daily_brief_for_date = AsyncMock(
                     return_value={"stitched_mp3_url": "audio/brief/b-1.mp3"})
                 r = client.get("/brief/today/audio?token=ck_abc")
@@ -552,3 +566,95 @@ class TestWeather:
              patch("brief.weather.httpx.AsyncClient",
                    return_value=self._client(exc=RuntimeError("dns"))):
             assert await weather.get_weather_and_local_time("Mumbai") == ("", "")
+
+
+# ---------------------------------------------------------------------------
+# User-local date keying — briefs are keyed by the user's own calendar date
+# everywhere else (dispatcher local_date, transcript records); the routes must
+# look up / create / enqueue by the same key or users east of UTC get
+# off-by-one behavior around their midnight.
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timezone as _tz
+
+
+class TestUserLocalDate:
+    def test_kolkata_rolls_to_next_day_before_utc(self):
+        from api.routes.brief import _user_local_date
+        # 20:00 UTC Aug 3 = 01:30 IST Aug 4
+        now = datetime(2026, 8, 3, 20, 0, tzinfo=_tz.utc)
+        assert _user_local_date({"timezone": "Asia/Kolkata"}, now) == "2026-08-04"
+        assert _user_local_date({"timezone": "UTC"}, now) == "2026-08-03"
+
+    def test_deprecated_alias_works(self):
+        from api.routes.brief import _user_local_date
+        now = datetime(2026, 8, 3, 20, 0, tzinfo=_tz.utc)
+        assert _user_local_date({"timezone": "Asia/Calcutta"}, now) == "2026-08-04"
+
+    def test_garbage_or_missing_timezone_falls_back_to_utc(self):
+        from api.routes.brief import _user_local_date
+        now = datetime(2026, 8, 3, 20, 0, tzinfo=_tz.utc)
+        assert _user_local_date({"timezone": "Nope/Nope"}, now) == "2026-08-03"
+        assert _user_local_date({}, now) == "2026-08-03"
+
+
+class TestRoutesUseUserLocalDate:
+    """Routes are asserted against a SENTINEL date via a patched
+    _user_local_date — comparing against a live-computed IST date would pass
+    a UTC-reverted route for the ~18h/day the two calendars agree (caught by
+    a survived mutant)."""
+    SENTINEL = "2099-01-01"
+
+    def _expected(self):
+        return self.SENTINEL
+
+    def _sentinel_patch(self):
+        return patch("api.routes.brief._user_local_date", return_value=self.SENTINEL)
+
+    def test_today_looks_up_by_user_local_date(self):
+        with self._sentinel_patch(), patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={
+                "id": "u1", "scheduled_time": "09:00:00", "timezone": "Asia/Kolkata"})
+            store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            store.is_user_due_now = AsyncMock(return_value=False)
+            store.get_user_topics = AsyncMock(return_value={"chosen": [], "custom": []})
+            r = _client().get("/brief/today")
+        assert r.status_code == 200
+        assert store.get_daily_brief_for_date.await_args.args[1] == self._expected()
+
+    def test_eager_create_and_enqueue_use_user_local_date(self):
+        with self._sentinel_patch(), patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.enqueue", AsyncMock()) as enq:
+            store.get_user = AsyncMock(return_value={
+                "id": "u1", "scheduled_time": "00:01:00", "timezone": "Asia/Kolkata"})
+            store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            store.is_user_due_now = AsyncMock(return_value=True)
+            store.get_or_create_daily_brief = AsyncMock(
+                return_value={"id": "b-1", "status": "generating", "created": True})
+            store.get_daily_brief_detail = AsyncMock(
+                return_value={"id": "b-1", "status": "generating", "articles": []})
+            store.get_latest_manifest = AsyncMock(return_value=[])
+            _client().get("/brief/today")
+        assert store.get_or_create_daily_brief.await_args.args[1] == self._expected()
+        assert enq.await_args.kwargs["payload"]["date"] == self._expected()
+
+    def test_generate_enqueues_user_local_date(self):
+        with self._sentinel_patch(), patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.enqueue",
+                   AsyncMock(return_value="aaaaaaaa-0000-0000-0000-000000000003")) as enq:
+            store.get_user = AsyncMock(return_value={
+                "id": "u1", "timezone": "Asia/Kolkata"})
+            store.get_or_create_daily_brief = AsyncMock(
+                return_value={"id": "12345678-1234-1234-1234-123456789012"})
+            r = _client().post("/brief/generate")
+        assert r.status_code == 202
+        assert enq.await_args.kwargs["payload"]["date"] == self._expected()
+
+    def test_today_audio_looks_up_by_user_local_date(self):
+        with self._sentinel_patch(), patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={
+                "id": "u1", "timezone": "Asia/Kolkata"})
+            store.get_daily_brief_for_date = AsyncMock(return_value=None)
+            r = _audio_client().get("/brief/today/audio")
+        assert r.status_code == 404
+        assert store.get_daily_brief_for_date.await_args.args[1] == self._expected()

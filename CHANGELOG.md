@@ -4,6 +4,23 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-03 · Arihant + Claude (claude-fable-5)
+
+### Bug Fix
+Brief routes keyed lookups on the container's UTC date while the dispatcher
+and transcript records key on user-local date — off-by-one for users east of
+UTC between their midnight and UTC midnight (e.g. an IST user at 1 AM asking
+for "today" got yesterday's brief or a spurious eager generation).
+- **`api/routes/brief.py`** — new `_user_local_date(user)` (zoneinfo, falls
+  back to UTC on bad/missing tz); GET /today, GET /today/audio, and
+  POST /generate all look up / create / enqueue by it
+- **`tests/test_brief_wiring.py`** — 8 new tests; route assertions use a
+  sentinel-patched date after two live mutants exposed that comparing
+  against a live-computed IST date passes a UTC-reverted route for the
+  ~18h/day the calendars agree
+
+---
+
 ## 2026-08-03 · Aditya + Claude (claude-sonnet-5)
 
 ### Bug Fix
