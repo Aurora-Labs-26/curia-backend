@@ -24,9 +24,48 @@ from brief import store
 
 BRIEF_SPEAKER = os.getenv("CURIA_BRIEF_SPEAKER", "kenji")
 SEGMENT_PAUSE_MS = 600
+# Bookend BGM attenuation relative to the clip's own level — the brief keeps
+# news segments clean (no score under a war story); music marks only the
+# intro/outro, reusing the episode bank's dedicated intro/ and outro/ folders.
+BOOKEND_BGM_GAIN_DB = float(os.getenv("CURIA_BRIEF_BGM_GAIN_DB", "-14"))
 
 
-def _stitch(paths: list[str], out_path: str) -> tuple[float, list[tuple[int, int]]]:
+def _apply_bookend_bgm(combined, spans: list[tuple[int, int]], kinds: list[str]):
+    """Overlay bank music under the intro and outro segments ONLY. The clip is
+    fitted to the target region by vibe_mix's own picker (trim/loop), overlaid
+    (pydub overlay never extends the base), attenuated and faded — so the
+    output length and the recorded spans are invariant. Any failure returns
+    the voice-only mix unchanged: music is an enhancement, exactly the
+    episode-BGM posture."""
+    try:
+        from core.audio.vibe_mix import get_segment_bgm_clip, resolve_bank_dir
+
+        bank = resolve_bank_dir()
+        out = combined
+        if kinds and kinds[0] == "intro" and spans:
+            # cover lead-in + intro + its pause, fading out into the first story
+            end_ms = min(spans[0][1] + SEGMENT_PAUSE_MS, len(out))
+            clip = get_segment_bgm_clip("intro", end_ms, bank)
+            if clip:
+                out = out.overlay(
+                    (clip + BOOKEND_BGM_GAIN_DB).fade_in(400).fade_out(1200),
+                    position=0)
+        if kinds and kinds[-1] == "outro" and spans:
+            # start a beat early (in the preceding pause), ride out to the end
+            start_ms = max(spans[-1][0] - 300, 0)
+            clip = get_segment_bgm_clip("outro", len(out) - start_ms, bank)
+            if clip:
+                out = out.overlay(
+                    (clip + BOOKEND_BGM_GAIN_DB).fade_in(800).fade_out(600),
+                    position=start_ms)
+        return out
+    except Exception as e:
+        logger.warning(f"[brief.audio] bookend BGM skipped ({e}); shipping voice-only")
+        return combined
+
+
+def _stitch(paths: list[str], out_path: str,
+            kinds: list[str] | None = None) -> tuple[float, list[tuple[int, int]]]:
     """Concat WAV/MP3 segment files with pauses → one MP3. Returns
     (total_seconds, [(start_ms, end_ms) per clip]) — the spans are exact by
     construction (we are the ones doing the concatenation), and they're what
@@ -42,6 +81,8 @@ def _stitch(paths: list[str], out_path: str) -> tuple[float, list[tuple[int, int
         start = len(combined)
         combined += clip + pause
         spans.append((start, start + len(clip)))
+    if kinds:
+        combined = _apply_bookend_bgm(combined, spans, kinds)
     combined.export(out_path, format="mp3", bitrate=os.getenv("CURIA_AUDIO_BITRATE", "128k"))
     return combined.duration_seconds, spans
 
@@ -71,7 +112,8 @@ async def render_brief_audio(brief_id: str) -> str | None:
                 await adapter.synthesize_async(text, p)
                 seg_paths.append(p)
             out = os.path.join(tmp, "brief.mp3")
-            secs, spans = await asyncio.to_thread(_stitch, seg_paths, out)
+            secs, spans = await asyncio.to_thread(
+                _stitch, seg_paths, out, [m.get("kind", "") for m in spoken])
 
             key = f"audio/brief/{brief_id}.mp3"
             from core.storage.blob import upload_file

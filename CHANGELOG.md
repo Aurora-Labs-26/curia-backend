@@ -7,6 +7,19 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-08-03 (later) · Arihant + Claude (claude-fable-5)
 
 ### Feature
+Bookend BGM for the daily brief — music under the intro and outro ONLY
+(bank's dedicated intro/ and outro/ folders), news segments deliberately
+clean. Overlay is length-invariant (recorded chapter spans stay exact),
+attenuated (CURIA_BRIEF_BGM_GAIN_DB, default -14dB) with fades, and any
+bank/S3 failure ships voice-only — the episode-BGM posture.
+- **`brief/audio.py`** — `_apply_bookend_bgm` reusing vibe_mix's bank
+  resolution + clip fitting; `_stitch` threads segment kinds
+- **`tests/test_brief_audio_timings.py`** — RMS-region assertions over real
+  audio (music on bookends, silence on news, fade-out inside the file);
+  6/6 mutants killed — one survivor exposed a real gap (overlong outro clip
+  = fade lands past EOF = abrupt cut), now asserted
+
+### Feature
 Chapter-accurate brief audio timings — the stitched MP3 was un-seekable: the
 manifest's per-segment duration_s were 150-wpm word-count estimates from the
 placeholder-mp3 era, so client chapter offsets drifted 15-30s from the real

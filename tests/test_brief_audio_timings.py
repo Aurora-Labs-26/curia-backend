@@ -104,3 +104,81 @@ class TestStoreSetLatestManifestSegments:
         sql = pool.execute.await_args.args[0]
         assert "UPDATE harness.transcript_records" in sql
         assert "ORDER BY created_at DESC" in sql and "LIMIT 1" in sql
+
+
+# ---------------------------------------------------------------------------
+# Bookend BGM — music under intro/outro ONLY; length + spans invariant;
+# voice-only on any failure.
+# ---------------------------------------------------------------------------
+
+from pydub import AudioSegment
+from pydub.generators import Sine
+
+
+def _loud(ms):
+    return Sine(440).to_audio_segment(duration=ms).apply_gain(-3)
+
+
+def _rms(seg, start, end):
+    return seg[start:end].rms
+
+
+class TestBookendBgm:
+    SPANS = [(300, 1300), (1900, 2400), (3000, 4000)]
+    KINDS = ["intro", "standard", "outro"]
+
+    def _base(self):
+        return AudioSegment.silent(duration=4600)   # matches spans + trailing pause
+
+    def test_music_lands_on_bookends_not_the_news(self):
+        with patch("core.audio.vibe_mix.get_segment_bgm_clip",
+                   side_effect=lambda vibe, ms, bank: _loud(ms)), \
+             patch("core.audio.vibe_mix.resolve_bank_dir", return_value="/x"):
+            out = audio._apply_bookend_bgm(self._base(), self.SPANS, self.KINDS)
+        assert len(out) == 4600                       # length invariant
+        assert _rms(out, 500, 1200) > 0               # intro scored
+        assert _rms(out, 3200, 4000) > 0              # outro scored
+        assert _rms(out, 2000, 2300) == 0             # the news segment stays clean
+        # the outro music must FADE OUT inside the file — a clip fitted longer
+        # than the remaining runway puts its fade beyond the end and the music
+        # cuts abruptly (caught by a survived mutant)
+        assert _rms(out, 4550, 4600) < _rms(out, 3200, 3400) / 3
+
+    def test_no_bookend_kinds_no_music(self):
+        with patch("core.audio.vibe_mix.get_segment_bgm_clip",
+                   side_effect=lambda vibe, ms, bank: _loud(ms)), \
+             patch("core.audio.vibe_mix.resolve_bank_dir", return_value="/x"):
+            out = audio._apply_bookend_bgm(
+                self._base(), self.SPANS, ["lead", "standard", "local"])
+        assert out.rms == 0
+
+    def test_empty_bank_ships_voice_only(self):
+        with patch("core.audio.vibe_mix.get_segment_bgm_clip",
+                   side_effect=lambda vibe, ms, bank: None), \
+             patch("core.audio.vibe_mix.resolve_bank_dir", return_value="/x"):
+            out = audio._apply_bookend_bgm(self._base(), self.SPANS, self.KINDS)
+        assert out.rms == 0
+
+    def test_bank_crash_ships_voice_only(self):
+        with patch("core.audio.vibe_mix.resolve_bank_dir",
+                   side_effect=RuntimeError("s3 down")):
+            out = audio._apply_bookend_bgm(self._base(), self.SPANS, self.KINDS)
+        assert out.rms == 0
+        assert len(out) == 4600
+
+    def test_stitch_threads_kinds_and_keeps_spans(self, tmp_path):
+        a, b = str(tmp_path / "a.wav"), str(tmp_path / "b.wav")
+        _wav(a, 1.0); _wav(b, 0.5)
+        with patch.object(audio, "_apply_bookend_bgm",
+                          side_effect=lambda c, sp, k: c) as apply:
+            secs, spans = audio._stitch([a, b], str(tmp_path / "o.mp3"),
+                                        kinds=["intro", "outro"])
+        assert spans == [(300, 1300), (1900, 2400)]   # spans computed pre-overlay
+        apply.assert_called_once()
+        assert apply.call_args.args[2] == ["intro", "outro"]
+
+    def test_stitch_without_kinds_skips_bgm(self, tmp_path):
+        a = str(tmp_path / "a.wav"); _wav(a, 0.5)
+        with patch.object(audio, "_apply_bookend_bgm") as apply:
+            audio._stitch([a], str(tmp_path / "o.mp3"))
+        apply.assert_not_called()
