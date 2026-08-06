@@ -142,8 +142,12 @@ class NewsService:
         if is_global:
             return "US", "en-US", "US:en"
 
-        loc_lower = location.lower()
-        if any(k in loc_lower for k in ["india", "in", "bangalore", "delhi", "mumbai", "hyderabad", "chennai"]):
+        # Token match, not substring — the old `"in" in loc_lower` resolved
+        # "Berlin" and "China" to the India edition. Legacy fallback only:
+        # rows saved through the city picker carry a real country code and
+        # never reach this (see geo_for_country).
+        tokens = {t.strip(".,") for t in location.lower().split()}
+        if tokens & {"india", "in", "bangalore", "bengaluru", "delhi", "mumbai", "hyderabad", "chennai"}:
             return "IN", "en-IN", "IN:en"
 
         return "US", "en-US", "US:en"
@@ -240,6 +244,15 @@ class NewsService:
         except Exception as e:
             logger.error(f"Failed to fetch or parse RSS from URL: {url}. Error: {e}")
         return articles
+
+    def geo_for_country(self, country_code: str, location_name: str = "") -> tuple:
+        """News edition from a real ISO country code (the geocoder's, stored
+        on the user row since 0038). Unknown/missing code falls back to the
+        legacy keyword sniff of the location string."""
+        cc = (country_code or "").upper()
+        if cc in COUNTRY_GEO_PARAMS:
+            return COUNTRY_GEO_PARAMS[cc]
+        return self._get_geo_params(False, location_name)
 
     def resolve_local_geo(self, location_name: str) -> tuple:
         """Public wrapper around _get_geo_params for a freeform place name

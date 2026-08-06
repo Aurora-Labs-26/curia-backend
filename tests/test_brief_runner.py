@@ -80,6 +80,7 @@ class Rig:
             return_value=("Sunny, 30°C", "9:00 AM"))
 
         self.ns.resolve_local_geo = MagicMock(return_value=("IN", "en-IN", "IN:en"))
+        self.ns.geo_for_country = MagicMock(return_value=("IN", "en-IN", "IN:en"))
         self.ns.fetch_articles_for_topic = MagicMock(return_value=[])
 
         sels = [_selection(f"story {i}") for i in range(n_standard_pool + 1)]
@@ -289,7 +290,8 @@ class TestLocalQuery:
         local_call = [c for c in rig.ns.fetch_articles_for_topic.call_args_list
                       if str(c.args[-1]).startswith("Local:")][0]
         q = local_call.args[0]
-        assert q == '"Mumbai, India" ("Tech" OR "chess")'
+        # bare city, not the stored display string — see brief/cities.city_query_term
+        assert q == '"Mumbai" ("Tech" OR "chess")'
 
     async def test_local_query_bare_location_when_no_topics(self):
         rig = Rig()
@@ -297,7 +299,7 @@ class TestLocalQuery:
         await rig.run()
         local_call = [c for c in rig.ns.fetch_articles_for_topic.call_args_list
                       if str(c.args[-1]).startswith("Local:")][0]
-        assert local_call.args[0] == '"Mumbai, India"'
+        assert local_call.args[0] == '"Mumbai"'
 
     async def test_custom_topics_fetched_individually_and_quoted(self):
         rig = Rig()

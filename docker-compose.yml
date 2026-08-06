@@ -48,9 +48,6 @@ services:
       HUME_API_KEY: ${HUME_API_KEY:-}
       HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
       WEATHERAPI_KEY: ${WEATHERAPI_KEY:-}
-      # Docker Desktop presents a public IP as the peer locally, so IP geo
-      # returns junk — pin a city for dev. Unset in prod (see brief/geo.py).
-      BRIEF_GEO_OVERRIDE_CITY: ${BRIEF_GEO_OVERRIDE_CITY:-Bengaluru}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
       # Real path inside the mounted source tree — the whole repo is bind-mounted
       # at /app below, so a separate file mount inside it isn't possible.

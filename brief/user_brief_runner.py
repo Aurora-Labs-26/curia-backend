@@ -255,15 +255,21 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
         # local slot is already optional (see ordered_selections below).
         local_fetch_articles: List[Dict[str, Any]] = []
         if location_name.strip():
-            loc_gl, loc_hl, loc_ceid = ns.resolve_local_geo(location_name)
+            from brief.cities import city_query_term
+            # Query by the bare city — the stored canonical form is
+            # "City, Region, Country" (see brief/cities.py) and quoting the
+            # whole triple would demand an exact phrase no article contains.
+            local_city = city_query_term(location_name)
+            loc_gl, loc_hl, loc_ceid = ns.geo_for_country(
+                user.get("location_country") or "", location_name)
             all_topics = chosen_beats + custom_names
             local_query = (
-                f'"{location_name}" (' + " OR ".join(f'"{t}"' for t in all_topics) + ")"
+                f'"{local_city}" (' + " OR ".join(f'"{t}"' for t in all_topics) + ")"
                 if all_topics
-                else f'"{location_name}"'
+                else f'"{local_city}"'
             )
             local_fetch_articles = await asyncio.to_thread(
-                ns.fetch_articles_for_topic, local_query, loc_gl, loc_hl, loc_ceid, LOCAL_POOL_SIZE, f"Local: {location_name}"
+                ns.fetch_articles_for_topic, local_query, loc_gl, loc_hl, loc_ceid, LOCAL_POOL_SIZE, f"Local: {local_city}"
             )
             pool.extend(local_fetch_articles)
         else:

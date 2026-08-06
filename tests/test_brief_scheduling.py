@@ -242,17 +242,15 @@ class TestTimezoneValidation:
         assert r.status_code == 422
 
     def test_put_preferences_accepts_valid_iana(self):
-        from unittest.mock import MagicMock
         from tests.test_brief_wiring import _client
-        with patch("api.routes.brief.store") as st, \
-             patch("api.routes.brief.geo") as g:
+        with patch("api.routes.brief.store") as st:
             st.create_user_with_topics = AsyncMock()
             st.get_user = AsyncMock(return_value=None)
-            g.city_from_request = AsyncMock(return_value="Mumbai")
             r = _client().put("/brief/preferences", json={
                 "display_name": "A", "timezone": "Asia/Kolkata"})
         assert r.status_code == 200
-        assert st.create_user_with_topics.await_args.args[-1] == "Asia/Kolkata"
+        # signature: (..., custom_topics, timezone, location_country)
+        assert st.create_user_with_topics.await_args.args[6] == "Asia/Kolkata"
 
 
 class TestSchedulerGating:

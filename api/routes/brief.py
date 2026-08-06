@@ -5,10 +5,11 @@ Curia app (Firebase auth via current_user_id; the harness's CORS-*/Basic-Auth
 surface and admin/dashboard endpoints do not exist here).
 
   GET  /brief/topics            the 7 system Beats (for the prefs UI)
+  GET  /brief/cities            geocoder typeahead for the city picker
   GET  /brief/preferences       current saved prefs, to pre-fill the edit sheet
   PUT  /brief/preferences       upsert prefs: display name, beats, custom topics,
-                                delivery time + timezone; city derived from the
-                                request IP unless explicitly overridden
+                                delivery time + timezone; city optional and
+                                geocoder-validated (never free text, never IP)
   POST /brief/generate          enqueue today's brief (interactive lane) — 202 + job id
   GET  /brief/today             today's brief manifest (status + segments + audio when ready)
   GET  /brief/today/audio       presigned URL (s3) or range-streamed file (local) — mirrors GET /episodes/{id}/audio
@@ -29,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from api.auth import audio_user_id, current_user_id
 from api.schemas import CreateJobResponse
-from brief import geo, store
+from brief import cities, store
 from core.queue import enqueue
 
 router = APIRouter(prefix="/brief")
@@ -88,6 +89,19 @@ async def list_beats(user_id: str = Depends(current_user_id)) -> list[dict]:
     return [{"id": str(t["id"]), "name": t["name"]} for t in topics]
 
 
+@router.get("/cities")
+async def search_cities(q: str, user_id: str = Depends(current_user_id)) -> dict:
+    """Typeahead for the city picker — the ONLY sanctioned source of
+    location_name values (see brief/cities.py for why IP-geo was removed)."""
+    if len(q.strip()) < 2:
+        raise HTTPException(422, "q must be at least 2 characters")
+    try:
+        matches = await cities.search_cities(q.strip())
+    except cities.GeocoderUnavailable:
+        raise HTTPException(503, "City search is temporarily unavailable — try again")
+    return {"cities": matches}
+
+
 @router.get("/preferences")
 async def get_preferences(user_id: str = Depends(current_user_id)) -> dict:
     """Current saved prefs, for the profile screen's edit sheet to pre-fill
@@ -112,28 +126,43 @@ async def get_preferences(user_id: str = Depends(current_user_id)) -> dict:
 async def put_preferences(
     prefs: BriefPreferences, request: Request, user_id: str = Depends(current_user_id)
 ) -> dict:
-    """City comes from the request IP so the client never has to ask for a
-    location permission or make the user type one; an explicit location_name
-    (the "wrong city?" correction in the prefs UI) always wins. Either may be
-    empty — the brief then generates without a Local Pulse segment.
-
-    Returns the resolved city (200 with a body, not a bare 204) so the prefs
-    screen can show "Local news: <city>" with a correction affordance right
-    after the first save — there's no other endpoint that echoes
-    location_name back to the client."""
-    if prefs.location_name is not None:
-        location_name = prefs.location_name.strip()
-    else:
+    """City semantics (IP-geo removed 2026-08-03 — see brief/cities.py):
+      - omitted (None)      keep whatever city is already stored
+      - ""                  clear it — brief ships without Local Pulse
+      - non-empty           validated + normalized through the geocoder;
+                            422 with suggestions if it isn't a real place,
+                            503 if the geocoder is down (an unverified city
+                            is never stored)
+    Returns the stored city so the prefs screen can display it."""
+    location_country = None
+    if prefs.location_name is None:
         existing = await store.get_user(user_id)
-        location_name = await geo.city_from_request(request)
-        # Don't let a failed lookup wipe a city we already resolved (or the
-        # user already corrected) on an earlier save.
-        if not location_name and existing:
-            location_name = existing.get("location_name") or ""
+        location_name = (existing or {}).get("location_name") or ""
+        location_country = (existing or {}).get("location_country")
+    elif not prefs.location_name.strip():
+        location_name = ""
+    else:
+        try:
+            match = await cities.resolve_city(prefs.location_name)
+        except cities.GeocoderUnavailable:
+            raise HTTPException(
+                503, "City validation is temporarily unavailable — try again")
+        if not match:
+            try:
+                suggestions = [c["display"] for c in
+                               await cities.search_cities(prefs.location_name.split(",")[0])][:5]
+            except cities.GeocoderUnavailable:
+                suggestions = []
+            raise HTTPException(422, {
+                "error": f"Unknown city {prefs.location_name!r}",
+                "suggestions": suggestions,
+            })
+        location_name = match["display"]
+        location_country = match["country_code"] or None
 
     await store.create_user_with_topics(
         user_id, prefs.display_name, location_name, prefs.scheduled_time,
-        prefs.beats, prefs.custom_topics, prefs.timezone,
+        prefs.beats, prefs.custom_topics, prefs.timezone, location_country,
     )
     logger.info(
         f"[brief] prefs saved user={user_id} beats={len(prefs.beats)} "

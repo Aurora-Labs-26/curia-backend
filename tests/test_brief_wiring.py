@@ -120,48 +120,91 @@ class TestBriefRoutes:
             r = _client().get("/brief/preferences")
         assert r.status_code == 404
 
-    def test_preferences_upserts_user_with_topics(self):
-        """An explicit location_name (the prefs UI's "wrong city?" correction)
-        is used as-is — no IP lookup."""
-        with patch("api.routes.brief.store") as store:
+    def test_preferences_validates_and_normalizes_city(self):
+        """A submitted city goes through the geocoder and the CANONICAL form
+        is stored — free text never lands in the table verbatim."""
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.cities.resolve_city", AsyncMock(return_value={
+                 "display": "Mumbai, Maharashtra, India", "name": "Mumbai",
+                 "country_code": "IN", "timezone": "Asia/Kolkata"})):
             store.create_user_with_topics = AsyncMock()
             r = _client().put("/brief/preferences", json={
-                "display_name": "Arihant", "location_name": "Mumbai, India",
+                "display_name": "Arihant", "location_name": "mumbai",
                 "beats": ["Tech & Science"], "custom_topics": ["chess"],
                 "scheduled_time": "09:00", "timezone": "Asia/Kolkata",
             })
         assert r.status_code == 200
-        assert r.json() == {"location_name": "Mumbai, India"}
+        assert r.json() == {"location_name": "Mumbai, Maharashtra, India"}
         store.create_user_with_topics.assert_awaited_once_with(
-            "u1", "Arihant", "Mumbai, India", "09:00",
-            ["Tech & Science"], ["chess"], "Asia/Kolkata")
+            "u1", "Arihant", "Mumbai, Maharashtra, India", "09:00",
+            ["Tech & Science"], ["chess"], "Asia/Kolkata", "IN")
 
-    def test_preferences_derives_city_from_ip_when_not_given(self):
-        """No location_name -> resolved from the request IP, so the client never
-        has to ask for a location permission or make the user type a city."""
+    def test_preferences_unknown_city_422_with_suggestions(self):
+        """The "timbaktu" hole: garbage is refused at the edge, with picker
+        suggestions in the error body."""
         with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.geo.city_from_request",
-                   AsyncMock(return_value="Bengaluru")):
-            store.get_user = AsyncMock(return_value=None)
+             patch("api.routes.brief.cities.resolve_city", AsyncMock(return_value=None)), \
+             patch("api.routes.brief.cities.search_cities", AsyncMock(return_value=[
+                 {"display": "Timbuktu, Tombouctou, Mali", "name": "Timbuktu",
+                  "country_code": "ML", "timezone": "Africa/Bamako"}])):
             store.create_user_with_topics = AsyncMock()
             r = _client().put("/brief/preferences", json={
-                "display_name": "Arihant", "beats": ["Tech & Science"],
-            })
-        assert r.status_code == 200
-        assert r.json() == {"location_name": "Bengaluru"}
-        assert store.create_user_with_topics.await_args.args[2] == "Bengaluru"
+                "display_name": "A", "location_name": "timbaktuuu"})
+        assert r.status_code == 422
+        assert "Timbuktu, Tombouctou, Mali" in str(r.json())
+        store.create_user_with_topics.assert_not_awaited()
 
-    def test_preferences_failed_lookup_keeps_existing_city(self):
-        """A failed lookup must not wipe a city already resolved (or corrected
-        by the user) on an earlier save."""
+    def test_preferences_geocoder_down_is_503_not_a_guess(self):
+        from brief.cities import GeocoderUnavailable
         with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.geo.city_from_request", AsyncMock(return_value="")):
-            store.get_user = AsyncMock(return_value={"location_name": "Pune"})
+             patch("api.routes.brief.cities.resolve_city",
+                   AsyncMock(side_effect=GeocoderUnavailable("down"))):
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "location_name": "Mumbai"})
+        assert r.status_code == 503
+        store.create_user_with_topics.assert_not_awaited()
+
+    def test_preferences_empty_string_clears_city(self):
+        with patch("api.routes.brief.store") as store:
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "location_name": ""})
+        assert r.status_code == 200
+        assert r.json() == {"location_name": ""}
+        assert store.create_user_with_topics.await_args.args[2] == ""
+
+    def test_preferences_omitted_city_keeps_existing(self):
+        """None (field absent) = leave the stored city and country untouched —
+        the edit sheet can save beats/schedule without re-sending location."""
+        with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value={
+                "location_name": "Pune, Maharashtra, India", "location_country": "IN"})
             store.create_user_with_topics = AsyncMock()
             r = _client().put("/brief/preferences", json={"display_name": "Arihant"})
         assert r.status_code == 200
-        assert r.json() == {"location_name": "Pune"}
-        assert store.create_user_with_topics.await_args.args[2] == "Pune"
+        assert r.json() == {"location_name": "Pune, Maharashtra, India"}
+        assert store.create_user_with_topics.await_args.args[2] == "Pune, Maharashtra, India"
+        assert store.create_user_with_topics.await_args.args[-1] == "IN"
+
+    def test_cities_endpoint_returns_matches(self):
+        with patch("api.routes.brief.cities.search_cities", AsyncMock(return_value=[
+                {"display": "Mumbai, Maharashtra, India", "name": "Mumbai",
+                 "country_code": "IN", "timezone": "Asia/Kolkata"}])):
+            r = _client().get("/brief/cities?q=mum")
+        assert r.status_code == 200
+        assert r.json()["cities"][0]["display"] == "Mumbai, Maharashtra, India"
+
+    def test_cities_endpoint_short_query_422(self):
+        r = _client().get("/brief/cities?q=m")
+        assert r.status_code == 422
+
+    def test_cities_endpoint_outage_503(self):
+        from brief.cities import GeocoderUnavailable
+        with patch("api.routes.brief.cities.search_cities",
+                   AsyncMock(side_effect=GeocoderUnavailable("down"))):
+            r = _client().get("/brief/cities?q=mum")
+        assert r.status_code == 503
 
     def test_preferences_rejects_too_many_beats(self):
         r = _client().put("/brief/preferences", json={

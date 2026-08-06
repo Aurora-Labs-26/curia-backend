@@ -4,6 +4,45 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-03 (later) · Arihant + Claude (claude-fable-5)
+
+### Feature
+Location correctness overhaul — IP geolocation REMOVED as the city source
+(carrier IPs guess wrong too often to be silent truth), and free-text city
+input closed (the "timbaktu" hole). A geocoder (Open-Meteo, keyless) is now
+the only gate a city can enter through. NOT yet deployed — client-visible
+contract change, ships coordinated with the app's picker UI.
+- **`brief/cities.py`** — new: `search_cities` (typeahead), `resolve_city`
+  (validate + normalize to canonical "City, Region, Country"; exact display
+  round-trip preferred, typo-forgiving top match otherwise), fail posture =
+  raise on outage, never guess
+- **`brief/geo.py`** / **`tests/test_brief_geo.py`** — deleted (with the
+  XFF-index config and ipapi.co dependency); dead BRIEF_GEO_OVERRIDE_CITY
+  removed from docker-compose
+- **`api/routes/brief.py`** — new GET /brief/cities (422 short query, 503
+  outage); PUT /preferences: city omitted=keep, ""=clear, non-empty=geocoder-
+  validated (422 with suggestions for unknown places, 503 on outage — an
+  unverified city is never stored)
+- **`alembic/versions/0038_user_location_country.py`** — users.location_country
+  (geocoder ISO code); NOT applied to prod yet
+- **`brief/store.py`** — persists location_country through create_user paths
+- **`brief/news.py`** — `geo_for_country`: news edition from the real country
+  code; legacy keyword fallback fixed from substring to token match (the old
+  `"in" in loc` resolved "Berlin"/"China" to the India edition)
+- **`brief/user_brief_runner.py`** — local query uses the bare city
+  (`city_query_term`), not the canonical display triple; edition via stored
+  country code
+
+### Test
+- **`tests/test_brief_cities.py`** — new: 14 tests (parsing, display, match
+  order, outage posture, Berlin-not-India)
+- **`tests/test_brief_wiring.py`** / **`test_brief_scheduling.py`** /
+  **`test_brief_runner.py`** — IP-era tests replaced with the picker contract
+  (normalize, 422+suggestions, 503-not-guess, keep/clear semantics, cities
+  endpoint); 7/7 injected mutants killed
+
+---
+
 ## 2026-08-03 · Arihant + Claude (claude-fable-5)
 
 ### Bug Fix

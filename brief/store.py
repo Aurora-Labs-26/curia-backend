@@ -122,7 +122,8 @@ async def get_or_create_custom_topic(name: str) -> str:
 
 
 async def create_user(user_id: str, display_name: str, location_name: str,
-                      scheduled_time: Any = "07:00", timezone: str = "UTC") -> str:
+                      scheduled_time: Any = "07:00", timezone: str = "UTC",
+                      location_country: Any = None) -> str:
     """Upsert-by-Curia-user-id (port change: harness.users.id IS the Curia
     user id — text — so brief prefs join Curia identity directly; email
     column dropped, display_name added). Resubmitting updates
@@ -134,16 +135,18 @@ async def create_user(user_id: str, display_name: str, location_name: str,
     pool = await harness_db.get_pool()
     row = await pool.fetchrow(
         """
-        INSERT INTO harness.users (id, display_name, location_name, scheduled_time, timezone)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO harness.users (id, display_name, location_name, scheduled_time, timezone, location_country)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (id) DO UPDATE SET
             display_name = EXCLUDED.display_name,
             location_name = EXCLUDED.location_name,
             scheduled_time = EXCLUDED.scheduled_time,
-            timezone = EXCLUDED.timezone
+            timezone = EXCLUDED.timezone,
+            location_country = EXCLUDED.location_country
         RETURNING id
         """,
         user_id, display_name, location_name, _to_time(scheduled_time), timezone or "UTC",
+        (location_country or None),
     )
     return str(row["id"])
 
@@ -172,6 +175,7 @@ async def create_user_with_topics(
     chosen_topic_names: List[str],
     custom_topic_names: List[str],
     timezone: str = "UTC",
+    location_country: Any = None,
 ) -> str:
     """Generalizes scripts/seed_users.py's per-user create+link loop. Unknown
     chosen_topic_names (not matching a system topic) are silently skipped —
@@ -185,7 +189,7 @@ async def create_user_with_topics(
     kept the old ones. This is the "save preferences" entry point (PUT
     /brief/preferences, from both first-run and the profile screen), so the
     submitted set is the whole truth."""
-    user_id = await create_user(user_id, display_name, location_name, scheduled_time, timezone)
+    user_id = await create_user(user_id, display_name, location_name, scheduled_time, timezone, location_country)
 
     system_topics = await list_system_topics()
     topic_id_by_name = {t["name"]: str(t["id"]) for t in system_topics}
@@ -225,7 +229,7 @@ async def list_users() -> List[Dict[str, Any]]:
 async def get_user(user_id: str) -> Optional[Dict[str, Any]]:
     pool = await harness_db.get_pool()
     row = await pool.fetchrow(
-        "SELECT id, display_name, location_name, scheduled_time, timezone, created_at FROM harness.users WHERE id = $1",
+        "SELECT id, display_name, location_name, scheduled_time, timezone, location_country, created_at FROM harness.users WHERE id = $1",
         user_id,
     )
     return dict(row) if row else None
