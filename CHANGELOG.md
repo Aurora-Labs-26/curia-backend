@@ -7,6 +7,23 @@ Each entry: **date · who made the change · what changed and why.**
 ## 2026-08-03 (later) · Arihant + Claude (claude-fable-5)
 
 ### Feature
+Chapter-accurate brief audio timings — the stitched MP3 was un-seekable: the
+manifest's per-segment duration_s were 150-wpm word-count estimates from the
+placeholder-mp3 era, so client chapter offsets drifted 15-30s from the real
+TTS pace (episodes have real tts_timings; the brief never did).
+- **`brief/audio.py`** — `_stitch` now returns exact per-clip (start_ms,
+  end_ms) spans (300ms lead + clip + 600ms pause, by construction); after
+  upload, the REAL start_s/duration_s are written back onto the manifest's
+  spoken segments (silent segments left untimed), best-effort — a failed
+  write never un-ships the audio
+- **`brief/store.py`** — `set_latest_manifest_segments` (updates only the
+  newest transcript record for the user+date)
+- **`tests/test_brief_audio_timings.py`** — new: spans asserted over REAL
+  generated WAVs of known lengths, write-back contract, failure isolation;
+  6/6 mutants killed (one initial survivor was a mistargeted mutation — the
+  pattern hit get_latest_manifest's identical ORDER BY — retargeted + killed)
+
+### Feature
 Location correctness overhaul — IP geolocation REMOVED as the city source
 (carrier IPs guess wrong too often to be silent truth), and free-text city
 input closed (the "timbaktu" hole). A geocoder (Open-Meteo, keyless) is now

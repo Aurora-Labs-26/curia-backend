@@ -516,9 +516,11 @@ class TestRenderBriefAudio:
              patch.object(audio.store, "get_latest_manifest",
                           AsyncMock(return_value=_manifest())), \
              patch.object(audio.store, "set_daily_brief_audio", set_url), \
+             patch.object(audio.store, "set_latest_manifest_segments", AsyncMock()), \
              patch("core.llm_config.resolve.tts", return_value=adapter), \
              patch("core.storage.blob.upload_file", upload), \
-             patch.object(audio, "_stitch", return_value=42.0):
+             patch.object(audio, "_stitch",
+                          return_value=(42.0, [(300, 1300), (1900, 2400), (3000, 3600)])):
             key = await audio.render_brief_audio("b-1")
         assert key == "audio/brief/b-1.mp3"
         assert adapter.synthesize_async.await_count == 3

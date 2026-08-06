@@ -648,6 +648,25 @@ async def get_latest_manifest(user_id: str, brief_date: str):
     return _jsonb(row["segments"])
 
 
+async def set_latest_manifest_segments(user_id: str, brief_date: str, segments) -> None:
+    """Overwrites the newest transcript record's segments for this user's
+    brief_date — used by brief/audio.py to replace the 150-wpm duration
+    estimates with the real stitched start_s/duration_s per segment."""
+    import json as _json
+    pool = await harness_db.get_pool()
+    await pool.execute(
+        """
+        UPDATE harness.transcript_records SET segments = $3
+        WHERE id = (
+            SELECT id FROM harness.transcript_records
+            WHERE user_id = $1 AND title LIKE '%' || $2 || '%'
+            ORDER BY created_at DESC LIMIT 1
+        )
+        """,
+        user_id, brief_date, _json.dumps(segments),
+    )
+
+
 async def get_daily_brief_for_date(user_id: str, brief_date: str):
     """Read-only lookup (port addition for GET /brief/today)."""
     pool = await harness_db.get_pool()
