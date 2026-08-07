@@ -4,6 +4,23 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-07 (2) · Claude (claude-sonnet-5)
+
+### Bug Fix
+`delete_account` crashed with `UndefinedColumnError` on a fresh-migrated DB:
+`core/account.py` and `api/routes/auth.py` both read/write
+`users.apple_refresh_token` / `apple_client_id` (to revoke the Apple grant
+on deletion, App Store 5.1.1(v)), but no migration ever created those
+columns — only ever worked in environments where they existed via an
+undocumented manual `ALTER TABLE`. Found while clearing a local test
+account (`flashtester112@gmail.com`) after today's `v3` pull.
+- **`alembic/versions/0039_apple_refresh_token.py`** — adds both columns,
+  nullable text, matching `0009_firebase_uid`'s convention for the plain
+  `users` table (not `harness.users`, which is the separate brief-prefs
+  table — easy to conflate, `0038` right above this one targets that one)
+
+---
+
 ## 2026-08-03 (later) · Arihant + Claude (claude-fable-5)
 
 ### Feature
