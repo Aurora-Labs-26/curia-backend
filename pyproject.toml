@@ -41,6 +41,7 @@ dependencies = [
     "youtube-transcript-api>=1.2",   # YouTube transcript fetch
     "yt-dlp>=2024.1",                # YouTube metadata (title/duration/upload_date) — no API key needed
     "posthog>=3.7",                  # backend analytics (episode_generated, source_ingested, etc.)
+    "numpy>=1.26",                   # brief/scoring.py — used directly, was only a stale transitive lock entry
 ]
 
 [project.optional-dependencies]
