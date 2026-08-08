@@ -137,7 +137,7 @@ class TestBriefRoutes:
         assert r.json() == {"location_name": "Mumbai, Maharashtra, India"}
         store.create_user_with_topics.assert_awaited_once_with(
             "u1", "Arihant", "Mumbai, Maharashtra, India", "09:00",
-            ["Tech & Science"], ["chess"], "Asia/Kolkata", "IN")
+            ["Tech & Science"], ["chess"], "Asia/Kolkata", "IN", None, None)
 
     def test_preferences_unknown_city_422_with_suggestions(self):
         """The "timbaktu" hole: garbage is refused at the edge, with picker
@@ -185,7 +185,7 @@ class TestBriefRoutes:
         assert r.status_code == 200
         assert r.json() == {"location_name": "Pune, Maharashtra, India"}
         assert store.create_user_with_topics.await_args.args[2] == "Pune, Maharashtra, India"
-        assert store.create_user_with_topics.await_args.args[-1] == "IN"
+        assert store.create_user_with_topics.await_args.args[7] == "IN"
 
     def test_cities_endpoint_returns_matches(self):
         with patch("api.routes.brief.cities.search_cities", AsyncMock(return_value=[
@@ -568,16 +568,20 @@ class TestManifestStoreHelpers:
 
 
 class TestWeather:
+    # WEATHER_PROVIDER pinned to "weatherapi" throughout: these tests assert
+    # WeatherAPI.com's specific response shape. OpenWeatherMap (the new
+    # default) has its own coverage in TestOpenWeatherProvider below.
     async def test_no_key_short_circuits_without_http(self):
         from brief import weather
-        with patch.dict("os.environ", {"WEATHERAPI_KEY": ""}), \
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "", "OPENWEATHER_API_KEY": "",
+                                        "WEATHER_PROVIDER": "weatherapi"}), \
              patch("brief.weather.httpx.AsyncClient") as client:
             assert await weather.get_weather_and_local_time("Mumbai") == ("", "")
         client.assert_not_called()
 
     async def test_no_location_short_circuits(self):
         from brief import weather
-        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}):
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k", "WEATHER_PROVIDER": "weatherapi"}):
             assert await weather.get_weather_and_local_time("") == ("", "")
 
     def _client(self, resp=None, exc=None):
@@ -593,7 +597,7 @@ class TestWeather:
         resp.json.return_value = {
             "current": {"condition": {"text": "Sunny"}, "temp_c": 31.0},
             "location": {"localtime": "2026-07-23 09:00"}}
-        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}), \
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k", "WEATHER_PROVIDER": "weatherapi"}), \
              patch("brief.weather.httpx.AsyncClient", return_value=self._client(resp)):
             out = await weather.get_weather_and_local_time("Mumbai")
         assert out == ("Sunny, 31.0°C", "2026-07-23 09:00")
@@ -601,16 +605,76 @@ class TestWeather:
     async def test_non_200_returns_empty(self):
         from brief import weather
         resp = MagicMock(status_code=403, text="quota")
-        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}), \
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k", "WEATHER_PROVIDER": "weatherapi"}), \
              patch("brief.weather.httpx.AsyncClient", return_value=self._client(resp)):
             assert await weather.get_weather_and_local_time("Mumbai") == ("", "")
 
     async def test_network_exception_swallowed(self):
         from brief import weather
-        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k"}), \
+        with patch.dict("os.environ", {"WEATHERAPI_KEY": "k", "WEATHER_PROVIDER": "weatherapi"}), \
              patch("brief.weather.httpx.AsyncClient",
                    return_value=self._client(exc=RuntimeError("dns"))):
             assert await weather.get_weather_and_local_time("Mumbai") == ("", "")
+
+
+class TestOpenWeatherProvider:
+    def _client(self, resp=None, exc=None):
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.get = AsyncMock(return_value=resp, side_effect=exc)
+        return client
+
+    async def test_default_provider_is_openweather(self):
+        from brief import weather
+        with patch.dict("os.environ", {"OPENWEATHER_API_KEY": "k"}):
+            assert weather.settings.WEATHER_PROVIDER == "openweather"
+
+    async def test_happy_path_prefers_coordinates_when_given(self):
+        from brief import weather
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "weather": [{"description": "clear sky"}],
+            "main": {"temp": 22.5},
+            "timezone": 19800,
+        }
+        with patch.dict("os.environ", {"OPENWEATHER_API_KEY": "k", "WEATHER_PROVIDER": "openweather"}), \
+             patch("brief.weather.httpx.AsyncClient", return_value=self._client(resp)) as client:
+            weather_str, local_time = await weather.get_weather_and_local_time(
+                "Mumbai, Maharashtra, India", 19.076, 72.877
+            )
+        assert weather_str == "Clear sky, 22.5°C"
+        assert local_time
+        called_params = client.return_value.get.await_args.kwargs["params"]
+        assert called_params["lat"] == 19.076 and called_params["lon"] == 72.877
+        assert "q" not in called_params
+
+    async def test_falls_back_to_free_text_without_coordinates(self):
+        from brief import weather
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "weather": [{"description": "clear sky"}], "main": {"temp": 22.5}, "timezone": 0,
+        }
+        with patch.dict("os.environ", {"OPENWEATHER_API_KEY": "k", "WEATHER_PROVIDER": "openweather"}), \
+             patch("brief.weather.httpx.AsyncClient", return_value=self._client(resp)) as client:
+            await weather.get_weather_and_local_time("Mumbai, Maharashtra, India")
+        called_params = client.return_value.get.await_args.kwargs["params"]
+        assert called_params["q"] == "Mumbai, Maharashtra, India"
+        assert "lat" not in called_params
+
+    async def test_falls_back_to_weatherapi_when_only_that_key_is_set(self):
+        from brief import weather
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "current": {"condition": {"text": "Sunny"}, "temp_c": 31.0},
+            "location": {"localtime": "2026-07-23 09:00"}}
+        with patch.dict("os.environ", {"OPENWEATHER_API_KEY": "", "WEATHERAPI_KEY": "k",
+                                        "WEATHER_PROVIDER": "openweather"}), \
+             patch("brief.weather.httpx.AsyncClient", return_value=self._client(resp)) as client:
+            out = await weather.get_weather_and_local_time("Mumbai")
+        assert out == ("Sunny, 31.0°C", "2026-07-23 09:00")
+        called_url = client.return_value.get.await_args.args[0]
+        assert "weatherapi.com" in called_url
 
 
 # ---------------------------------------------------------------------------

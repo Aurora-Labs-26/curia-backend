@@ -48,6 +48,8 @@ services:
       HUME_API_KEY: ${HUME_API_KEY:-}
       HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
       WEATHERAPI_KEY: ${WEATHERAPI_KEY:-}
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+      WEATHER_PROVIDER: ${WEATHER_PROVIDER:-}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
       # Real path inside the mounted source tree — the whole repo is bind-mounted
       # at /app below, so a separate file mount inside it isn't possible.
@@ -81,6 +83,8 @@ services:
       HUME_API_KEY: ${HUME_API_KEY:-}
       HUME_SECRET_KEY: ${HUME_SECRET_KEY:-}
       WEATHERAPI_KEY: ${WEATHERAPI_KEY:-}
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+      WEATHER_PROVIDER: ${WEATHER_PROVIDER:-}
       # init_firebase() runs unconditionally at worker startup — without these,
       # .env's stale GOOGLE_APPLICATION_CREDENTIALS value (pointing at a file
       # that no longer exists) crashes the whole container on boot instead of
