@@ -4,6 +4,24 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-07 · Claude (claude-sonnet-5)
+
+### Bug Fix
+Worker crash-loop on a fresh build: `brief/scoring.py` does `import numpy as np`
+at module level (since 2026-07-23, `8075332`), but numpy was never declared in
+`pyproject.toml`'s installable dependencies — only present as a stale transitive
+entry in `uv.lock` (leftover from before torch was dropped). Docker's build path
+(`pip install -e ".[api]"`) never installed it, so `worker/main.py`'s eager
+import chain (`worker.handlers` → `brief.preopt_runner` → `brief.pipeline` →
+`brief.scoring`) crashed on every worker start — zero background jobs process
+(no episode/brief generation, no source ingestion) in any fresh build,
+including a real ECS Fargate deploy from this Dockerfile. The API server itself
+was unaffected (routes lazy-import the same chain). Found while pulling `v3`
+locally to test the geocoder/BGM/timing changes.
+- **`pyproject.toml`** — added `numpy>=1.26` to `dependencies`
+
+---
+
 ## 2026-08-03 (later) · Arihant + Claude (claude-fable-5)
 
 ### Feature
