@@ -36,7 +36,8 @@ class TestSearchCities:
         with patch("brief.cities.httpx.AsyncClient", return_value=_client(_resp([MUMBAI]))):
             out = await cities.search_cities("mumbai")
         assert out == [{"display": "Mumbai, Maharashtra, India", "name": "Mumbai",
-                        "country_code": "IN", "timezone": "Asia/Kolkata"}]
+                        "country_code": "IN", "timezone": "Asia/Kolkata",
+                        "latitude": None, "longitude": None}]
 
     async def test_display_skips_missing_admin1(self):
         row = {"name": "Singapore", "country": "Singapore", "country_code": "SG",

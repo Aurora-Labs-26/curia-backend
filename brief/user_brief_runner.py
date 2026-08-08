@@ -88,7 +88,9 @@ async def _regenerate_bookends_for_brief(
             raise ValueError(f"Unknown user_id: {user_id}")
         location_name = user["location_name"]
         display_name = cache_service.display_name_for(user)
-        weather, local_time = await weather_service.get_weather_and_local_time(location_name)
+        weather, local_time = await weather_service.get_weather_and_local_time(
+            location_name, user.get("latitude"), user.get("longitude")
+        )
 
         io_selections = [{"title": a["title"], "reason": a.get("reason") or ""} for a in articles]
         io_result = await pipeline_manager.run_intro_outro_step(
@@ -188,7 +190,9 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
             raise ValueError(f"Unknown user_id: {user_id}")
         location_name = user["location_name"]
         display_name = cache_service.display_name_for(user)
-        weather, local_time = await weather_service.get_weather_and_local_time(location_name)
+        weather, local_time = await weather_service.get_weather_and_local_time(
+            location_name, user.get("latitude"), user.get("longitude")
+        )
 
         user_topics = await cache_service.get_user_topics(user_id)
         chosen_topics = user_topics["chosen"]

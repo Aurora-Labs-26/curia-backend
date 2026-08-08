@@ -4,6 +4,55 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-08 · Claude (claude-sonnet-5)
+
+### Feature
+Weather went single-provider (WeatherAPI.com only, free-text search) to
+configurable-provider + coordinate-first. WeatherAPI has shown inaccurate
+conditions for some users; root cause was two-fold: (1) no alternate
+provider to compare against, and (2) `brief/cities.py`'s geocoder result was
+narrowed to `{display, name, country_code, timezone}` before reaching
+weather, discarding the lat/lon the geocoder already returned — so
+`brief/weather.py` had to re-search the free-text city string against a
+second, independent provider, which can resolve to a different same-named
+place than the one the picker confirmed.
+- **`brief/config.py`** — added `OPENWEATHER_API_KEY` and `WEATHER_PROVIDER`
+  (default `"openweather"`) settings, mirroring the existing `WEATHERAPI_KEY`
+  property pattern.
+- **`brief/weather.py`** — rewritten as a provider-agnostic dispatcher
+  (`_openweather` default, `_weatherapi` fallback) that prefers
+  latitude/longitude over free-text search when the caller has coordinates;
+  falls back to whichever provider has a key configured if the selected
+  `WEATHER_PROVIDER`'s own key is unset. Public `get_weather_and_local_time`
+  signature gained optional `latitude`/`longitude` params; return shape
+  unchanged.
+- **`brief/cities.py`** — `search_cities()` (and by extension
+  `resolve_city()`) now also returns `latitude`/`longitude` from Open-Meteo's
+  geocoder response instead of discarding them.
+- **`brief/store.py`** — `create_user`/`create_user_with_topics` accept
+  `latitude`/`longitude` and persist them to the existing (previously
+  unpopulated) `harness.users.location` point column; `get_user` decodes it
+  back into `latitude`/`longitude` keys.
+- **`api/routes/brief.py`** — `PUT /brief/preferences` threads the geocoder
+  match's lat/lon through to `create_user_with_topics`, and propagates the
+  existing stored lat/lon on the "omitted city, keep existing" path.
+- **`brief/user_brief_runner.py`** — both call sites of
+  `get_weather_and_local_time` now pass the user's stored lat/lon.
+- **`docker-compose.yml`** — passes through `OPENWEATHER_API_KEY` and
+  `WEATHER_PROVIDER` to the `api` and `worker` services, same pattern as
+  `WEATHERAPI_KEY`.
+- **`.env`** (local, gitignored) — added `WEATHER_PROVIDER=openweather` and
+  `OPENWEATHER_API_KEY`.
+- **`tests/test_brief_wiring.py`**, **`tests/test_brief_cities.py`** —
+  updated for the new lat/lon fields and provider-agnostic weather dispatch;
+  added `TestOpenWeatherProvider` covering coordinate-vs-free-text
+  dispatch and the key-presence fallback. Full brief suite: 127/127 passing.
+
+No new migration — `harness.users.location` (point) already existed from
+0035_brief_schema, just never populated by any code path until now.
+
+---
+
 ## 2026-08-03 (later) · Arihant + Claude (claude-fable-5)
 
 ### Feature

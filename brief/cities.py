@@ -70,6 +70,8 @@ async def search_cities(q: str, count: int = 8) -> List[Dict[str, Any]]:
             "name": r.get("name") or "",
             "country_code": (r.get("country_code") or "").upper(),
             "timezone": r.get("timezone") or "",
+            "latitude": r.get("latitude"),
+            "longitude": r.get("longitude"),
         }
         for r in results
     ]

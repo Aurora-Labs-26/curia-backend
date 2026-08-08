@@ -135,10 +135,13 @@ async def put_preferences(
                             is never stored)
     Returns the stored city so the prefs screen can display it."""
     location_country = None
+    latitude = longitude = None
     if prefs.location_name is None:
         existing = await store.get_user(user_id)
         location_name = (existing or {}).get("location_name") or ""
         location_country = (existing or {}).get("location_country")
+        latitude = (existing or {}).get("latitude")
+        longitude = (existing or {}).get("longitude")
     elif not prefs.location_name.strip():
         location_name = ""
     else:
@@ -159,10 +162,13 @@ async def put_preferences(
             })
         location_name = match["display"]
         location_country = match["country_code"] or None
+        latitude = match.get("latitude")
+        longitude = match.get("longitude")
 
     await store.create_user_with_topics(
         user_id, prefs.display_name, location_name, prefs.scheduled_time,
         prefs.beats, prefs.custom_topics, prefs.timezone, location_country,
+        latitude, longitude,
     )
     logger.info(
         f"[brief] prefs saved user={user_id} beats={len(prefs.beats)} "
