@@ -32,7 +32,11 @@ from loguru import logger
 GEOCODE_URL = os.getenv(
     "CURIA_GEOCODE_URL", "https://geocoding-api.open-meteo.com/v1/search"
 )
+REVERSE_URL = os.getenv(
+    "CURIA_REVERSE_GEOCODE_URL", "https://nominatim.openstreetmap.org/reverse"
+)
 TIMEOUT_S = 6
+_UA = {"User-Agent": "curia-backend/1.0 (brief location resolution)"}
 
 
 class GeocoderUnavailable(RuntimeError):
@@ -98,6 +102,44 @@ async def resolve_city(q: str) -> Optional[Dict[str, Any]]:
         if m["name"].lower() == ql:
             return m
     return matches[0]
+
+
+async def reverse_geocode(lat: float, lon: float) -> Optional[Dict[str, Any]]:
+    """Device GPS fix -> the same shape resolve_city returns, so the two
+    entry paths (picker and location permission) store identically-shaped,
+    verified places. Nominatim (keyless, full place names, zoom=10 = city
+    granularity); raises GeocoderUnavailable on outage — a GPS save either
+    stores a real resolved place or tells the client to retry, never a guess.
+    Returns None only when the fix resolves to no city-like locality at all
+    (open ocean, wilderness)."""
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_S, headers=_UA) as client:
+            resp = await client.get(REVERSE_URL, params={
+                "lat": lat, "lon": lon, "format": "jsonv2", "zoom": 10,
+                "accept-language": "en",
+            })
+        if resp.status_code != 200:
+            raise GeocoderUnavailable(f"reverse geocoder returned {resp.status_code}")
+        addr = (resp.json() or {}).get("address") or {}
+    except GeocoderUnavailable:
+        raise
+    except Exception as e:
+        logger.warning(f"[brief.cities] reverse geocode failed for {lat},{lon}: {e}")
+        raise GeocoderUnavailable(str(e))
+
+    city = next((addr[k] for k in
+                 ("city", "town", "village", "municipality", "county") if addr.get(k)), "")
+    if not city:
+        return None
+    display = ", ".join(p for p in (city, addr.get("state"), addr.get("country")) if p)
+    return {
+        "display": display,
+        "name": city,
+        "country_code": (addr.get("country_code") or "").upper(),
+        "timezone": "",           # reverse path: timezone stays the client's own
+        "latitude": lat,          # DEVICE coords, deliberately more precise
+        "longitude": lon,         # than any gazetteer city-center
+    }
 
 
 def city_query_term(location_name: str) -> str:

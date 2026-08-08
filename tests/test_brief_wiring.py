@@ -767,3 +767,73 @@ class TestRoutesUseUserLocalDate:
             r = _audio_client().get("/brief/today/audio")
         assert r.status_code == 404
         assert store.get_daily_brief_for_date.await_args.args[1] == self._expected()
+
+
+class TestGpsLocationPath:
+    """The "local news" toggle: app sends a device GPS fix; the backend
+    reverse-geocodes to a verified place and stores DEVICE coordinates."""
+
+    def _match(self):
+        return {"display": "Mumbai, Maharashtra, India", "name": "Mumbai",
+                "country_code": "IN", "timezone": "", "latitude": 19.076,
+                "longitude": 72.877}
+
+    def test_gps_fix_resolves_and_stores_device_coords(self):
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.cities.reverse_geocode",
+                   AsyncMock(return_value=self._match())) as rev:
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "latitude": 19.076, "longitude": 72.877})
+        assert r.status_code == 200
+        assert r.json() == {"location_name": "Mumbai, Maharashtra, India"}
+        rev.assert_awaited_once_with(19.076, 72.877)
+        args = store.create_user_with_topics.await_args.args
+        assert args[2] == "Mumbai, Maharashtra, India"
+        assert args[-3:] == ("IN", 19.076, 72.877)
+
+    def test_explicit_city_wins_over_coords(self):
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.cities.reverse_geocode", AsyncMock()) as rev, \
+             patch("api.routes.brief.cities.resolve_city", AsyncMock(return_value={
+                 "display": "Pune, Maharashtra, India", "name": "Pune",
+                 "country_code": "IN", "timezone": "Asia/Kolkata",
+                 "latitude": 18.52, "longitude": 73.86})):
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "location_name": "Pune",
+                "latitude": 19.076, "longitude": 72.877})
+        assert r.status_code == 200
+        assert r.json() == {"location_name": "Pune, Maharashtra, India"}
+        rev.assert_not_awaited()
+
+    def test_lat_without_lon_422(self):
+        r = _client().put("/brief/preferences",
+                          json={"display_name": "A", "latitude": 19.0})
+        assert r.status_code == 422
+
+    def test_out_of_range_coords_422(self):
+        r = _client().put("/brief/preferences", json={
+            "display_name": "A", "latitude": 91.0, "longitude": 10.0})
+        assert r.status_code == 422
+
+    def test_unresolvable_fix_422_never_stored(self):
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.cities.reverse_geocode",
+                   AsyncMock(return_value=None)):
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "latitude": 0.0, "longitude": -140.0})
+        assert r.status_code == 422
+        store.create_user_with_topics.assert_not_awaited()
+
+    def test_reverse_outage_503_never_stored(self):
+        from brief.cities import GeocoderUnavailable
+        with patch("api.routes.brief.store") as store, \
+             patch("api.routes.brief.cities.reverse_geocode",
+                   AsyncMock(side_effect=GeocoderUnavailable("down"))):
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "latitude": 19.0, "longitude": 72.8})
+        assert r.status_code == 503
+        store.create_user_with_topics.assert_not_awaited()

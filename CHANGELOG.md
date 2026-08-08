@@ -4,6 +4,40 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-08 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Device-GPS location path — the app's "local news" toggle: OS permission →
+device coordinates → PUT /brief/preferences → server-side reverse geocode to
+a verified place. Completes the location overhaul (picker for manual entry,
+GPS for zero-friction) on top of PR #8's coordinate-first weather.
+- **`brief/cities.py`** — `reverse_geocode(lat, lon)` (Nominatim, keyless,
+  zoom=10 city granularity, city→town→village→municipality→county fallback);
+  returns the SAME shape as resolve_city but keeps the DEVICE coordinates,
+  deliberately more precise than any gazetteer city-center; outages raise
+  (503-retry), never degrade into "not a place" (422)
+- **`api/routes/brief.py`** — BriefPreferences gains paired latitude/longitude
+  (range-validated, both-or-neither via model validator); GPS path fires only
+  when no explicit location_name (picker correction always wins); unresolvable
+  fix (open ocean) → 422 "pick manually", reverse outage → 503, nothing
+  unverified ever stored
+- **`tests/test_brief_cities.py`** / **`tests/test_brief_wiring.py`** — 11 new
+  tests; 6/6 mutants killed (one survivor exposed the non-200-vs-exception gap
+  in outage handling, now asserted); live-verified: (19.076, 72.877) →
+  "Mumbai, Maharashtra, India"
+
+### Feature (merged PRs)
+- **PR #6** (Aditya) — numpy declared explicitly in pyproject
+- **PR #7** (Aditya) — migration 0039 for users.apple_refresh_token/
+  apple_client_id + merge fixup making it idempotent (prod already has the
+  columns via the manual ALTER it formalizes)
+- **PR #8** (Aditya) — configurable weather provider (OpenWeatherMap default,
+  WeatherAPI fallback), coordinate-first lookups, geocoder lat/lon persisted
+  to harness.users.location. Deploy note: OPENWEATHER_API_KEY not yet in
+  Secrets Manager — falls back to WeatherAPI until provisioned
+
+---
+
 ## 2026-08-07 · Claude (claude-sonnet-5)
 
 ### Bug Fix

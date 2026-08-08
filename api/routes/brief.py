@@ -26,7 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.auth import audio_user_id, current_user_id
 from api.schemas import CreateJobResponse
@@ -73,9 +73,18 @@ class BriefPreferences(BaseModel):
         except Exception:
             raise ValueError(f"unknown IANA timezone {v!r}")
         return v
-    # Normally omitted — the city is derived from the request IP. Sent only when
-    # the user corrects a wrong guess.
+    # Explicit city from the picker; wins over coordinates when both present.
     location_name: Optional[str] = Field(default=None, max_length=120)
+    # Device GPS fix, sent after the app's "local news" toggle + OS permission.
+    # Both-or-neither; reverse-geocoded server-side to a verified place.
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+
+    @model_validator(mode="after")
+    def _coords_paired(self):
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("latitude and longitude must be sent together")
+        return self
 
 
 class BriefProgress(BaseModel):
@@ -136,7 +145,21 @@ async def put_preferences(
     Returns the stored city so the prefs screen can display it."""
     location_country = None
     latitude = longitude = None
-    if prefs.location_name is None:
+    if prefs.location_name is None and prefs.latitude is not None:
+        # Device-GPS path (the "local news" toggle): reverse-geocode to a
+        # verified place; store the DEVICE coordinates, not a city-center.
+        try:
+            match = await cities.reverse_geocode(prefs.latitude, prefs.longitude)
+        except cities.GeocoderUnavailable:
+            raise HTTPException(
+                503, "Location resolution is temporarily unavailable — try again")
+        if not match:
+            raise HTTPException(
+                422, "Could not resolve a city from that location — pick one manually")
+        location_name = match["display"]
+        location_country = match["country_code"] or None
+        latitude, longitude = match["latitude"], match["longitude"]
+    elif prefs.location_name is None:
         existing = await store.get_user(user_id)
         location_name = (existing or {}).get("location_name") or ""
         location_country = (existing or {}).get("location_country")

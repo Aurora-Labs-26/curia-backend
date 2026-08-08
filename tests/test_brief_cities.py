@@ -119,3 +119,47 @@ class TestNewsGeoForCountry:
         from brief.news import news_service
         assert news_service.geo_for_country("", "Berlin, Germany")[0] != "IN"
         assert news_service.geo_for_country("", "China")[0] != "IN"
+
+
+class TestReverseGeocode:
+    def _resp(self, addr, status=200):
+        r = MagicMock(status_code=status)
+        r.json.return_value = {"address": addr}
+        return r
+
+    async def test_city_fix_resolves_with_device_coords_kept(self):
+        addr = {"city": "Mumbai", "state": "Maharashtra", "country": "India",
+                "country_code": "in"}
+        with patch("brief.cities.httpx.AsyncClient",
+                   return_value=_client(self._resp(addr))):
+            m = await cities.reverse_geocode(19.076, 72.877)
+        assert m["display"] == "Mumbai, Maharashtra, India"
+        assert m["country_code"] == "IN"
+        assert (m["latitude"], m["longitude"]) == (19.076, 72.877)   # device, not city-center
+
+    async def test_town_and_village_fallback_order(self):
+        addr = {"village": "Khardi", "state": "Maharashtra", "country": "India",
+                "country_code": "in"}
+        with patch("brief.cities.httpx.AsyncClient",
+                   return_value=_client(self._resp(addr))):
+            m = await cities.reverse_geocode(19.6, 73.3)
+        assert m["name"] == "Khardi"
+
+    async def test_open_ocean_returns_none(self):
+        with patch("brief.cities.httpx.AsyncClient",
+                   return_value=_client(self._resp({"country": "nowhere"}))):
+            assert await cities.reverse_geocode(0.0, -140.0) is None
+
+    async def test_outage_raises_never_guesses(self):
+        with patch("brief.cities.httpx.AsyncClient",
+                   return_value=_client(exc=RuntimeError("dns"))):
+            with pytest.raises(cities.GeocoderUnavailable):
+                await cities.reverse_geocode(19.0, 72.8)
+
+    async def test_non_200_raises_not_none(self):
+        """A rate-limited/erroring reverse geocoder must surface as 503-retry,
+        not as 'we could not resolve a city' (caught by a survived mutant)."""
+        with patch("brief.cities.httpx.AsyncClient",
+                   return_value=_client(self._resp({}, status=429))):
+            with pytest.raises(cities.GeocoderUnavailable):
+                await cities.reverse_geocode(19.0, 72.8)
