@@ -23,8 +23,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("users", sa.Column("apple_refresh_token", sa.Text(), nullable=True))
-    op.add_column("users", sa.Column("apple_client_id", sa.Text(), nullable=True))
+    # IF NOT EXISTS: prod already carries both columns from the undocumented
+    # manual ALTER this migration formalizes — a blind add_column would crash
+    # `alembic upgrade head` exactly where this fix matters most.
+    op.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_refresh_token TEXT")
+    op.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_client_id TEXT")
 
 
 def downgrade() -> None:
