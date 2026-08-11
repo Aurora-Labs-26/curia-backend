@@ -4,6 +4,58 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+
+
+## 2026-08-11 (4) · Arihant + Claude (claude-fable-5)
+
+### Bug Fix
+Scheduler jobs now hold a Postgres advisory lock — the background service
+autoscales (1-6 tasks) and every task runs APScheduler, so scale-out meant
+N concurrent Pre-Opt runs (Sonnet cost xN) every 6h. pg_try_advisory_lock
+makes one task win per cycle; losers skip silently; the winning connection
+holds the session-scoped lock for the job's duration and releases it even
+on failure. Deployed via hotfix branch off the prod commit (the pending
+coordinates-only location change stays undeployed until the app UI ships).
+- **`worker/main.py`** — `_run_exclusive` + distinct lock ids; job bodies
+  split from lock-wrapped cron entries
+- **`tests/test_brief_scheduling.py`** — winner/loser/crash-release/distinct-
+  id contracts; 3/3 mutants killed
+
+### Config
+- **infra** — curia-api registered for autoscaling (1-4 tasks, CPU target
+  tracking at 60%), matching the workers' existing SQS-backlog policies
+
+## 2026-08-11 (3) · Arihant + Claude (claude-fable-5)
+
+### Refactor
+Location is now DEVICE-COORDINATES ONLY — the picker/free-text city path is
+removed (product decision: the app's "local news" toggle is the single
+control; a typed-city path reintroduced trust problems the geocoder gate was
+built to kill). NOT yet deployed — ships coordinated with the app build.
+- **`api/routes/brief.py`** — PUT /preferences: coords present -> reverse-
+  geocoded + device coords stored; EXPLICIT nulls -> toggle OFF, location
+  cleared; omitted -> keep stored. `location_name` in requests is ignored
+  (old clients can't write free text). GET /brief/cities endpoint deleted
+- **`brief/cities.py`** — forward-geocode surface (search_cities /
+  resolve_city / Open-Meteo) deleted; reverse_geocode (Nominatim) +
+  city_query_term remain
+- **Tests** — picker-contract tests replaced with toggle semantics
+  (explicit-nulls clear, omitted keeps, ignored location_name); 3/3 mutants
+  killed
+
+Client changes required (for Aditya):
+  1. Toggle ON: GPS fix -> PUT {latitude, longitude}. Response
+     {"location_name": "..."} is the display label.
+  2. Toggle OFF: PUT {"latitude": null, "longitude": null} — explicit nulls,
+     not omission.
+  3. Remove any city picker / GET /brief/cities usage (endpoint gone) and
+     any location_name in PUT bodies (now ignored).
+  4. GET /preferences still returns location_name for the label.
+  5. NOTE: no manual override exists anymore — if reverse geocode names the
+     wrong locality, the only recourse is re-toggling from a better fix.
+
+---
+
 ## 2026-08-11 (2) · Arihant + Claude (claude-fable-5)
 
 ### Bug Fix

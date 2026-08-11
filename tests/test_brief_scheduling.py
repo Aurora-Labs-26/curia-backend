@@ -4,7 +4,7 @@ the due-users store query, and the brief_ready push (fired from
 worker/handlers/brief.py once generation actually succeeds).
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -88,7 +88,7 @@ class TestIsUserDueNow:
 
 class TestBriefDispatchJob:
     async def test_enqueues_background_lane_per_due_user(self):
-        from worker.main import _run_brief_dispatch_job
+        from worker.main import _brief_dispatch_body as _run_brief_dispatch_job
 
         due = [
             {"user_id": "u1", "local_date": "2026-07-28"},
@@ -105,7 +105,7 @@ class TestBriefDispatchJob:
         assert enq.await_args_list[0].kwargs["payload"] == {"user_id": "u1", "date": "2026-07-28"}
 
     async def test_no_due_users_enqueues_nothing(self):
-        from worker.main import _run_brief_dispatch_job
+        from worker.main import _brief_dispatch_body as _run_brief_dispatch_job
 
         with patch("brief.store.list_due_users_for_generation", AsyncMock(return_value=[])), \
              patch("core.queue.enqueue", AsyncMock()) as enq:
@@ -115,7 +115,7 @@ class TestBriefDispatchJob:
     async def test_query_failure_does_not_raise(self):
         """A bad run must not crash the scheduler thread — APScheduler would
         otherwise silently drop the job's future runs."""
-        from worker.main import _run_brief_dispatch_job
+        from worker.main import _brief_dispatch_body as _run_brief_dispatch_job
 
         with patch("brief.store.list_due_users_for_generation",
                    AsyncMock(side_effect=RuntimeError("db down"))):
@@ -124,7 +124,7 @@ class TestBriefDispatchJob:
 
 class TestBriefPreoptJob:
     async def test_runs_preopt_and_logs_totals(self):
-        from worker.main import _run_brief_preopt_job
+        from worker.main import _brief_preopt_body as _run_brief_preopt_job
 
         with patch("brief.preopt_runner.run_preopt",
                    AsyncMock(return_value={"topics": [], "totals": {"topics_processed": 7}})) as run:
@@ -132,7 +132,7 @@ class TestBriefPreoptJob:
         run.assert_awaited_once()
 
     async def test_failure_does_not_raise(self):
-        from worker.main import _run_brief_preopt_job
+        from worker.main import _brief_preopt_body as _run_brief_preopt_job
 
         with patch("brief.preopt_runner.run_preopt", AsyncMock(side_effect=RuntimeError("llm down"))):
             await _run_brief_preopt_job()  # must not raise
@@ -291,3 +291,61 @@ class TestFailedRetryCap:
         assert "failed" in sql, "failed rows must appear in the exclusion logic"
         assert "created_at" in sql and "interval" in sql, \
             "failed-row exclusion must be time-bounded, not permanent or unbounded"
+
+
+class TestSchedulerAdvisoryLock:
+    """Autoscaled background workers each run APScheduler — without a
+    cross-task lock, N tasks means N concurrent Pre-Opt runs (Sonnet cost
+    xN) every 6h. pg_try_advisory_lock makes exactly one task win; losers
+    skip silently. Session-scoped: the SAME connection must hold the lock
+    for the job's duration and release it even on failure."""
+
+    def _conn(self, got):
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(side_effect=[got, True])   # try_lock, unlock
+        pool = MagicMock()
+        acq = MagicMock()
+        acq.__aenter__ = AsyncMock(return_value=conn)
+        acq.__aexit__ = AsyncMock(return_value=False)
+        pool.acquire = MagicMock(return_value=acq)
+        return pool, conn
+
+    async def test_winner_runs_job_and_unlocks(self):
+        from worker import main as wm
+        pool, conn = self._conn(got=True)
+        job = AsyncMock()
+        with patch("core.db.connection.get_pool", AsyncMock(return_value=pool)):
+            await wm._run_exclusive(wm.LOCK_BRIEF_PREOPT, "preopt", job)
+        job.assert_awaited_once()
+        assert conn.fetchval.await_count == 2
+        assert "pg_try_advisory_lock" in conn.fetchval.await_args_list[0].args[0]
+        assert "pg_advisory_unlock" in conn.fetchval.await_args_list[1].args[0]
+
+    async def test_loser_skips_job_without_unlocking(self):
+        from worker import main as wm
+        pool, conn = self._conn(got=False)
+        job = AsyncMock()
+        with patch("core.db.connection.get_pool", AsyncMock(return_value=pool)):
+            await wm._run_exclusive(wm.LOCK_BRIEF_PREOPT, "preopt", job)
+        job.assert_not_awaited()
+        assert conn.fetchval.await_count == 1     # no spurious unlock
+
+    async def test_unlock_happens_even_when_job_crashes(self):
+        from worker import main as wm
+        pool, conn = self._conn(got=True)
+        job = AsyncMock(side_effect=RuntimeError("boom"))
+        with patch("core.db.connection.get_pool", AsyncMock(return_value=pool)):
+            await wm._run_exclusive(wm.LOCK_BRIEF_PREOPT, "x", job)  # must not raise
+        assert "pg_advisory_unlock" in conn.fetchval.await_args_list[1].args[0]
+
+    async def test_jobs_use_distinct_lock_ids(self):
+        from worker import main as wm
+        assert wm.LOCK_BRIEF_PREOPT != wm.LOCK_BRIEF_DISPATCH
+
+    async def test_cron_jobs_are_wrapped(self):
+        from worker import main as wm
+        with patch.object(wm, "_run_exclusive", AsyncMock()) as ex:
+            await wm._run_brief_preopt_job()
+            await wm._run_brief_dispatch_job()
+        assert ex.await_count == 2
+        assert {c.args[0] for c in ex.await_args_list} == {wm.LOCK_BRIEF_PREOPT, wm.LOCK_BRIEF_DISPATCH}

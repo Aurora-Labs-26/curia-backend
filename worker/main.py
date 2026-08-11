@@ -210,7 +210,42 @@ async def _process_one_sqs(worker_id: str) -> bool:
     return True
 
 
+# Cross-task exclusivity for scheduler jobs: the background service
+# autoscales (1-6 tasks) and EVERY task runs APScheduler — without a lock,
+# N tasks means N concurrent Pre-Opt runs (Sonnet cost xN) every 6 hours.
+# Postgres advisory locks are session-scoped: the winning task holds one
+# connection for the job's duration; losers skip silently. (Dispatch is
+# row-guarded and safe either way — locked here anyway to avoid N pollers.)
+LOCK_BRIEF_PREOPT = 0x42524A01
+LOCK_BRIEF_DISPATCH = 0x42524A02
+
+
+async def _run_exclusive(lock_id: int, name: str, job) -> None:
+    from core.db.connection import get_pool
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            got = await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+            if not got:
+                logger.info(f"[worker] {name}: another task holds the lock — skipping")
+                return
+            try:
+                await job()
+            finally:
+                await conn.fetchval("SELECT pg_advisory_unlock($1)", lock_id)
+    except Exception as e:
+        logger.error(f"[worker] {name} failed: {e}")
+
+
 async def _run_brief_preopt_job() -> None:
+    await _run_exclusive(LOCK_BRIEF_PREOPT, "brief preopt", _brief_preopt_body)
+
+
+async def _run_brief_dispatch_job() -> None:
+    await _run_exclusive(LOCK_BRIEF_DISPATCH, "brief dispatch", _brief_dispatch_body)
+
+
+async def _brief_preopt_body() -> None:
     """Warms brief/store.py's article_segment_cache for all 7 Beats. Runs
     every 6h rather than once/day: users can set any local delivery time in
     any timezone, so there's no single UTC hour that's safely "before
@@ -224,7 +259,7 @@ async def _run_brief_preopt_job() -> None:
         logger.error(f"[worker] brief preopt failed: {e}")
 
 
-async def _run_brief_dispatch_job() -> None:
+async def _brief_dispatch_body() -> None:
     """Enqueues generate_brief (background lane — no one's watching this
     happen) for every user whose local delivery time has passed and who
     doesn't have today's (their local today's) brief yet. See
