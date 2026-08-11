@@ -5,11 +5,11 @@ Curia app (Firebase auth via current_user_id; the harness's CORS-*/Basic-Auth
 surface and admin/dashboard endpoints do not exist here).
 
   GET  /brief/topics            the 7 system Beats (for the prefs UI)
-  GET  /brief/cities            geocoder typeahead for the city picker
+
   GET  /brief/preferences       current saved prefs, to pre-fill the edit sheet
   PUT  /brief/preferences       upsert prefs: display name, beats, custom topics,
-                                delivery time + timezone; city optional and
-                                geocoder-validated (never free text, never IP)
+                                delivery time + timezone; location ONLY as device
+                                coordinates (reverse-geocoded server-side)
   POST /brief/generate          enqueue today's brief (interactive lane) — 202 + job id
   GET  /brief/today             today's brief manifest (status + segments + audio when ready)
   GET  /brief/today/audio       presigned URL (s3) or range-streamed file (local) — mirrors GET /episodes/{id}/audio
@@ -73,10 +73,11 @@ class BriefPreferences(BaseModel):
         except Exception:
             raise ValueError(f"unknown IANA timezone {v!r}")
         return v
-    # Explicit city from the picker; wins over coordinates when both present.
-    location_name: Optional[str] = Field(default=None, max_length=120)
-    # Device GPS fix, sent after the app's "local news" toggle + OS permission.
-    # Both-or-neither; reverse-geocoded server-side to a verified place.
+    # Location enters ONLY as a device GPS fix (the app's "local news" toggle
+    # + OS permission) — the picker/free-text path was removed 2026-08-11.
+    #   coords present        -> reverse-geocoded server-side, stored verified
+    #   explicit nulls        -> toggle OFF: clear location (no Local Pulse)
+    #   fields omitted        -> keep whatever is stored
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
 
@@ -96,19 +97,6 @@ class BriefProgress(BaseModel):
 async def list_beats(user_id: str = Depends(current_user_id)) -> list[dict]:
     topics = await store.list_system_topics()
     return [{"id": str(t["id"]), "name": t["name"]} for t in topics]
-
-
-@router.get("/cities")
-async def search_cities(q: str, user_id: str = Depends(current_user_id)) -> dict:
-    """Typeahead for the city picker — the ONLY sanctioned source of
-    location_name values (see brief/cities.py for why IP-geo was removed)."""
-    if len(q.strip()) < 2:
-        raise HTTPException(422, "q must be at least 2 characters")
-    try:
-        matches = await cities.search_cities(q.strip())
-    except cities.GeocoderUnavailable:
-        raise HTTPException(503, "City search is temporarily unavailable — try again")
-    return {"cities": matches}
 
 
 @router.get("/preferences")
@@ -135,19 +123,21 @@ async def get_preferences(user_id: str = Depends(current_user_id)) -> dict:
 async def put_preferences(
     prefs: BriefPreferences, request: Request, user_id: str = Depends(current_user_id)
 ) -> dict:
-    """City semantics (IP-geo removed 2026-08-03 — see brief/cities.py):
-      - omitted (None)      keep whatever city is already stored
-      - ""                  clear it — brief ships without Local Pulse
-      - non-empty           validated + normalized through the geocoder;
-                            422 with suggestions if it isn't a real place,
-                            503 if the geocoder is down (an unverified city
-                            is never stored)
-    Returns the stored city so the prefs screen can display it."""
+    """Location semantics (device-coordinates ONLY, 2026-08-11 — the picker/
+    free-text path is gone; the app's toggle is the single control):
+      - latitude+longitude present   reverse-geocoded server-side; the DEVICE
+                                     coordinates are stored (422 if the fix
+                                     resolves to no locality, 503 on geocoder
+                                     outage — nothing unverified is stored)
+      - explicit nulls               toggle OFF: location cleared
+      - fields omitted               keep whatever is stored
+    Returns the stored city so the app can show "Local news: <city>"."""
     location_country = None
     latitude = longitude = None
-    if prefs.location_name is None and prefs.latitude is not None:
-        # Device-GPS path (the "local news" toggle): reverse-geocode to a
-        # verified place; store the DEVICE coordinates, not a city-center.
+    coords_sent = "latitude" in prefs.model_fields_set or "longitude" in prefs.model_fields_set
+    if coords_sent and prefs.latitude is None:
+        location_name = ""                       # toggle OFF
+    elif prefs.latitude is not None:
         try:
             match = await cities.reverse_geocode(prefs.latitude, prefs.longitude)
         except cities.GeocoderUnavailable:
@@ -155,38 +145,16 @@ async def put_preferences(
                 503, "Location resolution is temporarily unavailable — try again")
         if not match:
             raise HTTPException(
-                422, "Could not resolve a city from that location — pick one manually")
+                422, "Could not resolve a city from that location")
         location_name = match["display"]
         location_country = match["country_code"] or None
         latitude, longitude = match["latitude"], match["longitude"]
-    elif prefs.location_name is None:
+    else:
         existing = await store.get_user(user_id)
         location_name = (existing or {}).get("location_name") or ""
         location_country = (existing or {}).get("location_country")
         latitude = (existing or {}).get("latitude")
         longitude = (existing or {}).get("longitude")
-    elif not prefs.location_name.strip():
-        location_name = ""
-    else:
-        try:
-            match = await cities.resolve_city(prefs.location_name)
-        except cities.GeocoderUnavailable:
-            raise HTTPException(
-                503, "City validation is temporarily unavailable — try again")
-        if not match:
-            try:
-                suggestions = [c["display"] for c in
-                               await cities.search_cities(prefs.location_name.split(",")[0])][:5]
-            except cities.GeocoderUnavailable:
-                suggestions = []
-            raise HTTPException(422, {
-                "error": f"Unknown city {prefs.location_name!r}",
-                "suggestions": suggestions,
-            })
-        location_name = match["display"]
-        location_country = match["country_code"] or None
-        latitude = match.get("latitude")
-        longitude = match.get("longitude")
 
     await store.create_user_with_topics(
         user_id, prefs.display_name, location_name, prefs.scheduled_time,

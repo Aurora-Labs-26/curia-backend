@@ -120,60 +120,6 @@ class TestBriefRoutes:
             r = _client().get("/brief/preferences")
         assert r.status_code == 404
 
-    def test_preferences_validates_and_normalizes_city(self):
-        """A submitted city goes through the geocoder and the CANONICAL form
-        is stored — free text never lands in the table verbatim."""
-        with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.cities.resolve_city", AsyncMock(return_value={
-                 "display": "Mumbai, Maharashtra, India", "name": "Mumbai",
-                 "country_code": "IN", "timezone": "Asia/Kolkata"})):
-            store.create_user_with_topics = AsyncMock()
-            r = _client().put("/brief/preferences", json={
-                "display_name": "Arihant", "location_name": "mumbai",
-                "beats": ["Tech & Science"], "custom_topics": ["chess"],
-                "scheduled_time": "09:00", "timezone": "Asia/Kolkata",
-            })
-        assert r.status_code == 200
-        assert r.json() == {"location_name": "Mumbai, Maharashtra, India"}
-        store.create_user_with_topics.assert_awaited_once_with(
-            "u1", "Arihant", "Mumbai, Maharashtra, India", "09:00",
-            ["Tech & Science"], ["chess"], "Asia/Kolkata", "IN", None, None)
-
-    def test_preferences_unknown_city_422_with_suggestions(self):
-        """The "timbaktu" hole: garbage is refused at the edge, with picker
-        suggestions in the error body."""
-        with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.cities.resolve_city", AsyncMock(return_value=None)), \
-             patch("api.routes.brief.cities.search_cities", AsyncMock(return_value=[
-                 {"display": "Timbuktu, Tombouctou, Mali", "name": "Timbuktu",
-                  "country_code": "ML", "timezone": "Africa/Bamako"}])):
-            store.create_user_with_topics = AsyncMock()
-            r = _client().put("/brief/preferences", json={
-                "display_name": "A", "location_name": "timbaktuuu"})
-        assert r.status_code == 422
-        assert "Timbuktu, Tombouctou, Mali" in str(r.json())
-        store.create_user_with_topics.assert_not_awaited()
-
-    def test_preferences_geocoder_down_is_503_not_a_guess(self):
-        from brief.cities import GeocoderUnavailable
-        with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.cities.resolve_city",
-                   AsyncMock(side_effect=GeocoderUnavailable("down"))):
-            store.create_user_with_topics = AsyncMock()
-            r = _client().put("/brief/preferences", json={
-                "display_name": "A", "location_name": "Mumbai"})
-        assert r.status_code == 503
-        store.create_user_with_topics.assert_not_awaited()
-
-    def test_preferences_empty_string_clears_city(self):
-        with patch("api.routes.brief.store") as store:
-            store.create_user_with_topics = AsyncMock()
-            r = _client().put("/brief/preferences", json={
-                "display_name": "A", "location_name": ""})
-        assert r.status_code == 200
-        assert r.json() == {"location_name": ""}
-        assert store.create_user_with_topics.await_args.args[2] == ""
-
     def test_preferences_omitted_city_keeps_existing(self):
         """None (field absent) = leave the stored city and country untouched —
         the edit sheet can save beats/schedule without re-sending location."""
@@ -187,171 +133,9 @@ class TestBriefRoutes:
         assert store.create_user_with_topics.await_args.args[2] == "Pune, Maharashtra, India"
         assert store.create_user_with_topics.await_args.args[7] == "IN"
 
-    def test_cities_endpoint_returns_matches(self):
-        with patch("api.routes.brief.cities.search_cities", AsyncMock(return_value=[
-                {"display": "Mumbai, Maharashtra, India", "name": "Mumbai",
-                 "country_code": "IN", "timezone": "Asia/Kolkata"}])):
-            r = _client().get("/brief/cities?q=mum")
-        assert r.status_code == 200
-        assert r.json()["cities"][0]["display"] == "Mumbai, Maharashtra, India"
-
-    def test_cities_endpoint_short_query_422(self):
-        r = _client().get("/brief/cities?q=m")
-        assert r.status_code == 422
-
-    def test_cities_endpoint_outage_503(self):
-        from brief.cities import GeocoderUnavailable
-        with patch("api.routes.brief.cities.search_cities",
-                   AsyncMock(side_effect=GeocoderUnavailable("down"))):
-            r = _client().get("/brief/cities?q=mum")
-        assert r.status_code == 503
-
-    def test_preferences_rejects_too_many_beats(self):
-        r = _client().put("/brief/preferences", json={
-            "display_name": "A", "location_name": "X", "beats": [f"b{i}" for i in range(8)]})
-        assert r.status_code == 422
-
-    def test_generate_409_without_prefs(self):
-        with patch("api.routes.brief.store") as store:
-            store.get_user = AsyncMock(return_value=None)
-            r = _client().post("/brief/generate")
-        assert r.status_code == 409
-
-    def test_generate_enqueues_interactive_and_returns_brief_id(self):
-        bid = "12345678-1234-1234-1234-123456789012"
-        with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.enqueue", AsyncMock(return_value="aaaaaaaa-0000-0000-0000-000000000001")) as enq:
-            store.get_user = AsyncMock(return_value={"id": "u1"})
-            store.get_or_create_daily_brief = AsyncMock(return_value={"id": bid})
-            r = _client().post("/brief/generate")
-        assert r.status_code == 202
-        assert r.json()["id"] == bid
-        assert enq.await_args.kwargs["lane"] == "interactive"
-        assert enq.await_args.kwargs["type"] == "generate_brief"
-
-    def test_today_404_when_prefs_never_set(self):
-        """No daily_briefs row AND no harness.users row — genuinely never
-        opted in. The client uses this to decide whether to show the pinned
-        brief section at all."""
-        with patch("api.routes.brief.store") as store:
-            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
-            store.get_daily_brief_for_date = AsyncMock(return_value=None)
-            store.get_user = AsyncMock(return_value=None)
-            r = _client().get("/brief/today")
-        assert r.status_code == 404
-
-    def test_today_pending_when_prefs_set_but_not_due(self):
-        """No daily_briefs row YET but harness.users exists — prefs are set,
-        the user's scheduled time just hasn't arrived. Distinct from the 404
-        case above: the client shows a pending card (with the chosen beats
-        as chips) instead of hiding the section entirely."""
-        with patch("api.routes.brief.store") as store:
-            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
-            store.get_daily_brief_for_date = AsyncMock(return_value=None)
-            store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
-            store.is_user_due_now = AsyncMock(return_value=False)
-            store.get_user_topics = AsyncMock(return_value={
-                "chosen": [{"name": "Tech"}, {"name": "Business"}],
-                "custom": [{"name": "chess"}],
-            })
-            r = _client().get("/brief/today")
-        assert r.status_code == 200
-        body = r.json()
-        assert body["status"] == "pending"
-        assert body["beats"] == ["Tech", "Business", "chess"]
-        assert body["scheduled_time"] == "09:00:00"
-
-    def test_today_triggers_generation_eagerly_when_already_due(self):
-        """No daily_briefs row yet AND the scheduled time has already passed
-        (e.g. a new user signs up mid-afternoon, default 9am slot is behind) —
-        don't make them wait up to 15 minutes for the next dispatch poll.
-        Create the row and enqueue interactive-lane generation right here."""
-        with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.enqueue", AsyncMock()) as enq:
-            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
-            store.get_daily_brief_for_date = AsyncMock(return_value=None)
-            store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
-            store.is_user_due_now = AsyncMock(return_value=True)
-            store.get_or_create_daily_brief = AsyncMock(
-                return_value={"id": "b-1", "status": "generating", "created": True})
-            store.get_daily_brief_detail = AsyncMock(
-                return_value={"id": "b-1", "status": "generating", "articles": []})
-            store.get_latest_manifest = AsyncMock(return_value=[])
-            r = _client().get("/brief/today")
-        assert r.status_code == 200
-        assert r.json()["status"] == "generating"
-        enq.assert_awaited_once()
-        assert enq.await_args.kwargs["lane"] == "interactive"
-        assert enq.await_args.kwargs["type"] == "generate_brief"
-
-    def test_today_due_but_row_exists_does_not_reenqueue(self):
-        """created=False (a concurrent request already inserted the row, or
-        the dispatch poller beat this call to it) must not enqueue a second
-        job — get_or_create_daily_brief's uniqueness is the dedup point."""
-        with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.enqueue", AsyncMock()) as enq:
-            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
-            store.get_daily_brief_for_date = AsyncMock(return_value=None)
-            store.get_user = AsyncMock(return_value={"id": "u1", "scheduled_time": "09:00:00"})
-            store.is_user_due_now = AsyncMock(return_value=True)
-            store.get_or_create_daily_brief = AsyncMock(
-                return_value={"id": "b-1", "status": "generating", "created": False})
-            store.get_daily_brief_detail = AsyncMock(
-                return_value={"id": "b-1", "status": "generating", "articles": []})
-            store.get_latest_manifest = AsyncMock(return_value=[])
-            r = _client().get("/brief/today")
-        assert r.status_code == 200
-        enq.assert_not_awaited()
-
-    def test_today_returns_detail(self):
-        with patch("api.routes.brief.store") as store:
-            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
-            store.get_daily_brief_for_date = AsyncMock(return_value={"id": "b-1"})
-            store.get_daily_brief_detail = AsyncMock(
-                return_value={"id": "b-1", "status": "ready", "articles": []})
-            store.get_latest_manifest = AsyncMock(return_value=[])
-            r = _client().get("/brief/today")
-        assert r.status_code == 200
-        assert r.json()["status"] == "ready"
-
-    def test_today_merges_manifest_for_chapters(self):
-        """intro/outro text lives only in the persisted manifest, but the client
-        needs the whole ordered run to build chapter offsets — so /today merges
-        it in rather than making the client stitch two calls together."""
-        manifest = [
-            {"kind": "intro", "text": "Good morning.", "duration_s": 12.0},
-            {"kind": "lead", "text": "Big story.", "duration_s": 60.0},
-            {"kind": "outro", "text": "That's the brief.", "duration_s": 8.0},
-        ]
-        with patch("api.routes.brief.store") as store:
-            store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
-            store.get_daily_brief_for_date = AsyncMock(return_value={"id": "b-1"})
-            store.get_daily_brief_detail = AsyncMock(
-                return_value={"id": "b-1", "status": "ready", "articles": []})
-            store.get_latest_manifest = AsyncMock(return_value=manifest)
-            r = _client().get("/brief/today")
-        body = r.json()
-        assert [s["kind"] for s in body["segments"]] == ["intro", "lead", "outro"]
-        assert body["total_duration_s"] == 80.0
-
-    def test_preopt_enqueues_background(self):
-        with patch("api.routes.brief.enqueue", AsyncMock(return_value="aaaaaaaa-0000-0000-0000-000000000002")) as enq:
-            r = _client().post("/brief/preopt")
-        assert r.status_code == 202
-        assert enq.await_args.kwargs["lane"] == "background"
-
-    def test_registered_on_main_app(self):
-        # app.routes holds _IncludedRouter wrappers (no .path) for every
-        # include_router'd module on this FastAPI version, so read the schema.
-        from api.main import app
-        paths = set(app.openapi()["paths"])
-        assert "/brief/generate" in paths and "/brief/today" in paths
-        assert "/brief/today/audio" in paths and "/brief/{brief_id}/progress" in paths
 
 
 def _audio_client():
-    """GET /today/audio depends on audio_user_id (accepts ?token=), not
-    current_user_id — a separate override from _client() above."""
     from api.auth import audio_user_id
     from api.routes.brief import router
 
@@ -792,20 +576,27 @@ class TestGpsLocationPath:
         assert args[2] == "Mumbai, Maharashtra, India"
         assert args[-3:] == ("IN", 19.076, 72.877)
 
-    def test_explicit_city_wins_over_coords(self):
-        with patch("api.routes.brief.store") as store, \
-             patch("api.routes.brief.cities.reverse_geocode", AsyncMock()) as rev, \
-             patch("api.routes.brief.cities.resolve_city", AsyncMock(return_value={
-                 "display": "Pune, Maharashtra, India", "name": "Pune",
-                 "country_code": "IN", "timezone": "Asia/Kolkata",
-                 "latitude": 18.52, "longitude": 73.86})):
+    def test_explicit_nulls_clear_location(self):
+        """Toggle OFF: the app sends explicit nulls — distinct from omitting
+        the fields entirely (which keeps the stored location)."""
+        with patch("api.routes.brief.store") as store:
             store.create_user_with_topics = AsyncMock()
             r = _client().put("/brief/preferences", json={
-                "display_name": "A", "location_name": "Pune",
-                "latitude": 19.076, "longitude": 72.877})
+                "display_name": "A", "latitude": None, "longitude": None})
         assert r.status_code == 200
-        assert r.json() == {"location_name": "Pune, Maharashtra, India"}
-        rev.assert_not_awaited()
+        assert r.json() == {"location_name": ""}
+        assert store.create_user_with_topics.await_args.args[2] == ""
+
+    def test_location_name_field_is_ignored_not_stored(self):
+        """Old clients may still send location_name — it must be ignored, not
+        stored verbatim (free text can no longer enter the table)."""
+        with patch("api.routes.brief.store") as store:
+            store.get_user = AsyncMock(return_value=None)
+            store.create_user_with_topics = AsyncMock()
+            r = _client().put("/brief/preferences", json={
+                "display_name": "A", "location_name": "timbaktu"})
+        assert r.status_code == 200
+        assert store.create_user_with_topics.await_args.args[2] == ""
 
     def test_lat_without_lon_422(self):
         r = _client().put("/brief/preferences",

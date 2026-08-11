@@ -19,85 +19,10 @@ def _client(resp=None, exc=None):
     return c
 
 
-def _resp(results, status=200):
-    r = MagicMock(status_code=status)
-    r.json.return_value = {"results": results}
-    return r
 
 
-MUMBAI = {"name": "Mumbai", "admin1": "Maharashtra", "country": "India",
-          "country_code": "IN", "timezone": "Asia/Kolkata"}
-MUMBAI_US = {"name": "Mumbai", "admin1": "Ohio", "country": "United States",
-             "country_code": "US", "timezone": "America/New_York"}
 
 
-class TestSearchCities:
-    async def test_parses_and_formats_display(self):
-        with patch("brief.cities.httpx.AsyncClient", return_value=_client(_resp([MUMBAI]))):
-            out = await cities.search_cities("mumbai")
-        assert out == [{"display": "Mumbai, Maharashtra, India", "name": "Mumbai",
-                        "country_code": "IN", "timezone": "Asia/Kolkata",
-                        "latitude": None, "longitude": None}]
-
-    async def test_display_skips_missing_admin1(self):
-        row = {"name": "Singapore", "country": "Singapore", "country_code": "SG",
-               "timezone": "Asia/Singapore"}
-        with patch("brief.cities.httpx.AsyncClient", return_value=_client(_resp([row]))):
-            out = await cities.search_cities("singapore")
-        assert out[0]["display"] == "Singapore, Singapore"
-
-    async def test_no_matches_returns_empty(self):
-        with patch("brief.cities.httpx.AsyncClient", return_value=_client(_resp([]))):
-            assert await cities.search_cities("zzzz") == []
-
-    async def test_outage_raises_never_guesses(self):
-        with patch("brief.cities.httpx.AsyncClient",
-                   return_value=_client(exc=RuntimeError("dns"))):
-            with pytest.raises(cities.GeocoderUnavailable):
-                await cities.search_cities("mumbai")
-
-    async def test_non_200_raises(self):
-        with patch("brief.cities.httpx.AsyncClient",
-                   return_value=_client(_resp([], status=500))):
-            with pytest.raises(cities.GeocoderUnavailable):
-                await cities.search_cities("mumbai")
-
-
-class TestResolveCity:
-    async def test_exact_display_roundtrip_wins_over_top_match(self):
-        with patch.object(cities, "search_cities",
-                          AsyncMock(return_value=[
-                              {"display": "Mumbai, Ohio, United States", "name": "Mumbai",
-                               "country_code": "US", "timezone": "America/New_York"},
-                              {"display": "Mumbai, Maharashtra, India", "name": "Mumbai",
-                               "country_code": "IN", "timezone": "Asia/Kolkata"},
-                          ])):
-            m = await cities.resolve_city("Mumbai, Maharashtra, India")
-        assert m["country_code"] == "IN"
-
-    async def test_bare_name_takes_top_match(self):
-        with patch.object(cities, "search_cities",
-                          AsyncMock(return_value=[
-                              {"display": "Mumbai, Maharashtra, India", "name": "Mumbai",
-                               "country_code": "IN", "timezone": "Asia/Kolkata"}])) as sc:
-            m = await cities.resolve_city("mumbai")
-        assert m["display"] == "Mumbai, Maharashtra, India"
-        sc.assert_awaited_once_with("mumbai")
-
-    async def test_search_uses_city_part_of_display_string(self):
-        with patch.object(cities, "search_cities",
-                          AsyncMock(return_value=[])) as sc:
-            await cities.resolve_city("Pune, Maharashtra, India")
-        sc.assert_awaited_once_with("Pune")
-
-    async def test_unknown_place_returns_none(self):
-        with patch.object(cities, "search_cities", AsyncMock(return_value=[])):
-            assert await cities.resolve_city("timbaktuuu") is None
-
-    async def test_empty_string_returns_none_without_search(self):
-        with patch.object(cities, "search_cities", AsyncMock()) as sc:
-            assert await cities.resolve_city("  ") is None
-        sc.assert_not_awaited()
 
 
 class TestCityQueryTerm:
