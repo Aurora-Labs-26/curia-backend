@@ -4,6 +4,8 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+
+
 ## 2026-08-11 (4) · Arihant + Claude (claude-fable-5)
 
 ### Bug Fix
