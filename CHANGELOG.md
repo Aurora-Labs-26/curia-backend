@@ -58,6 +58,11 @@ GPS for zero-friction) on top of PR #8's coordinate-first weather.
 
 ---
 
+## 2026-08-08 (2) · Claude (claude-sonnet-5)
+
+### Config
+- **`docker-compose.yml`** — passes `FIRECRAWL_API_KEY` through to the `api` and `worker` services, same pattern as the other provider keys. Found while testing source ingestion locally: the scraper cascade's Firecrawl fallback tier was unreachable in local dev (`FIRECRAWL_API_KEY not set`), so any URL trafilatura couldn't parse failed permanently with no second-tier rescue.
+
 ## 2026-08-07 · Claude (claude-sonnet-5)
 
 ### Bug Fix
