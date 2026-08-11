@@ -69,8 +69,8 @@ class TestRenderWritesTimings:
         assert key is not None
         written = set_segments.await_args.args[2]
         intro, silent, outro = written
-        assert intro["start_s"] == 0.3 and intro["duration_s"] == 1.0
-        assert outro["start_s"] == 1.9 and outro["duration_s"] == 0.5
+        assert intro["start_s"] == 1.5 and intro["duration_s"] == 1.0   # scored intro lead-in
+        assert outro["start_s"] == 3.1 and outro["duration_s"] == 0.5
         # untimed segments keep no bogus timing — and never their 99.0 estimate
         assert "start_s" not in silent
         assert set_segments.await_args.args[0] == "u1"
@@ -173,7 +173,7 @@ class TestBookendBgm:
                           side_effect=lambda c, sp, k: c) as apply:
             secs, spans = audio._stitch([a, b], str(tmp_path / "o.mp3"),
                                         kinds=["intro", "outro"])
-        assert spans == [(300, 1300), (1900, 2400)]   # spans computed pre-overlay
+        assert spans == [(1500, 2500), (3100, 3600)]   # scored lead-in, pre-overlay
         apply.assert_called_once()
         assert apply.call_args.args[2] == ["intro", "outro"]
 
@@ -182,3 +182,49 @@ class TestBookendBgm:
         with patch.object(audio, "_apply_bookend_bgm") as apply:
             audio._stitch([a], str(tmp_path / "o.mp3"))
         apply.assert_not_called()
+
+
+class TestBookendLeveling:
+    """Normalization to target dBFS — a fixed relative gain on unmastered bank
+    tracks put music ~12dB under voice (humanly inaudible; found live)."""
+
+    def _mix(self, clip_gain):
+        def picker(vibe, ms, bank):
+            return Sine(440).to_audio_segment(duration=ms).apply_gain(clip_gain)
+        base = AudioSegment.silent(duration=4600)
+        with patch("core.audio.vibe_mix.get_segment_bgm_clip", side_effect=picker), \
+             patch("core.audio.vibe_mix.resolve_bank_dir", return_value="/x"):
+            return audio._apply_bookend_bgm(
+                base, [(300, 1300), (1900, 2400), (3000, 4000)],
+                ["intro", "standard", "outro"])
+
+    def test_quiet_track_is_lifted_to_target(self):
+        out = self._mix(-40)          # whisper-mastered bank track
+        mid_intro = out[600:1000]     # past the fade-in
+        assert abs(mid_intro.dBFS - audio.BOOKEND_BGM_TARGET_DBFS) < 3.0
+
+    def test_loud_track_is_pulled_down_to_target(self):
+        out = self._mix(-3)
+        mid_intro = out[600:1000]
+        assert abs(mid_intro.dBFS - audio.BOOKEND_BGM_TARGET_DBFS) < 3.0
+
+
+class TestBookendRoom:
+    def test_scored_intro_gets_long_lead_in(self, tmp_path):
+        a = str(tmp_path / "a.wav"); _wav(a, 1.0)
+        with patch.object(audio, "_apply_bookend_bgm", side_effect=lambda c, sp, k: c):
+            _, spans = audio._stitch([a], str(tmp_path / "o.mp3"), kinds=["intro"])
+        assert spans == [(1500, 2500)]
+
+    def test_unscored_stitch_keeps_short_lead(self, tmp_path):
+        a = str(tmp_path / "a.wav"); _wav(a, 1.0)
+        _, spans = audio._stitch([a], str(tmp_path / "o.mp3"))
+        assert spans == [(300, 1300)]
+
+    def test_outro_gets_ring_out_tail(self, tmp_path):
+        a = str(tmp_path / "a.wav"); _wav(a, 1.0)
+        with patch.object(audio, "_apply_bookend_bgm", side_effect=lambda c, sp, k: c) as ap:
+            secs, spans = audio._stitch([a], str(tmp_path / "o.mp3"), kinds=["outro"])
+        # 300 lead + 1000 clip + 600 pause + 1500 tail = 3.4s
+        assert secs == pytest.approx(3.4, abs=0.1)
+        assert len(ap.call_args.args[0]) == 3400

@@ -24,10 +24,21 @@ from brief import store
 
 BRIEF_SPEAKER = os.getenv("CURIA_BRIEF_SPEAKER", "kenji")
 SEGMENT_PAUSE_MS = 600
-# Bookend BGM attenuation relative to the clip's own level — the brief keeps
-# news segments clean (no score under a war story); music marks only the
-# intro/outro, reusing the episode bank's dedicated intro/ and outro/ folders.
-BOOKEND_BGM_GAIN_DB = float(os.getenv("CURIA_BRIEF_BGM_GAIN_DB", "-14"))
+# Bookend BGM is NORMALIZED to a target level, not relatively attenuated —
+# a fixed -14dB on tracks we never mastered put music at -29.8 dBFS under
+# -18 dBFS voice: technically present, humanly inaudible (found by Arihant).
+# -25 dBFS sits clearly audible under voice and pleasant when solo. The news
+# segments stay clean either way. Bookends also get music-only room: a
+# lead-in before the greeting and a ring-out after the sign-off.
+BOOKEND_BGM_TARGET_DBFS = float(os.getenv("CURIA_BRIEF_BGM_TARGET_DBFS", "-25"))
+INTRO_LEAD_MS = int(os.getenv("CURIA_BRIEF_INTRO_LEAD_MS", "1500"))
+OUTRO_TAIL_MS = int(os.getenv("CURIA_BRIEF_OUTRO_TAIL_MS", "1500"))
+
+
+def _leveled(clip):
+    """Normalize a bank clip to the bookend target — robust to however any
+    individual bank track happens to be mastered."""
+    return clip.apply_gain(BOOKEND_BGM_TARGET_DBFS - clip.dBFS)
 
 
 def _apply_bookend_bgm(combined, spans: list[tuple[int, int]], kinds: list[str]):
@@ -48,16 +59,14 @@ def _apply_bookend_bgm(combined, spans: list[tuple[int, int]], kinds: list[str])
             clip = get_segment_bgm_clip("intro", end_ms, bank)
             if clip:
                 out = out.overlay(
-                    (clip + BOOKEND_BGM_GAIN_DB).fade_in(400).fade_out(1200),
-                    position=0)
+                    _leveled(clip).fade_in(400).fade_out(1200), position=0)
         if kinds and kinds[-1] == "outro" and spans:
             # start a beat early (in the preceding pause), ride out to the end
             start_ms = max(spans[-1][0] - 300, 0)
             clip = get_segment_bgm_clip("outro", len(out) - start_ms, bank)
             if clip:
                 out = out.overlay(
-                    (clip + BOOKEND_BGM_GAIN_DB).fade_in(800).fade_out(600),
-                    position=start_ms)
+                    _leveled(clip).fade_in(800).fade_out(1200), position=start_ms)
         return out
     except Exception as e:
         logger.warning(f"[brief.audio] bookend BGM skipped ({e}); shipping voice-only")
@@ -73,7 +82,11 @@ def _stitch(paths: list[str], out_path: str,
     estimates drift 15-30s from real TTS pace by the later segments."""
     from pydub import AudioSegment
 
-    combined = AudioSegment.silent(duration=300)
+    # Music-only room: a real lead-in before the greeting when the intro is
+    # scored, and a ring-out after the sign-off. Spans are computed from
+    # len(combined) so they stay exact under any lead length.
+    lead_ms = INTRO_LEAD_MS if (kinds and kinds[0] == "intro") else 300
+    combined = AudioSegment.silent(duration=lead_ms)
     pause = AudioSegment.silent(duration=SEGMENT_PAUSE_MS)
     spans: list[tuple[int, int]] = []
     for p in paths:
@@ -81,6 +94,8 @@ def _stitch(paths: list[str], out_path: str,
         start = len(combined)
         combined += clip + pause
         spans.append((start, start + len(clip)))
+    if kinds and kinds[-1] == "outro":
+        combined += AudioSegment.silent(duration=OUTRO_TAIL_MS)
     if kinds:
         combined = _apply_bookend_bgm(combined, spans, kinds)
     combined.export(out_path, format="mp3", bitrate=os.getenv("CURIA_AUDIO_BITRATE", "128k"))

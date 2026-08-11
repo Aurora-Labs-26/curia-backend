@@ -4,6 +4,26 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-11 (2) · Arihant + Claude (claude-fable-5)
+
+### Bug Fix
+Bookend BGM was humanly inaudible — fixed -14dB relative gain put music at
+-29.8 dBFS under -18 dBFS voice (found by Arihant). Now NORMALIZED to a
+target level (CURIA_BRIEF_BGM_TARGET_DBFS, default -25) robust to bank-track
+mastering, and the bookends get music-only room: 1.5s lead-in before the
+greeting, 1.5s ring-out after the sign-off (both env-tunable).
+- **`brief/audio.py`** — `_leveled()` normalization; scored-intro lead-in;
+  outro tail; longer outro fade
+- **`tests/test_brief_audio_timings.py`** — dBFS-target assertions for quiet
+  AND loud bank tracks; lead-in/tail span math
+
+### Feature (merged PRs)
+- **PR #9** (Aditya) — FIRECRAWL_API_KEY passthrough in docker-compose
+- **PR #10** (Aditya) — brief_generated / brief_generation_failed PostHog
+  events (mirrors episode events; core.analytics.track signature verified)
+
+---
+
 ## 2026-08-10 · Arihant + Claude (claude-fable-5)
 
 ### Bug Fix
