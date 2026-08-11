@@ -425,13 +425,13 @@ bindings:
   speaker:
     kenji:
       model: cartesia-sonic
-      voice_id: 79f8b5fb-2cc8-479a-80df-29f7a7cf1a3e   # Theo — steady modern narrator
+      voice_id: bba11d5d-f281-479d-8d8c-903dc14c0c9f   # cloned voice
     arjun:
       model: cartesia-sonic
-      voice_id: 5ee9feff-1265-424a-9d7f-8e4d431a12c7   # Ronald — deep, acoustically distinct from Theo
+      voice_id: 39d518b7-fd0b-4676-9b8b-29d64ff31e12   # Cartesia stock voice
     emeka:
       model: cartesia-sonic
-      voice_id: a33f7a4c-100f-41cf-a1fd-5822e8fc253f   # Lauren — expressive feminine narrator
+      voice_id: 9493ad78-56ee-4557-8ea0-b51eef8034b2   # cloned voice
 
   # ── Smallest.ai (previous bindings) ───────────────────────────────────────
   # speaker:
