@@ -4,6 +4,25 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-11 (4) · Arihant + Claude (claude-fable-5)
+
+### Bug Fix
+Scheduler jobs now hold a Postgres advisory lock — the background service
+autoscales (1-6 tasks) and every task runs APScheduler, so scale-out meant
+N concurrent Pre-Opt runs (Sonnet cost xN) every 6h. pg_try_advisory_lock
+makes one task win per cycle; losers skip silently; the winning connection
+holds the session-scoped lock for the job's duration and releases it even
+on failure. Deployed via hotfix branch off the prod commit (the pending
+coordinates-only location change stays undeployed until the app UI ships).
+- **`worker/main.py`** — `_run_exclusive` + distinct lock ids; job bodies
+  split from lock-wrapped cron entries
+- **`tests/test_brief_scheduling.py`** — winner/loser/crash-release/distinct-
+  id contracts; 3/3 mutants killed
+
+### Config
+- **infra** — curia-api registered for autoscaling (1-4 tasks, CPU target
+  tracking at 60%), matching the workers' existing SQS-backlog policies
+
 ## 2026-08-11 (3) · Arihant + Claude (claude-fable-5)
 
 ### Refactor
