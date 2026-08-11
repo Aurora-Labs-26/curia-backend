@@ -281,9 +281,10 @@ async def enrich_and_rescore(
             entry["enriched"] = True
             succeeded += 1
 
+    # loguru doesn't interpolate stdlib %-style args — the counts were
+    # silently dropped from the log line (printed literally as %d/%d).
     logger.info(
-        "enrich_and_rescore: %d/%d candidate clusters enriched successfully",
-        succeeded, len(candidate_indices),
+        f"enrich_and_rescore: {succeeded}/{len(candidate_indices)} candidate clusters enriched successfully"
     )
 
 
