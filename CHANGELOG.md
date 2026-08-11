@@ -4,6 +4,11 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-11 · Claude (claude-sonnet-5)
+
+### Feature
+- **`brief/user_brief_runner.py`** — fires `brief_generated`/`brief_generation_failed` via `core.analytics.track`, mirroring `studio/generator.py`'s existing `episode_generated`/`episode_generation_failed` pattern exactly. Daily brief had zero analytics coverage — `ANALYTICS.md`'s plan predates the brief feature's port into this codebase entirely, so nobody extended it. `brief_generated` carries `story_count`, `total_duration_s`, `generation_time_s`, and cache hit/miss counts; `brief_generation_failed` carries `error_type`. Found while building a rollout-tracking PostHog dashboard.
+
 ## 2026-08-08 · Arihant + Claude (claude-fable-5)
 
 ### Feature

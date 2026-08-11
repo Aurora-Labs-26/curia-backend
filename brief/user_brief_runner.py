@@ -25,8 +25,10 @@ scheduler this iteration (see the plan's explicit non-goals).
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
+from core import analytics
 from brief import parked as automated_judging
 from brief import store as cache_service
 from brief import parked as eval_checks_service
@@ -184,6 +186,7 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
         return await _regenerate_bookends_for_brief(brief_id, user_id, brief_date, api_key)
 
     run_id = await eval_logging_service.start_eval_run("generate_brief", user_id=user_id, brief_id=brief_id)
+    _brief_start = time.time()
     try:
         user = await cache_service.get_user(user_id)
         if not user:
@@ -546,6 +549,14 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
         # inside _resolve_one (see faithfulness_regen_service.py), so the
         # brief below is already the faithfulness-checked version.
         automated_judging.maybe_run_automated_judging(run_id, "generate_brief")
+        await analytics.track(user_id, "brief_generated", {
+            "brief_id": brief_id,
+            "story_count": sum(1 for m in manifest if m["kind"] in ("lead", "standard", "local")),
+            "total_duration_s": total_duration_s,
+            "generation_time_s": round(time.time() - _brief_start, 2),
+            "cache_hits": sum(1 for sr in segment_results if sr["cache_hit"]),
+            "cache_misses": sum(1 for sr in segment_results if not sr["cache_hit"]),
+        })
         return {
             "brief_id": brief_id,
             "user_id": user_id,
@@ -566,4 +577,9 @@ async def generate_brief_for_user(user_id: str, brief_date: str, api_key: Option
         await cache_service.mark_daily_brief_failed(brief_id)
         await eval_logging_service.finish_eval_run(run_id, "failed", error=str(e))
         await eval_checks_service.run_checks_for_run(run_id)
+        await analytics.track(user_id, "brief_generation_failed", {
+            "brief_id": brief_id,
+            "generation_time_s": round(time.time() - _brief_start, 2),
+            "error_type": type(e).__name__,
+        })
         raise
