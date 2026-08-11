@@ -212,7 +212,6 @@ async def enrich_and_rescore(
     cluster_member_urls: Dict[int, List[str]],
     interests: List[str],
     topic_embeddings: Dict[str, Any],
-    model: Any,
 ) -> None:
     """Mutates `ranked` in place. For each non-local entry with known cluster
     member URLs, attempts to fetch real article text and — only if that
@@ -222,11 +221,10 @@ async def enrich_and_rescore(
     skipped entirely. Entries where enrichment fails (blocked, timed out,
     nothing to try) are left completely untouched, so a partial-failure run
     still returns a fully valid ranking."""
-    from sklearn.metrics.pairwise import cosine_similarity
     # Deferred import: scoring_service imports this module at load time, so a
     # top-level import here would be circular. Safe by the time this function
     # actually runs (called from within scoring_service.rank_articles).
-    from brief.scoring import TS_WEIGHT, RS_WEIGHT
+    from brief.scoring import TS_WEIGHT, RS_WEIGHT, _cos, _embed_texts
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
 
@@ -252,19 +250,16 @@ async def enrich_and_rescore(
         scoring_candidates.append({"entry": entry, "lead": lead, "combined": combined})
 
     if scoring_candidates:
-        # model.encode() is synchronous/CPU-bound, not real async I/O —
-        # batched into a single call (rather than one per candidate) and
-        # offloaded to a worker thread so it doesn't freeze the event loop
-        # and serialize every other concurrently-running topic/request (see
-        # scoring_service.py's _embed_cluster_score for the same fix).
-        embeddings = await asyncio.to_thread(
-            model.encode, [c["combined"] for c in scoring_candidates]
-        )
+        # Core embeddings API (the fix for the dangling `model` reference the
+        # torch removal left here — this call site silently NameError'd from
+        # 8075332 until 2026-08-10, so enrichment never actually ran). One
+        # batched async call, same as the rest of brief/scoring.py.
+        embeddings = await _embed_texts([c["combined"] for c in scoring_candidates])
 
         for c, emb in zip(scoring_candidates, embeddings):
             entry = c["entry"]
             topic_scores = [
-                float(cosine_similarity([emb], anchor_emb)[0].max())
+                float(_cos([emb], anchor_emb)[0].max())
                 for topic_name, anchor_emb in topic_embeddings.items()
                 if topic_name in interests
             ]

@@ -4,6 +4,26 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-10 · Arihant + Claude (claude-fable-5)
+
+### Bug Fix
+Article enrichment NEVER ran — dangling `model` reference from the torch
+removal (8075332, Jul 23). rank_articles passed a variable that no longer
+exists into enrich_and_rescore; the fail-open try/except swallowed the
+NameError on every call for 18 days, so ranking always used RSS
+title/description snippets instead of real article text. Found by Arihant
+while debugging a short brief.
+- **`brief/enrichment.py`** — enrich_and_rescore ported to core embeddings
+  (`_embed_texts`/`_cos`, batched async) — the port this call site missed;
+  dead `model` param dropped; sklearn import gone
+- **`brief/scoring.py`** — call site updated; stale MiniLM-era comments removed
+- **`tests/test_brief_scoring.py`** — regression tests that call THROUGH the
+  real seam (a NameError can no longer hide behind the fail-open catch);
+  content-sensitive fake embedder after a survived mutant showed the test
+  accepted any embedding input; 3/3 mutants killed
+
+---
+
 ## 2026-08-08 · Arihant + Claude (claude-fable-5)
 
 ### Feature

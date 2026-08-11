@@ -107,3 +107,57 @@ class TestAnchorWarmup:
         assert a1 is a2
         assert calls["n"] == len(scoring.TOPIC_ANCHORS)
         scoring._topic_embeddings = None
+
+
+class TestEnrichmentActuallyRuns:
+    """Regression for the dangling-`model` NameError (torch removal, 8075332):
+    the enrichment step silently failed on EVERY rank_articles call for 18
+    days — caught only because the surrounding try/except fails open. These
+    tests call through the real seam, so a broken reference can't hide."""
+
+    async def test_rank_articles_enrichment_path_executes(self):
+        vm = {"Fed cuts rates": [1, 0, 0, 0], "Fed slashes rates": [0.99, 0.14, 0, 0]}
+        anchors = {"Business": np.array([[1, 0, 0, 0]])}
+        called = {}
+        async def fake_enrich(ranked, cluster_member_urls, interests, topic_embeddings):
+            called["args"] = (ranked, cluster_member_urls, interests, topic_embeddings)
+        with patch.object(scoring, "_embed_texts", _fake_embedder(vm)), \
+             patch.object(scoring, "_get_topic_embeddings", AsyncMock(return_value=anchors)), \
+             patch.object(scoring.enrichment_service, "enrich_and_rescore", fake_enrich):
+            await scoring.rank_articles(
+                [art("Fed cuts rates"), art("Fed slashes rates")],
+                interests=["Business"], keep_fraction=1.0)
+        assert "args" in called, "enrichment must actually be invoked (no NameError)"
+
+    async def test_enrich_and_rescore_rescores_with_core_embeddings(self):
+        from brief import enrichment
+        ranked = [{"title": "Fed cuts rates", "is_local": False,
+                   "scores": {"topicSimilarity": 2.0, "significance": 8.0},
+                   "composite": 4.0, "description": "old snippet"}]
+        anchors = {"Business": np.array([[1.0, 0.0, 0.0, 0.0]])}
+        async def fake_embed(texts):
+            # anchor-matching ONLY when the embedded text is title+lead
+            # combined — embedding just the lead (or just the title) must not
+            # score (kills the embeds-lead-not-combined mutant)
+            return np.array([
+                [1.0, 0.0, 0.0, 0.0] if ("Fed cuts rates" in t and "real article body" in t)
+                else [0.0, 0.0, 0.0, 1.0]
+                for t in texts])
+        with patch.object(enrichment, "_enrich_cluster",
+                          AsyncMock(return_value="real article body " * 30)), \
+             patch("brief.scoring._embed_texts", fake_embed):
+            await enrichment.enrich_and_rescore(
+                ranked, {0: ["https://a"]}, ["Business"], anchors)
+        assert ranked[0].get("enriched") is True
+        assert ranked[0]["scores"]["topicSimilarity"] == 10.0   # perfect anchor match
+        assert ranked[0]["description"].startswith("real article body")
+
+    async def test_enrichment_failure_leaves_entry_untouched(self):
+        from brief import enrichment
+        ranked = [{"title": "t", "is_local": False,
+                   "scores": {"topicSimilarity": 2.0, "significance": 8.0},
+                   "composite": 4.0, "description": "old"}]
+        with patch.object(enrichment, "_enrich_cluster", AsyncMock(return_value=None)):
+            await enrichment.enrich_and_rescore(ranked, {0: ["https://a"]}, ["Business"], {})
+        assert "enriched" not in ranked[0]
+        assert ranked[0]["description"] == "old"

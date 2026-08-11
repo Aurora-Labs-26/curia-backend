@@ -568,11 +568,8 @@ async def rank_articles(
     if enrichment_service.ENRICHMENT_ENABLED:
         try:
             await enrichment_service.enrich_and_rescore(
-                ranked, cluster_member_urls, interests, _topic_embeddings or {}, model,
+                ranked, cluster_member_urls, interests, _topic_embeddings or {},
             )
-            # _recluster_after_enrichment is synchronous/CPU-bound (another
-            # direct model.encode() call) — offloaded to a worker thread for
-            # the same reason as the _embed_cluster_score calls above.
             ranked = await _recluster_after_enrichment(ranked)
         except Exception as e:
             logger.warning(f"Article enrichment step failed, continuing without it: {e}")
