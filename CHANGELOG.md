@@ -4,6 +4,11 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-12 · Claude (claude-sonnet-5)
+
+### Bug Fix
+- **`core/analytics.py`** — `capture()` now always sets an `environment` property on every backend-fired event, normalizing `CURIA_ENV` ("dev"/"prod") to match the frontend's own vocabulary ("development"/"production", set via `posthog.register()`). Found while auditing a rollout-tracking PostHog dashboard: `episode_generated` events had `environment = null` on all 19 occurrences, and `source_ingested` was inconsistent (27 null, 13 "development", only 8 "production") — any dashboard panel filtering `environment=production` was silently dropping real backend events. `tests/test_analytics.py` updated to assert the new property and cover the dev/prod alias normalization.
+
 ## 2026-08-11 (4) · Arihant + Claude (claude-fable-5)
 
 ### Bug Fix
