@@ -73,20 +73,38 @@ class TestCapture:
         # Must simply return; no client, no exception.
         analytics.capture("distinct-1", "some_event", {"a": 1})
 
-    def test_forwards_args_to_client(self):
+    def test_forwards_args_to_client(self, monkeypatch):
+        monkeypatch.setenv("CURIA_ENV", "prod")
         client = MagicMock()
         with patch("core.analytics._get_client", return_value=client):
             analytics.capture("distinct-1", "episode_generated", {"episode_id": "e1"})
         client.capture.assert_called_once_with(
             distinct_id="distinct-1", event="episode_generated",
-            properties={"episode_id": "e1"},
+            properties={"episode_id": "e1", "environment": "production"},
         )
 
-    def test_defaults_properties_to_empty_dict(self):
+    def test_defaults_properties_to_empty_dict(self, monkeypatch):
+        monkeypatch.setenv("CURIA_ENV", "dev")
         client = MagicMock()
         with patch("core.analytics._get_client", return_value=client):
             analytics.capture("d", "evt")
-        client.capture.assert_called_once_with(distinct_id="d", event="evt", properties={})
+        client.capture.assert_called_once_with(
+            distinct_id="d", event="evt", properties={"environment": "development"},
+        )
+
+    def test_environment_normalizes_dev_and_prod_aliases(self, monkeypatch):
+        client = MagicMock()
+        with patch("core.analytics._get_client", return_value=client):
+            monkeypatch.setenv("CURIA_ENV", "dev")
+            analytics.capture("d", "evt")
+            assert client.capture.call_args.kwargs["properties"]["environment"] == "development"
+            monkeypatch.setenv("CURIA_ENV", "prod")
+            analytics.capture("d", "evt")
+            assert client.capture.call_args.kwargs["properties"]["environment"] == "production"
+            # Unrecognized values pass through unchanged (e.g. "preview").
+            monkeypatch.setenv("CURIA_ENV", "preview")
+            analytics.capture("d", "evt")
+            assert client.capture.call_args.kwargs["properties"]["environment"] == "preview"
 
     def test_never_raises_when_client_errors(self):
         bad = MagicMock()
@@ -102,7 +120,8 @@ class TestCapture:
 
 
 class TestTrack:
-    async def test_resolves_then_captures(self):
+    async def test_resolves_then_captures(self, monkeypatch):
+        monkeypatch.setenv("CURIA_ENV", "dev")
         client = MagicMock()
         with patch("core.analytics._get_client", return_value=client), \
              patch("core.analytics.db_fetchrow",
@@ -110,7 +129,7 @@ class TestTrack:
             await analytics.track("user-1", "source_ingested", {"source_id": "s1"})
         client.capture.assert_called_once_with(
             distinct_id="fb-9", event="source_ingested",
-            properties={"source_id": "s1"},
+            properties={"source_id": "s1", "environment": "development"},
         )
 
     async def test_never_raises_when_resolve_fails(self):

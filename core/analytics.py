@@ -52,12 +52,28 @@ async def resolve_distinct_id(user_id: str) -> str:
     return firebase_uid or user_id
 
 
+# CURIA_ENV values ("dev", "prod", ...) don't match the frontend's own env
+# values ("development", "production", "preview" — see app.config.ts's
+# APP_ENV / posthog.register({environment: ...})). Without normalizing,
+# backend events either came through with no `environment` property at all
+# (found via a rollout dashboard build: episode_generated/source_ingested
+# were frequently untagged) or a value that silently failed to match any
+# dashboard filter built against the frontend's vocabulary.
+_ENV_ALIASES = {"dev": "development", "prod": "production"}
+
+
+def _current_environment() -> str:
+    raw = os.getenv("CURIA_ENV", "dev")
+    return _ENV_ALIASES.get(raw, raw)
+
+
 def capture(distinct_id: str, event: str, properties: Optional[dict[str, Any]] = None) -> None:
     client = _get_client()
     if not client:
         return
     try:
-        client.capture(distinct_id=distinct_id, event=event, properties=properties or {})
+        props = {**(properties or {}), "environment": _current_environment()}
+        client.capture(distinct_id=distinct_id, event=event, properties=props)
     except Exception as e:
         logger.warning(f"[analytics] capture failed for event={event}: {e}")
 
