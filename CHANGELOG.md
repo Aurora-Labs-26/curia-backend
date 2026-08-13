@@ -6,6 +6,12 @@ Each entry: **date · who made the change · what changed and why.**
 
 ## 2026-08-12 (2) · Arihant + Claude (claude-fable-5)
 
+### Docs
+- **`client handoff v1.md`** — the app-side contract for Aditya: offline-first
+  patterns (prefetch, client_ts outbox, ETag revalidation) live on prod, the
+  location-toggle contract awaiting his build, playback timings, quick
+  endpoint reference
+
 ### Feature
 Offline-first enablers extended to EPISODES (yesterday's batch was brief-only
 — caught by Arihant):
