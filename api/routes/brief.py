@@ -18,13 +18,15 @@ surface and admin/dashboard endpoints do not exist here).
 """
 
 import asyncio
+import hashlib
+import json
 import uuid
 from datetime import date, datetime, timezone as _utc_tz
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -90,6 +92,9 @@ class BriefPreferences(BaseModel):
 class BriefProgress(BaseModel):
     play_progress: Optional[float] = Field(default=None, ge=0, le=1)
     listened: bool = False
+    # Event time on the CLIENT, for offline-first replay: stale queued
+    # updates are silently ignored instead of rewinding newer progress.
+    client_ts: Optional[datetime] = None
 
 
 @router.get("/topics")
@@ -217,7 +222,8 @@ async def generate_brief(user_id: str = Depends(current_user_id)) -> CreateJobRe
 
 
 @router.get("/today")
-async def get_today(user_id: str = Depends(current_user_id)) -> dict:
+async def get_today(request: Request, response: Response,
+                    user_id: str = Depends(current_user_id)) -> dict:
     """A daily_briefs row only exists once generation actually starts (see
     get_or_create_daily_brief) — before the user's scheduled time, "prefs set,
     not due yet" and "prefs never set" are otherwise indistinguishable from
@@ -264,6 +270,14 @@ async def get_today(user_id: str = Depends(current_user_id)) -> dict:
     detail["total_duration_s"] = round(
         sum(s.get("duration_s") or 0 for s in manifest), 1
     )
+    # ETag/304 so the app's offline-first revalidation costs headers, not a
+    # full body (it re-checks on every foreground with cached data on screen).
+    etag = 'W/"' + hashlib.md5(
+        json.dumps(detail, sort_keys=True, default=str).encode()
+    ).hexdigest() + '"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
     return detail
 
 
@@ -355,11 +369,13 @@ async def get_today_audio(request: Request, user_id: str = Depends(audio_user_id
 async def set_progress(
     brief_id: uuid.UUID, body: BriefProgress, user_id: str = Depends(current_user_id)
 ) -> None:
-    ok = await store.set_daily_brief_progress(
-        str(brief_id), user_id, body.play_progress, body.listened
+    outcome = await store.set_daily_brief_progress(
+        str(brief_id), user_id, body.play_progress, body.listened, body.client_ts
     )
-    if not ok:
+    if outcome == "not_found":
         raise HTTPException(404, "brief not found")
+    # "stale" is success from the client's outbox point of view: the queued
+    # event was superseded, nothing to retry.
 
 
 @router.post("/preopt", response_model=CreateJobResponse, status_code=202)

@@ -4,6 +4,27 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-12 · Arihant + Claude (claude-fable-5)
+
+### Feature
+Offline-first (subway-ready) backend enablers — the client work is
+prefetch/cache/outbox (Aditya); these three make that safe and cheap:
+- **`core/notifications.py`** / **`worker/handlers/brief.py`** — brief_ready
+  push now carries brief_id + date so the app can background-download the
+  audio without a wake-up API round trip
+- **`brief/store.py`** / **`api/routes/brief.py`** — progress replay guard:
+  optional client_ts on PUT /progress; last_played_at stores CLIENT event
+  time and stale queued updates are guarded out (204 "stale", not an error —
+  a 404 would make the outbox retry forever). Without client_ts, old blind-
+  overwrite behavior is preserved. set_daily_brief_progress is tri-state now
+- **`api/routes/brief.py`** — ETag/304 on GET /brief/today so offline-first
+  revalidation costs headers, not a full body
+- Tests: 11 new across wiring/store-prefs; 6/6 mutants killed (guard dropped,
+  stale-as-404, server-time-stored, ETag never-304s/never-changes, payload
+  emptied); 3 older tests updated to the tri-state/kwargs contracts
+
+---
+
 
 
 ## 2026-08-11 (4) · Arihant + Claude (claude-fable-5)

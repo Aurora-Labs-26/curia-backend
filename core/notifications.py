@@ -174,7 +174,7 @@ async def send_reengagement_reminders() -> None:
     logger.info(f"[notifications] reengagement done sent={sent} errors={errors}")
 
 
-async def send_brief_ready(user_id: str) -> None:
+async def send_brief_ready(user_id: str, brief_id: str = "", brief_date: str = "") -> None:
     """Called directly from worker/handlers/brief.py right after a brief
     finishes generating (see brief/audio.py's docstring — audio is an
     enhancement, so this fires once the text manifest is ready regardless of
@@ -194,7 +194,9 @@ async def send_brief_ready(user_id: str) -> None:
                 row["fcm_token"],
                 title="Your daily roundup is ready",
                 body="Tap to listen now.",
-                data={"type": "brief_ready"},
+                # brief_id/date let the app start its background download
+                # (offline-first prefetch) without a wake-up API round trip.
+                data={"type": "brief_ready", "brief_id": brief_id, "date": brief_date},
             )
             logger.info(f"[notifications] brief_ready sent user_id={user_id}")
         except Exception as exc:

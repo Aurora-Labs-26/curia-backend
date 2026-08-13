@@ -59,6 +59,6 @@ async def handle_generate_brief(payload: dict) -> None:
     if status == "ready":
         try:
             from core.notifications import send_brief_ready
-            await send_brief_ready(user_id)
+            await send_brief_ready(user_id, brief_id=str(brief_id or ""), brief_date=brief_date)
         except Exception as e:
             logger.warning(f"[handle_generate_brief] brief_ready push skipped: {e}")
