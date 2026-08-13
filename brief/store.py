@@ -699,12 +699,39 @@ async def get_daily_brief_for_date(user_id: str, brief_date: str):
 
 
 async def set_daily_brief_progress(
-    brief_id: str, user_id: str, play_progress: Optional[float], listened: bool
-) -> bool:
-    """Playback resume for a brief — mirrors the episode progress route.
-    user_id is in the WHERE clause so a caller can only move their own brief.
-    Returns False when nothing matched (wrong owner / unknown brief)."""
+    brief_id: str, user_id: str, play_progress: Optional[float], listened: bool,
+    client_ts: Optional[Any] = None,
+) -> str:
+    """Playback resume for a brief. user_id is in the WHERE clause so a
+    caller can only move their own brief.
+
+    client_ts (offline-first replay guard): when the app replays a QUEUED
+    progress update after reconnecting, a stale event must not rewind
+    progress a newer event already wrote. With client_ts, last_played_at
+    stores the CLIENT's event time and the UPDATE only applies when it is
+    newer than what's stored. Without it (older clients), behavior is the
+    original blind overwrite with server now().
+
+    Returns "applied", "stale" (guarded out — not an error), or
+    "not_found"."""
     pool = await harness_db.get_pool()
+    if client_ts is not None:
+        result = await pool.execute(
+            """
+            UPDATE harness.daily_briefs
+            SET play_progress = $3, listened = $4, last_played_at = $5
+            WHERE id = $1 AND user_id = $2
+              AND (last_played_at IS NULL OR last_played_at < $5)
+            """,
+            brief_id, user_id, play_progress, listened, client_ts,
+        )
+        if not str(result).endswith(" 0"):
+            return "applied"
+        exists = await pool.fetchval(
+            "SELECT 1 FROM harness.daily_briefs WHERE id = $1 AND user_id = $2",
+            brief_id, user_id,
+        )
+        return "stale" if exists else "not_found"
     result = await pool.execute(
         """
         UPDATE harness.daily_briefs
@@ -713,7 +740,7 @@ async def set_daily_brief_progress(
         """,
         brief_id, user_id, play_progress, listened,
     )
-    return not str(result).endswith(" 0")
+    return "applied" if not str(result).endswith(" 0") else "not_found"
 
 
 async def get_daily_brief_detail(brief_id: str) -> Optional[Dict[str, Any]]:

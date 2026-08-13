@@ -83,7 +83,7 @@ class TestSetDailyBriefProgress:
         with patch.object(store, "harness_db") as db:
             db.get_pool = AsyncMock(return_value=pool)
             ok = await store.set_daily_brief_progress("b-1", "u1", 0.42, False)
-        assert ok is True
+        assert ok == "applied"     # tri-state since the offline replay guard
         args = pool.execute.await_args.args
         assert args[1:] == ("b-1", "u1", 0.42, False)
 
@@ -94,4 +94,47 @@ class TestSetDailyBriefProgress:
         with patch.object(store, "harness_db") as db:
             db.get_pool = AsyncMock(return_value=pool)
             ok = await store.set_daily_brief_progress("b-1", "someone-else", 0.9, True)
-        assert ok is False
+        assert ok == "not_found"   # tri-state since the offline replay guard
+
+
+from unittest.mock import AsyncMock, MagicMock, patch as _patch
+from brief import store as _store
+
+
+class TestProgressReplayGuard:
+    def _pool(self, tag="UPDATE 1", exists=1):
+        pool = MagicMock()
+        pool.execute = AsyncMock(return_value=tag)
+        pool.fetchval = AsyncMock(return_value=exists)
+        return pool
+
+    async def test_client_ts_guard_in_sql_and_stored(self):
+        pool = self._pool()
+        with _patch.object(_store.harness_db, "get_pool", AsyncMock(return_value=pool)):
+            out = await _store.set_daily_brief_progress("b1", "u1", 0.5, False,
+                                                        "2026-08-12T09:00:00Z")
+        assert out == "applied"
+        sql = pool.execute.await_args.args[0]
+        assert "last_played_at IS NULL OR last_played_at < $5" in sql
+        assert "last_played_at = $5" in sql          # stores CLIENT time, not now()
+
+    async def test_stale_event_guarded_out(self):
+        pool = self._pool(tag="UPDATE 0", exists=1)
+        with _patch.object(_store.harness_db, "get_pool", AsyncMock(return_value=pool)):
+            out = await _store.set_daily_brief_progress("b1", "u1", 0.1, False,
+                                                        "2026-08-12T08:00:00Z")
+        assert out == "stale"
+
+    async def test_unknown_brief_not_found(self):
+        pool = self._pool(tag="UPDATE 0", exists=None)
+        with _patch.object(_store.harness_db, "get_pool", AsyncMock(return_value=pool)):
+            out = await _store.set_daily_brief_progress("b1", "u1", 0.1, False,
+                                                        "2026-08-12T08:00:00Z")
+        assert out == "not_found"
+
+    async def test_no_ts_keeps_blind_overwrite(self):
+        pool = self._pool()
+        with _patch.object(_store.harness_db, "get_pool", AsyncMock(return_value=pool)):
+            out = await _store.set_daily_brief_progress("b1", "u1", 0.5, False)
+        assert out == "applied"
+        assert "now()" in pool.execute.await_args.args[0]

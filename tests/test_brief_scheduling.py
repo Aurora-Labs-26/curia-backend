@@ -153,7 +153,8 @@ class TestBriefReadyPush:
              patch("brief.audio.render_brief_audio", audio), \
              patch("core.notifications.send_brief_ready", push):
             await h.handle_generate_brief({"user_id": "u1", "date": "2026-07-28"})
-        push.assert_awaited_once_with("u1")
+        push.assert_awaited_once()
+        assert push.await_args.kwargs["brief_id"] == "b-1"
 
     async def test_no_push_when_generation_failed(self):
         from worker.handlers import brief as h

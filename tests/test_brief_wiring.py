@@ -628,3 +628,79 @@ class TestGpsLocationPath:
                 "display_name": "A", "latitude": 19.0, "longitude": 72.8})
         assert r.status_code == 503
         store.create_user_with_topics.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Offline-first enablers: richer push payload, progress replay guard, ETag.
+# ---------------------------------------------------------------------------
+
+from datetime import datetime as _dt
+
+
+class TestOfflineEnablers:
+    async def test_push_payload_carries_brief_id_and_date(self):
+        from worker.handlers import brief as h
+        runner = AsyncMock(return_value={"status": "ready", "brief_id": "b-9"})
+        push = AsyncMock()
+        with patch.object(h, "generate_brief_for_user", runner), \
+             patch("brief.audio.render_brief_audio", AsyncMock()), \
+             patch("core.notifications.send_brief_ready", push):
+            await h.handle_generate_brief({"user_id": "u1", "date": "2026-08-12"})
+        assert push.await_args.kwargs == {"brief_id": "b-9", "brief_date": "2026-08-12"}
+
+    def test_progress_with_client_ts_threads_through(self):
+        with patch("api.routes.brief.store") as store:
+            store.set_daily_brief_progress = AsyncMock(return_value="applied")
+            r = _client().put(
+                "/brief/12345678-1234-1234-1234-123456789012/progress",
+                json={"play_progress": 0.4, "client_ts": "2026-08-12T09:00:00Z"})
+        assert r.status_code == 204
+        assert store.set_daily_brief_progress.await_args.args[4] is not None
+
+    def test_stale_progress_is_204_not_404(self):
+        """A superseded queued update is SUCCESS for the client outbox — a 404
+        would make it retry forever."""
+        with patch("api.routes.brief.store") as store:
+            store.set_daily_brief_progress = AsyncMock(return_value="stale")
+            r = _client().put(
+                "/brief/12345678-1234-1234-1234-123456789012/progress",
+                json={"play_progress": 0.1, "client_ts": "2026-08-12T08:00:00Z"})
+        assert r.status_code == 204
+
+    def test_unknown_brief_still_404(self):
+        with patch("api.routes.brief.store") as store:
+            store.set_daily_brief_progress = AsyncMock(return_value="not_found")
+            r = _client().put(
+                "/brief/12345678-1234-1234-1234-123456789012/progress",
+                json={"play_progress": 0.1})
+        assert r.status_code == 404
+
+    def _today_mocks(self, store):
+        store.get_user = AsyncMock(return_value={"id": "u1", "timezone": "UTC"})
+        store.get_daily_brief_for_date = AsyncMock(return_value={"id": "b-1"})
+        store.get_daily_brief_detail = AsyncMock(return_value={
+            "id": "b-1", "status": "ready", "articles": []})
+        store.get_latest_manifest = AsyncMock(return_value=[{"kind": "intro",
+                                                            "duration_s": 3.0}])
+
+    def test_today_sets_etag_and_304s_on_match(self):
+        with patch("api.routes.brief.store") as store:
+            self._today_mocks(store)
+            c = _client()
+            r1 = c.get("/brief/today")
+            etag = r1.headers.get("etag")
+            assert r1.status_code == 200 and etag
+            r2 = c.get("/brief/today", headers={"If-None-Match": etag})
+        assert r2.status_code == 304
+        assert r2.content == b""
+
+    def test_changed_content_changes_etag(self):
+        with patch("api.routes.brief.store") as store:
+            self._today_mocks(store)
+            c = _client()
+            e1 = c.get("/brief/today").headers["etag"]
+            store.get_latest_manifest = AsyncMock(return_value=[{"kind": "intro",
+                                                                "duration_s": 9.9}])
+            r = c.get("/brief/today", headers={"If-None-Match": e1})
+        assert r.status_code == 200
+        assert r.headers["etag"] != e1
