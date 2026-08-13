@@ -5,12 +5,14 @@ GET /episodes, GET /episodes/:id, GET /episodes/:id/audio.
 """
 
 import asyncio
+import hashlib
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from api.auth import audio_user_id, current_user_id
@@ -65,12 +67,27 @@ async def create_episode(
     return CreateJobResponse(id=uuid.UUID(episode_id), status="queued", job_id=job_id)
 
 
-@router.get("/episodes", response_model=list[EpisodeSummary])
+def _etag_or_304(request: Request, response: Response, payload) -> Response | None:
+    """Weak ETag over the serialized payload; 304 on If-None-Match hit. Lets
+    the app's offline-first revalidation (cached list on screen, re-check on
+    foreground) cost headers instead of the full episode list."""
+    etag = 'W/"' + hashlib.md5(
+        json.dumps(payload, sort_keys=True, default=str).encode()
+    ).hexdigest() + '"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
+    return None
+
+
+@router.get("/episodes")
 async def list_episodes(
+    request: Request,
+    response: Response,
     user_id: str = Depends(current_user_id),
     status: str | None = Query(default=None),
     limit: int = Query(default=50, le=500),
-) -> list[EpisodeSummary]:
+):
     if status:
         rows = await db_query(
             """
@@ -141,13 +158,16 @@ async def list_episodes(
                 deduped.append(source_map[key])
         data["source_objects"] = deduped
         result.append(EpisodeSummary(**data))
-    return result
+    not_modified = _etag_or_304(
+        request, response, [r.model_dump(mode="json") for r in result])
+    return not_modified if not_modified is not None else result
 
 
-@router.get("/episodes/{episode_id}", response_model=EpisodeDetail)
+@router.get("/episodes/{episode_id}")
 async def get_episode(
+    request: Request, response: Response,
     episode_id: uuid.UUID, user_id: str = Depends(current_user_id)
-) -> EpisodeDetail:
+):
     row = await db_fetchrow(
         """
         SELECT id, show_name, title, status, created_at, error,
@@ -191,7 +211,9 @@ async def get_episode(
                     id=s["id"], domain=domain, title=s["title"], author=s["author"]
                 ))
     data["source_objects"] = source_objects
-    return EpisodeDetail(**data)
+    detail = EpisodeDetail(**data)
+    not_modified = _etag_or_304(request, response, detail.model_dump(mode="json"))
+    return not_modified if not_modified is not None else detail
 
 
 @router.put("/episodes/{episode_id}/progress", status_code=204)
@@ -202,6 +224,34 @@ async def update_episode_progress(
 ) -> None:
     play_progress = float(body.get("play_progress") or 0)
     listened = bool(body.get("listened", False))
+    client_ts_raw = body.get("client_ts")
+    if client_ts_raw:
+        # Offline-first replay guard (mirrors PUT /brief/{id}/progress):
+        # last_played_at stores the CLIENT's event time and a stale queued
+        # update replayed after a newer one is guarded out — still a 204,
+        # so the app's outbox drops it instead of retrying forever.
+        try:
+            client_ts = datetime.fromisoformat(str(client_ts_raw).replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(422, "client_ts must be ISO-8601")
+        await db_execute(
+            """
+            UPDATE episode
+            SET play_progress = $play_progress,
+                listened = $listened,
+                last_played_at = $client_ts
+            WHERE id = $id::uuid AND user_id = $user_id
+              AND (last_played_at IS NULL OR last_played_at < $client_ts)
+            """,
+            {
+                "id": str(episode_id),
+                "user_id": user_id,
+                "play_progress": max(0.0, min(1.0, play_progress)),
+                "listened": listened,
+                "client_ts": client_ts,
+            },
+        )
+        return
     await db_execute(
         """
         UPDATE episode
