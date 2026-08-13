@@ -4,6 +4,21 @@ Each entry: **date · who made the change · what changed and why.**
 
 ---
 
+## 2026-08-12 (2) · Arihant + Claude (claude-fable-5)
+
+### Feature
+Offline-first enablers extended to EPISODES (yesterday's batch was brief-only
+— caught by Arihant):
+- **`api/routes/episodes.py`** — client_ts replay guard on PUT /progress
+  (stores client event time, stale replays guarded out, still 204; garbage
+  ts is 422; no-ts keeps blind overwrite); ETag/304 on GET /episodes and
+  GET /episodes/{id}
+- Note: no episode-ready push exists to enrich — episode prefetch triggers
+  on app-open/foreground list revalidation instead
+- **`tests/test_episodes_offline.py`** — 7 tests; 4/4 mutants killed
+
+---
+
 ## 2026-08-12 · Arihant + Claude (claude-fable-5)
 
 ### Feature
